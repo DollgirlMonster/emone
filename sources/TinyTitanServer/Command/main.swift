@@ -206,6 +206,11 @@ do {
     let cacheMemoryMiB =
         facts.promptCacheMode == .off
         ? 0 : arguments.promptCacheMemoryMiB
+    // Only stated when it can act: expiry releases a RAM copy to its SSD one.
+    let ttlBanner =
+        cacheMemoryMiB > 0 && arguments.promptCacheMemoryTTLSeconds > 0
+            && arguments.promptCacheDiskDirectory != nil
+        ? " prompt_cache_memory_ttl=\(arguments.promptCacheMemoryTTLSeconds)s" : ""
     let mtp = arguments.mtpModel == nil ? "off" : "on:\(arguments.mtpMemoryMiB)MiB"
     let residencyBanner =
         arguments.managesResidency
@@ -223,7 +228,7 @@ do {
         )
     } else {
         print(
-            "TinyTitanServer \(ServerVersion.current) ready at http://127.0.0.1:\(arguments.port) model=\(facts.modelID) context=\(arguments.maxContext) concurrency=\(concurrency) prefill_chunk=\(facts.prefillChunkTokens)\(facts.expertCacheSlots > 0 ? " expert_slots=\(facts.expertCacheSlots)" : "") prompt_cache=\(facts.promptCacheMode.rawValue) prompt_cache_memory_mib=\(cacheMemoryMiB) prompt_cache_disk=\(diskCache) thinking=\(reasoning.thinking.rawValue) mtp=\(mtp)\(residencyBanner)"
+            "TinyTitanServer \(ServerVersion.current) ready at http://127.0.0.1:\(arguments.port) model=\(facts.modelID) context=\(arguments.maxContext) concurrency=\(concurrency) prefill_chunk=\(facts.prefillChunkTokens)\(facts.expertCacheSlots > 0 ? " expert_slots=\(facts.expertCacheSlots)" : "") prompt_cache=\(facts.promptCacheMode.rawValue) prompt_cache_memory_mib=\(cacheMemoryMiB)\(ttlBanner) prompt_cache_disk=\(diskCache) thinking=\(reasoning.thinking.rawValue) mtp=\(mtp)\(residencyBanner)"
         )
     }
     WatchdogConfiguration.shared.announce()

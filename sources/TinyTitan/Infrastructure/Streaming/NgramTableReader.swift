@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Row gather over Qwen3.8-Flash-Next's n-gram embedding table.
 ///
@@ -132,27 +133,60 @@ public final class NgramTableReader: @unchecked Sendable {
         into destination: UnsafeMutableRawPointer
     ) throws {
         for (i, row) in rows.enumerated() {
-            guard UInt64(row) < rowCount else {
-                throw Failure.rowOutOfRange(row: row, rowCount: rowCount)
+            try readRow(row, into: destination.advanced(by: i * rowBytes))
+        }
+    }
+
+    /// `gather` with the reads in flight together: the same rows, landing in
+    /// the same places, so the destination is byte-identical.
+    ///
+    /// Each row is its own small uncached read, so one at a time every row
+    /// pays a full device round trip -- on an external NVMe about 250 us, which
+    /// made a prefill token's 16 rows ~4 ms and 69 s of a 16.9K-token prompt
+    /// on an M1 Max. Issued together, the drive overlaps them. Every row is
+    /// range-checked before any read starts, so a bad id reads nothing.
+    public func gatherConcurrently(
+        rows: [UInt32],
+        into destination: UnsafeMutableRawPointer
+    ) throws {
+        for row in rows where UInt64(row) >= rowCount {
+            throw Failure.rowOutOfRange(row: row, rowCount: rowCount)
+        }
+        let firstError = Mutex<Error?>(nil)
+        // `concurrentPerform` returns only after every iteration has finished,
+        // so the destination outlives the closure; iterations write disjoint
+        // `rowBytes` ranges of it.
+        nonisolated(unsafe) let target = destination
+        DispatchQueue.concurrentPerform(iterations: rows.count) { i in
+            do {
+                try readRow(rows[i], into: target.advanced(by: i * rowBytes))
+            } catch {
+                firstError.withLock { if $0 == nil { $0 = error } }
             }
-            let offset = UInt64(row) &* UInt64(rowBytes)
-            let target = destination.advanced(by: i * rowBytes)
-            var moved = 0
-            while moved < rowBytes {
-                let n = pread(
-                    fd, target.advanced(by: moved),
-                    rowBytes - moved, off_t(offset) + off_t(moved))
-                if n < 0 {
-                    if errno == EINTR { continue }
-                    throw Failure.readFailed(row: row, errno: errno)
-                }
-                if n == 0 {
-                    throw Failure.shortRead(
-                        row: row, expected: rowBytes,
-                        got: moved)
-                }
-                moved += n
+        }
+        if let error = firstError.withLock({ $0 }) { throw error }
+    }
+
+    private func readRow(_ row: UInt32, into target: UnsafeMutableRawPointer) throws {
+        guard UInt64(row) < rowCount else {
+            throw Failure.rowOutOfRange(row: row, rowCount: rowCount)
+        }
+        let offset = UInt64(row) &* UInt64(rowBytes)
+        var moved = 0
+        while moved < rowBytes {
+            let n = pread(
+                fd, target.advanced(by: moved),
+                rowBytes - moved, off_t(offset) + off_t(moved))
+            if n < 0 {
+                if errno == EINTR { continue }
+                throw Failure.readFailed(row: row, errno: errno)
             }
+            if n == 0 {
+                throw Failure.shortRead(
+                    row: row, expected: rowBytes,
+                    got: moved)
+            }
+            moved += n
         }
     }
 

@@ -227,7 +227,8 @@ extension RealForwardRunner {
         if let scratch = prefillScratch, scratch.layout == layout {
             return scratch
         }
-        let scratch = try PrefillChunkScratchBuffers.allocate(device: ctx.device, layout: layout)
+        let scratch = try PrefillChunkScratchBuffers.allocate(
+            device: ctx.device, layout: layout, batchedSharedExpert: prefillBatchedSharedExpert)
         prefillScratch = scratch
         return scratch
     }
@@ -442,21 +443,19 @@ extension RealForwardRunner {
         }
 
         if prefillProfile {
+            // stderr, not stdout: stdout is the generated text, and a benchmark
+            // that hashes it to compare arms must not see timings in it.
             let prefillTotal = prefillRouteNanos + prefillTileNanos + prefillTailNanos
-            print("[prefill phases over \(t) tokens, \(prefillTotal / 1_000_000) ms total]")
-            print(
-                "  route readback + GPU: \(String(format: "%.1f", Double(prefillRouteNanos) / 1e6)) ms"
-            )
-            print(
-                "  expert fetch + tiles: \(String(format: "%.1f", Double(prefillTileNanos) / 1e6)) ms"
-            )
-            print(
-                "  tail + residual:      \(String(format: "%.1f", Double(prefillTailNanos) / 1e6)) ms"
-            )
+            let ms = { (n: UInt64) in String(format: "%.1f", Double(n) / 1e6) }
             let perLayer = Double(prefillActiveExperts) / Double(max(1, cfg.numLayers))
-            print(
-                "  active experts/layer: \(String(format: "%.2f", perLayer))"
-                    + " (topK=\(cfg.topKExperts), max possible \(t * cfg.topKExperts))")
+            let lines =
+                "[prefill phases over \(t) tokens, \(prefillTotal / 1_000_000) ms total]\n"
+                + "  route readback + GPU: \(ms(prefillRouteNanos)) ms\n"
+                + "  expert fetch + tiles: \(ms(prefillTileNanos)) ms\n"
+                + "  tail + residual:      \(ms(prefillTailNanos)) ms\n"
+                + "  active experts/layer: \(String(format: "%.2f", perLayer))"
+                + " (topK=\(cfg.topKExperts), max possible \(t * cfg.topKExperts))\n"
+            FileHandle.standardError.write(Data(lines.utf8))
         }
 
         if writeFinalHead, runEpilogue {
@@ -514,6 +513,25 @@ extension RealForwardRunner {
         }
     }
 
+    /// The simdgroup-matrix QMM, when switched on, takes every projection
+    /// family and both widths ahead of the MPP path (see
+    /// `prefillSimdgroupQMM`). False when it is off or cannot take the shape.
+    func encodeSimdgroupProjection(
+        commandBuffer: MTLCommandBuffer, weightBits: Int, weights: TensorView,
+        x: MTLBuffer, y: MTLBuffer, rows: Int, columns: Int, tokenCount: Int
+    ) throws -> Bool {
+        guard let simdgroup = prefillSimdgroupQMMKernel,
+            simdgroup.accepts(bits: weightBits, k: columns)
+        else { return false }
+        try simdgroup.encode(
+            commandBuffer: commandBuffer,
+            weights: weights.buffer, weightsOffset: Int(weights.offset),
+            scales: weights.buffer, scalesOffset: Int(weights.scaleOffset),
+            biases: weights.buffer, biasesOffset: Int(weights.biasOffset),
+            x: x, y: y, t: tokenCount, n: rows, k: columns, bits: weightBits)
+        return true
+    }
+
     /// `weightBits` is the *role's* width, not the attention slot's: the dense
     /// Qwen 3.5 installs keep k/v at 8 bits with q/o at 4, and the int4-only
     /// batched paths below would read an 8-bit tensor as packed nibbles.
@@ -539,18 +557,18 @@ extension RealForwardRunner {
         // The batching lost here is cheap: every promoted family is among the
         // smallest tensors in the model, which is why they were chosen.
         if weights.dtype == 1 {
-            for row in 0..<tokenCount {
-                try encodeRoleGEMV(
-                    commandBuffer: commandBuffer,
-                    projection: weights,
-                    weightBits: weightBits,
-                    x: x,
-                    xOffset: row * xStrideElements * MemoryLayout<Float16>.stride,
-                    y: y,
-                    yOffset: row * yStrideElements * MemoryLayout<Float16>.stride,
-                    m: UInt32(rows),
-                    n: UInt32(columns))
-            }
+            try encodeRoleGEMVPerToken(
+                commandBuffer: commandBuffer, projection: weights, weightBits: weightBits,
+                x: x, y: y, tokenCount: tokenCount,
+                xStrideElements: xStrideElements, yStrideElements: yStrideElements,
+                m: UInt32(rows), n: UInt32(columns))
+            return
+        }
+        if tokenCount >= 32, xStrideElements == columns, yStrideElements == rows,
+            try encodeSimdgroupProjection(
+                commandBuffer: commandBuffer, weightBits: weightBits, weights: weights,
+                x: x, y: y, rows: rows, columns: columns, tokenCount: tokenCount)
+        {
             return
         }
         if tokenCount >= 32, weightBits == 4,
@@ -626,17 +644,101 @@ extension RealForwardRunner {
                 k: columns)
             return
         }
+        try encodeRoleGEMVPerToken(
+            commandBuffer: commandBuffer, projection: weights, weightBits: weightBits,
+            x: x, y: y, tokenCount: tokenCount,
+            xStrideElements: xStrideElements, yStrideElements: yStrideElements,
+            m: UInt32(rows), n: UInt32(columns))
+    }
+
+    /// The shared-expert block for a chunk: three GEMMs over every token when
+    /// `prefillWideMPP` and the GPU allow it, else the per-token decode path.
+    func encodePrefillSharedExpertBlock(
+        commandBuffer: MTLCommandBuffer,
+        projections sharedProj: LayerSharedExpertProjections,
+        scratch: PrefillChunkScratchBuffers,
+        tokenCount t: Int, hiddenSize D: Int
+    ) throws {
+        if prefillBatchedSharedExpert,
+            try prefillSharedExpert.encodeBlockBatched(
+                commandBuffer: commandBuffer,
+                x: scratch.routedX, y: scratch.h1,
+                gate: sharedProj.gate, up: sharedProj.up, down: sharedProj.down,
+                scratchGate: scratch.sharedGateScratch,
+                scratchUp: scratch.sharedUpScratch,
+                scratchAct: scratch.sharedActScratch,
+                queryCount: t, d: D, intermediate: cfg.intermediateSize,
+                xStrideElements: D, yStrideElements: D)
+        {
+            return
+        }
+        try prefillSharedExpert.encodeBlock(
+            commandBuffer: commandBuffer,
+            x: scratch.routedX,
+            y: scratch.h1,
+            gate: sharedProj.gate,
+            up: sharedProj.up,
+            down: sharedProj.down,
+            scratchGate: scratch.sharedGateScratch,
+            scratchUp: scratch.sharedUpScratch,
+            scratchAct: scratch.sharedActScratch,
+            queryCount: t,
+            d: D,
+            intermediate: cfg.intermediateSize,
+            xStrideElements: D,
+            yStrideElements: D)
+    }
+
+    /// With `prefillSplitTiming`, end the command buffer here and time what it
+    /// holds under `role`; the layer continues in a fresh one. A no-op
+    /// otherwise, so the default schedule is untouched.
+    func prefillSplitPoint(_ cb: inout MTLCommandBuffer, role: String) throws {
+        guard Self.prefillSplitTiming else { return }
+        cb.commit()
+        try waitForCompletion(cb)
+        recordKernelGPU(role: role, cb)
+        guard let next = ctx.queue.makeCommandBuffer() else {
+            throw ModelError.residentBufferWrapFailed
+        }
+        cb = next
+    }
+
+    /// One GEMV per token of the chunk: the fallback for a projection no
+    /// batched kernel serves. With `prefillCoalescedRows` the tokens share one
+    /// compute encoder instead of opening one each; the kernel, arguments and
+    /// grid per token are unchanged, so the result is too.
+    func encodeRoleGEMVPerToken(
+        commandBuffer: MTLCommandBuffer,
+        projection: TensorView,
+        weightBits: Int,
+        x: MTLBuffer, y: MTLBuffer,
+        tokenCount: Int,
+        xStrideElements: Int, yStrideElements: Int,
+        m: UInt32, n: UInt32
+    ) throws {
+        let halfBytes = MemoryLayout<Float16>.stride
+        if Self.prefillCoalescedRows {
+            try encodeRoleGEMVRows(
+                commandBuffer: commandBuffer, projection: projection, weightBits: weightBits,
+                x: x, y: y,
+                run: GEMVRows(
+                    xOffset: 0, xRowStride: xStrideElements * halfBytes,
+                    yOffset: 0, yRowStride: yStrideElements * halfBytes,
+                    count: tokenCount),
+                m: m, n: n)
+            return
+        }
         for row in 0..<tokenCount {
             try encodeRoleGEMV(
                 commandBuffer: commandBuffer,
-                projection: weights,
+                projection: projection,
                 weightBits: weightBits,
                 x: x,
-                xOffset: row * xStrideElements * MemoryLayout<Float16>.stride,
+                xOffset: row * xStrideElements * halfBytes,
                 y: y,
-                yOffset: row * yStrideElements * MemoryLayout<Float16>.stride,
-                m: UInt32(rows),
-                n: UInt32(columns))
+                yOffset: row * yStrideElements * halfBytes,
+                m: m,
+                n: n)
         }
     }
 
@@ -966,21 +1068,9 @@ extension RealForwardRunner {
             throw ModelError.residentBufferWrapFailed
         }
         let sharedProj = sharedExpertProjections[L]
-        try prefillSharedExpert.encodeBlock(
-            commandBuffer: sharedCB,
-            x: scratch.routedX,
-            y: scratch.h1,
-            gate: sharedProj.gate,
-            up: sharedProj.up,
-            down: sharedProj.down,
-            scratchGate: scratch.sharedGateScratch,
-            scratchUp: scratch.sharedUpScratch,
-            scratchAct: scratch.sharedActScratch,
-            queryCount: t,
-            d: D,
-            intermediate: cfg.intermediateSize,
-            xStrideElements: D,
-            yStrideElements: D)
+        try encodePrefillSharedExpertBlock(
+            commandBuffer: sharedCB, projections: sharedProj,
+            scratch: scratch, tokenCount: t, hiddenSize: D)
         sharedCB.commit()
         try waitForCompletion(sharedCB)
         recordKernelGPU(role: "prefill_shared_expert", sharedCB)
@@ -1144,49 +1234,60 @@ extension RealForwardRunner {
             throw ModelError.residentBufferWrapFailed
         }
         let sharedProj = sharedExpertProjections[L]
-        try prefillSharedExpert.encodeBlock(
-            commandBuffer: sharedCB,
-            x: scratch.routedX,
-            y: scratch.h1,
-            gate: sharedProj.gate,
-            up: sharedProj.up,
-            down: sharedProj.down,
-            scratchGate: scratch.sharedGateScratch,
-            scratchUp: scratch.sharedUpScratch,
-            scratchAct: scratch.sharedActScratch,
-            queryCount: t,
-            d: D,
-            intermediate: cfg.intermediateSize,
-            xStrideElements: D,
-            yStrideElements: D)
+        try encodePrefillSharedExpertBlock(
+            commandBuffer: sharedCB, projections: sharedProj,
+            scratch: scratch, tokenCount: t, hiddenSize: D)
         if cfg.sharedExpertGated {
             // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX),
             // per chunk row.
             let gateView = try requireTensorView(sharedProj.scalarGate, "shared-expert scalar gate")
             let halfBytes = MemoryLayout<Float16>.stride
-            for row in 0..<t {
-                try encodeScalarGate(
+            if Self.prefillCoalescedRows {
+                // The same per-row gate GEMV and per-element sigmoid, in two
+                // encoders for the whole chunk instead of two per token.
+                try encodeScalarGateRows(
                     commandBuffer: sharedCB,
                     view: gateView,
                     x: scratch.routedX,
-                    xOffset: row * D * halfBytes,
                     y: scratch.sharedScalarGate,
-                    yOffset: row * halfBytes,
+                    run: GEMVRows(
+                        xOffset: 0, xRowStride: D * halfBytes,
+                        yOffset: 0, yRowStride: halfBytes,
+                        count: t),
                     n: UInt32(D))
-            }
-            for row in 0..<t {
-                try requireElementwise().encodeSigmoidScalarMul(
+                try requireElementwise().encodeSigmoidRowsMul(
                     commandBuffer: sharedCB,
                     y: scratch.h1,
-                    yOffset: row * D * halfBytes,
                     gate: scratch.sharedScalarGate,
-                    gateOffset: row * halfBytes,
-                    count: D)
+                    width: D, rows: t)
+            } else {
+                for row in 0..<t {
+                    try encodeScalarGate(
+                        commandBuffer: sharedCB,
+                        view: gateView,
+                        x: scratch.routedX,
+                        xOffset: row * D * halfBytes,
+                        y: scratch.sharedScalarGate,
+                        yOffset: row * halfBytes,
+                        n: UInt32(D))
+                }
+                for row in 0..<t {
+                    try requireElementwise().encodeSigmoidScalarMul(
+                        commandBuffer: sharedCB,
+                        y: scratch.h1,
+                        yOffset: row * D * halfBytes,
+                        gate: scratch.sharedScalarGate,
+                        gateOffset: row * halfBytes,
+                        count: D)
+                }
             }
         }
+        // Committed, not awaited: the routed tiles' expert reads can start
+        // while the GPU runs the shared expert. Command buffers on one queue
+        // run in commit order -- the tiles below already rely on that for
+        // their own shared scratch -- and nothing before the tail reads h1, so
+        // the wait moves to just before the tail. Same kernels, same order.
         sharedCB.commit()
-        try waitForCompletion(sharedCB)
-        recordKernelGPU(role: "prefill_shared_expert", sharedCB)
 
         let metadata = try prefillGroupedMoE.makeStreamedMetadataBuffers(
             device: ctx.device,
@@ -1197,6 +1298,9 @@ extension RealForwardRunner {
             let commandBuffer: MTLCommandBuffer
             let fetch: PrefillStreamedTileFetchResult
             let argumentBuffer: PrefillStreamedTileArgumentBuffer
+            /// Ran as grouped MPP GEMMs rather than the tile kernels; timed
+            /// under its own role so a spike shows how many tiles took it.
+            let groupedGEMM: Bool
         }
         var pendingTiles: [PendingPrefillTile] = []
         var tileLifetime = PrefillStreamedTileSlotLifetime()
@@ -1212,7 +1316,7 @@ extension RealForwardRunner {
                 do {
                     try waitForCompletion(pending.commandBuffer)
                     recordKernelGPU(
-                        role: "prefill_routed_tile",
+                        role: pending.groupedGEMM ? "prefill_routed_gemm" : "prefill_routed_tile",
                         pending.commandBuffer)
                 } catch {
                     // Rethrown after the fetched blobs are released.
@@ -1322,24 +1426,37 @@ extension RealForwardRunner {
             guard let tileCB = ctx.queue.makeCommandBuffer() else {
                 throw ModelError.residentBufferWrapFailed
             }
-            _ = try prefillGroupedMoE.encodeStreamedBatched(
-                commandBuffer: tileCB,
-                hidden: scratch.routedX,
-                sortedPairs: metadata.sortedPairs,
-                routePartials: scratch.routePartials,
-                gateUpActScratch: scratch.routedGateUpActScratch,
-                downScratch: scratch.routedDownScratch,
-                argumentBuffer: argumentBuffer,
-                binding: fetch.binding,
-                params: streamedParams,
-                pairMicrobatchRows: scratch.layout.routedPairMicrobatchRows)
+            let groupStart = Int(tile.groupStart)
+            let tookGroupedGEMM =
+                try prefillRoutedGEMM?.encodeTile(
+                    commandBuffer: tileCB,
+                    hidden: scratch.routedX, hiddenStrideElements: D,
+                    sortedPairs: metadata.sortedPairs, routePartials: scratch.routePartials,
+                    tile: tile,
+                    groups: routes.groups[groupStart..<(groupStart + Int(tile.groupCount))],
+                    binding: fetch.binding, offsets: routedOffsets,
+                    d: D, f: cfg.moeIntermediateSize, topK: cfg.topKExperts) ?? false
+            if !tookGroupedGEMM {
+                _ = try prefillGroupedMoE.encodeStreamedBatched(
+                    commandBuffer: tileCB,
+                    hidden: scratch.routedX,
+                    sortedPairs: metadata.sortedPairs,
+                    routePartials: scratch.routePartials,
+                    gateUpActScratch: scratch.routedGateUpActScratch,
+                    downScratch: scratch.routedDownScratch,
+                    argumentBuffer: argumentBuffer,
+                    binding: fetch.binding,
+                    params: streamedParams,
+                    pairMicrobatchRows: scratch.layout.routedPairMicrobatchRows)
+            }
             tileCB.commit()
             pendingTiles.append(
                 PendingPrefillTile(
                     tileIndex: tileIndex,
                     commandBuffer: tileCB,
                     fetch: fetch,
-                    argumentBuffer: argumentBuffer))
+                    argumentBuffer: argumentBuffer,
+                    groupedGEMM: tookGroupedGEMM))
             while pendingTiles.count > schedulerConfig.maxPendingDepth {
                 try drainOldestPendingTile()
             }
@@ -1347,6 +1464,8 @@ extension RealForwardRunner {
         while !pendingTiles.isEmpty {
             try drainOldestPendingTile()
         }
+        try waitForCompletion(sharedCB)
+        recordKernelGPU(role: "prefill_shared_expert", sharedCB)
         prefillTileEnd = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         prefillTileNanos &+= prefillTileEnd - prefillRouteEnd
         guard let tailCB = ctx.queue.makeCommandBuffer() else {
@@ -1465,6 +1584,7 @@ extension RealForwardRunner {
             out: scratch.normed,
             sublayer: .attention, layer: L,
             tokens: t, eps: eps)
+        try prefillSplitPoint(&cb, role: "prefill_split_hc_in")
         // The indexer caches a key for every prefilled token, in or out
         // of the dense-exact window: decode crossing the boundary later
         // must not find holes behind it.
@@ -1474,7 +1594,7 @@ extension RealForwardRunner {
             tokens: t, eps: eps)
         if isLinear {
             try encodeLinearAttentionPrefill(
-                cb: cb, layer: L, views: views, scratch: scratch,
+                cb: &cb, layer: L, views: views, scratch: scratch,
                 tokenCount: t, hiddenSize: D,
                 snapshotGDNAfterFirstToken: snapshotGDNAfterFirstToken,
                 useTwoRowProjection: useTwoRowProjection,
@@ -1490,7 +1610,7 @@ extension RealForwardRunner {
                 selection: qsaSelection)
         } else {
             try encodeFullAttentionPrefill(
-                cb: cb, layer: L, views: views, scratch: scratch,
+                cb: &cb, layer: L, views: views, scratch: scratch,
                 tokenCount: t, hiddenSize: D, startPosition: startPosition,
                 isFull: isFull, headDim: headDim, numKVHeads: numKVHeads,
                 qDim: qDim, kvDim: kvDim, rmsEps: eps,
@@ -1514,6 +1634,7 @@ extension RealForwardRunner {
             out: scratch.routedX,
             sublayer: .mlp, layer: L,
             tokens: t, eps: eps)
+        try prefillSplitPoint(&cb, role: "prefill_split_hc_out")
         if pairRoutedMoE, t == 2 {
             try await encodeRoutedMoEVerifyPair(
                 cb: &cb, layer: L, views: views, scratch: scratch,

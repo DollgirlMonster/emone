@@ -27,6 +27,20 @@ final class BF16GEMV {
         y: MTLBuffer, yOffset: Int = 0,
         m: UInt32, n: UInt32
     ) throws {
+        try encodeRows(
+            commandBuffer: commandBuffer,
+            weights: weights, weightsOffset: weightsOffset,
+            x: x, y: y, rows: .single(xOffset: xOffset, yOffset: yOffset),
+            m: m, n: n)
+    }
+
+    /// `encode` for several independent rows in one encoder (see `GEMVRows`).
+    func encodeRows(
+        commandBuffer: MTLCommandBuffer,
+        weights: MTLBuffer, weightsOffset: Int = 0,
+        x: MTLBuffer, y: MTLBuffer, rows: GEMVRows,
+        m: UInt32, n: UInt32
+    ) throws {
         precondition(
             n.isMultiple(of: 64),
             "bf16 GEMV expects a column count that is a multiple of 64")
@@ -35,16 +49,17 @@ final class BF16GEMV {
         }
         encoder.setComputePipelineState(pipeline)
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)
-        encoder.setBuffer(x, offset: xOffset, index: 1)
-        encoder.setBuffer(y, offset: yOffset, index: 2)
-        var rows = m
+        encoder.setBuffer(x, offset: rows.xOffset, index: 1)
+        encoder.setBuffer(y, offset: rows.yOffset, index: 2)
+        var outputRows = m
         var columns = n
-        encoder.setBytes(&rows, length: MemoryLayout<UInt32>.size, index: 3)
+        encoder.setBytes(&outputRows, length: MemoryLayout<UInt32>.size, index: 3)
         encoder.setBytes(&columns, length: MemoryLayout<UInt32>.size, index: 4)
         let rowsPerThreadgroup = 8
         let groups = (Int(m) + rowsPerThreadgroup - 1) / rowsPerThreadgroup
-        encoder.dispatchThreadgroups(
-            MTLSize(width: groups, height: 1, depth: 1),
+        rows.dispatch(
+            encoder, xIndex: 1, yIndex: 2,
+            threadgroups: MTLSize(width: groups, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(
                 width: 32 * rowsPerThreadgroup,
                 height: 1, depth: 1))

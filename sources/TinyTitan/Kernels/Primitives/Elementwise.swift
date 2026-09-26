@@ -7,6 +7,7 @@ import Metal
 final class Elementwise {
     private let sigmoidGateMulPSO: MTLComputePipelineState
     private let sigmoidScalarMulPSO: MTLComputePipelineState
+    private let sigmoidRowsMulPSO: MTLComputePipelineState
     private let residualAddPSO: MTLComputePipelineState
     private let splitQGatePSO: MTLComputePipelineState
     private let concatRowsPSO: MTLComputePipelineState
@@ -27,6 +28,7 @@ final class Elementwise {
     init(context: MetalContext) throws {
         self.sigmoidGateMulPSO = try context.pipeline("sigmoid_gate_mul_fp16")
         self.sigmoidScalarMulPSO = try context.pipeline("sigmoid_scalar_mul_fp16")
+        self.sigmoidRowsMulPSO = try context.pipeline("sigmoid_rows_mul_fp16")
         self.residualAddPSO = try context.pipeline("residual_add_fp16")
         self.splitQGatePSO = try context.pipeline("split_q_gate_fp16")
         self.concatRowsPSO = try context.pipeline("concat_rows_fp16")
@@ -430,6 +432,28 @@ final class Elementwise {
         var elementCount = UInt32(count)
         encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.size, index: 2)
         dispatch(encoder, pipeline: sigmoidScalarMulPSO, threads: count)
+        encoder.endEncoding()
+    }
+
+    /// y[r, i] *= sigmoid(gate[r]) over `rows` rows of `width` in one dispatch:
+    /// `encodeSigmoidScalarMul` once per row, without an encoder per row.
+    func encodeSigmoidRowsMul(
+        commandBuffer: MTLCommandBuffer,
+        y: MTLBuffer, yOffset: Int = 0,
+        gate: MTLBuffer, gateOffset: Int = 0,
+        width: Int, rows: Int
+    ) throws {
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        encoder.setComputePipelineState(sigmoidRowsMulPSO)
+        encoder.setBuffer(y, offset: yOffset, index: 0)
+        encoder.setBuffer(gate, offset: gateOffset, index: 1)
+        var rowWidth = UInt32(width)
+        var elementCount = UInt32(width * rows)
+        encoder.setBytes(&rowWidth, length: MemoryLayout<UInt32>.size, index: 2)
+        encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.size, index: 3)
+        dispatch(encoder, pipeline: sigmoidRowsMulPSO, threads: width * rows)
         encoder.endEncoding()
     }
 

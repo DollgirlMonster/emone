@@ -91,6 +91,68 @@ final class PrefillRMSNorm {
     }
 }
 
+/// `PrefillInt4QMM`'s product on the simdgroup matrix units: 32 x 32 output
+/// tiles, fp32 accumulation, weights dequantized in float
+/// (`prefill_affine_qmm_simdgroup`). One pipeline per weight width, so one
+/// instance serves the 4-bit and 8-bit tensors of a mixed install.
+final class PrefillAffineSimdgroupQMM {
+    static let tile = 32
+    static let threads = 128
+    private let pipelines: [Int: MTLComputePipelineState]
+
+    init(context: MetalContext) throws {
+        var made: [Int: MTLComputePipelineState] = [:]
+        for bits in [4, 8] {
+            made[bits] = try context.pipeline(
+                "prefill_affine_qmm_simdgroup",
+                constants: [MetalFunctionConstant(index: 78, value: .uint32(UInt32(bits)))])
+        }
+        self.pipelines = made
+    }
+
+    /// Whether this kernel takes the shape: a whole number of quantization
+    /// groups along K and a width it was built for.
+    func accepts(bits: Int, k: Int) -> Bool {
+        pipelines[bits] != nil && k > 0 && k % Quantization.groupSize == 0
+    }
+
+    func encode(
+        commandBuffer: MTLCommandBuffer,
+        weights: MTLBuffer, weightsOffset: Int = 0,
+        scales: MTLBuffer, scalesOffset: Int = 0,
+        biases: MTLBuffer, biasesOffset: Int = 0,
+        x: MTLBuffer, xOffset: Int = 0,
+        y: MTLBuffer, yOffset: Int = 0,
+        t: Int, n: Int, k: Int, bits: Int
+    ) throws {
+        guard let pipeline = pipelines[bits], k % Quantization.groupSize == 0, t > 0, n > 0
+        else {
+            throw MetalError.commandEncoderFailed
+        }
+        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(weights, offset: weightsOffset, index: 0)
+        enc.setBuffer(scales, offset: scalesOffset, index: 1)
+        enc.setBuffer(biases, offset: biasesOffset, index: 2)
+        enc.setBuffer(x, offset: xOffset, index: 3)
+        enc.setBuffer(y, offset: yOffset, index: 4)
+        var tVar = UInt32(t)
+        var nVar = UInt32(n)
+        var kVar = UInt32(k)
+        enc.setBytes(&tVar, length: MemoryLayout<UInt32>.size, index: 5)
+        enc.setBytes(&nVar, length: MemoryLayout<UInt32>.size, index: 6)
+        enc.setBytes(&kVar, length: MemoryLayout<UInt32>.size, index: 7)
+        enc.dispatchThreadgroups(
+            MTLSize(
+                width: (n + Self.tile - 1) / Self.tile,
+                height: (t + Self.tile - 1) / Self.tile, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: Self.threads, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+}
+
 final class PrefillInt4QMM {
     private let pso: MTLComputePipelineState
 

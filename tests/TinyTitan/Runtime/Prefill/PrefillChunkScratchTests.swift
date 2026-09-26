@@ -24,6 +24,7 @@ import Testing
         #expect(layout.routeIDElements == 32 * 8)
         #expect(layout.routeWeightElements == 32 * 8)
         #expect(layout.sharedExpertScratchElements == 512)
+        #expect(layout.sharedExpertBatchElements == 32 * 512)
         #expect(layout.routedPairMicrobatchRows == 32)
         #expect(layout.routedGateUpActElements == 3 * 32 * 512)
         #expect(layout.routedDownOutputElements == 32 * 2048)
@@ -47,7 +48,24 @@ import Testing
         #expect(PrefillChunkScratchLayout(config: .qwen36_35B_A3B, chunkTokens: 0).chunkTokens == 1)
         #expect(
             PrefillChunkScratchLayout(config: .qwen36_35B_A3B, chunkTokens: 8_192).chunkTokens
-                == 4_096)
+                == 8_192)
+        #expect(
+            PrefillChunkScratchLayout(config: .qwen36_35B_A3B, chunkTokens: 32_768).chunkTokens
+                == 16_384)
+    }
+
+    /// Scratch is linear in the chunk: on Qwen3.8 about 0.81 GiB at 4K and
+    /// 3.22 GiB at 16K (the ten-way route partials are the largest part). That
+    /// is the memory price of the 16K chunk, and why it is an option rather
+    /// than a default on smaller machines.
+    @Test func qwen38ScratchAt16KIsLinearAndBounded() {
+        let at4K = PrefillChunkScratchLayout(config: .qwen38FlashNext, chunkTokens: 4_096)
+        let at16K = PrefillChunkScratchLayout(config: .qwen38FlashNext, chunkTokens: 16_384)
+        #expect(at16K.chunkTokens == 16_384)
+        // Only the routed microbatch and the one-row shared scratch are fixed.
+        #expect(at16K.devicePrivateBytes < 4 * at4K.devicePrivateBytes)
+        #expect(at4K.totalPersistentBytes < 850 * 1_048_576)
+        #expect(at16K.totalPersistentBytes < 3_350 * 1_048_576)
     }
 
     @Test func qwenLongChunkScratchRemainsBounded() {

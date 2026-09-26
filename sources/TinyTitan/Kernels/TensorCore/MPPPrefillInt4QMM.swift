@@ -55,6 +55,12 @@ final class MPPPrefillInt4QMM {
         pipeline != nil
     }
 
+    /// Why the pipeline is missing, first line only, for a one-line log.
+    var unavailableSummary: String {
+        let line = unavailableReason.split(separator: "\n").first.map(String.init) ?? ""
+        return line.isEmpty ? "no reason recorded" : String(line.prefix(120))
+    }
+
     /// `required: true` makes an unavailable path a thrown error instead of a
     /// silent `.unavailable` fallback — use it when the caller explicitly
     /// requests the MPP path. Auto-selected callers keep `required: false`
@@ -70,7 +76,8 @@ final class MPPPrefillInt4QMM {
         m: Int,
         n: Int,
         k: Int,
-        required: Bool = false
+        required: Bool = false,
+        into existing: MTLComputeCommandEncoder? = nil
     ) throws -> Path {
         // `k` must be a whole number of K tiles. The kernel's A operand declares a
         // *static* `tileK` extent and the MPP operation trusts the operand's
@@ -112,7 +119,9 @@ final class MPPPrefillInt4QMM {
             }
             return .unavailable
         }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        // `existing` lets a caller put several independent GEMMs in one
+        // concurrent encoder (they then run side by side); the caller ends it.
+        guard let encoder = existing ?? commandBuffer.makeComputeCommandEncoder() else {
             if required { throw MetalError.commandEncoderFailed }
             return .unavailable
         }
@@ -138,7 +147,7 @@ final class MPPPrefillInt4QMM {
                 width: pipeline.threadExecutionWidth * 4,
                 height: 1,
                 depth: 1))
-        encoder.endEncoding()
+        if existing == nil { encoder.endEncoding() }
         return .affineThreadgroupF16
     }
 

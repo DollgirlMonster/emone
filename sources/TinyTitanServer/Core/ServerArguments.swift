@@ -30,6 +30,8 @@ public struct ServerArguments: Equatable, Sendable {
     public let promptCacheMemoryMiB: Int
     public let promptCacheDiskDirectory: String?
     public let promptCacheDiskMiB: Int
+    /// Idle seconds before a RAM snapshot is released to its SSD copy; 0 = never.
+    public let promptCacheMemoryTTLSeconds: Int
     public let prefillChunkTokens: Int?
     public let kvCachePrecision: KVCachePrecision
     public let ropeScalingMode: RuntimeRoPEScalingMode
@@ -152,10 +154,19 @@ public struct ServerArguments: Equatable, Sendable {
                                  Optional persistent SSD cache directory.
           --prompt-cache-disk-mib <MiB>
                                  SSD snapshot budget, 0...65536 (default 8192).
+          --prompt-cache-memory-ttl-seconds <n>
+                                 Release a RAM snapshot after n idle seconds,
+                                 keeping its SSD copy (0...86400, default 0,
+                                 disabled). Needs --prompt-cache-disk; without
+                                 one nothing expires. A later request restores
+                                 it from SSD.
           --prefill-chunk <tokens>
                                  Prefill chunk size: 32, 64, 128, 256, 512,
-                                 1024, 2048, or 4096 (default 4096 for supported
-                                 35B-A3B text models).
+                                 1024, 2048, 4096, 8192 or 16384 (default: the
+                                 model's profile row, 4096 for the 35B-A3B text
+                                 models and 16384 for Qwen3.8 4-bit, lowered to
+                                 what --max-context allows). A larger chunk
+                                 reads the streamed experts fewer times.
           --kv-bits <4|8|16>     KV-cache storage precision (default 8).
           --thinking <off|on>    Ornith/Qwen reasoning mode (default off, or
                                  TINYTITAN_THINKING_MODE). The model does not expose
@@ -234,6 +245,7 @@ public struct ServerArguments: Equatable, Sendable {
         var promptCacheMemoryMiB = 256
         var promptCacheDiskDirectory: String?
         var promptCacheDiskMiB = 8_192
+        var promptCacheMemoryTTLSeconds = 0
         var prefillChunkTokens: Int?
         var kvCachePrecision: KVCachePrecision = .int8
         var ropeScalingMode: RuntimeRoPEScalingMode = .none
@@ -375,6 +387,12 @@ public struct ServerArguments: Equatable, Sendable {
                         "--prompt-cache-disk-mib must be between 0 and 65536")
                 }
                 promptCacheDiskMiB = parsed
+            case "--prompt-cache-memory-ttl-seconds":
+                guard let parsed = Int(value), (0...86_400).contains(parsed) else {
+                    throw ServerArgumentError.invalid(
+                        "--prompt-cache-memory-ttl-seconds must be between 0 and 86400")
+                }
+                promptCacheMemoryTTLSeconds = parsed
             case "--prefill-chunk":
                 guard let parsed = Int(value),
                     RuntimeConfiguration.allowedPrefillChunkTokens.contains(parsed)
@@ -514,6 +532,7 @@ public struct ServerArguments: Equatable, Sendable {
             promptCacheMemoryMiB: promptCacheMemoryMiB,
             promptCacheDiskDirectory: promptCacheDiskDirectory,
             promptCacheDiskMiB: promptCacheDiskMiB,
+            promptCacheMemoryTTLSeconds: promptCacheMemoryTTLSeconds,
             prefillChunkTokens: prefillChunkTokens,
             kvCachePrecision: kvCachePrecision,
             ropeScalingMode: ropeScalingMode,

@@ -168,7 +168,7 @@ extension RealForwardRunner {
                 }
                 return
             }
-            try prefillQMM.encode(
+            try encodePrefillBatchedProjection(
                 commandBuffer: commandBuffer,
                 weights: weights.weights,
                 weightsOffset: weights.weightsOffset,
@@ -177,7 +177,7 @@ extension RealForwardRunner {
                 biases: weights.biases,
                 biasesOffset: weights.biasesOffset,
                 x: x, y: y,
-                t: tokens, n: rows, k: columns)
+                tokens: tokens, rows: rows, columns: columns)
         }
     }
 
@@ -525,7 +525,7 @@ extension RealForwardRunner {
                     m: UInt32(rows), n: UInt32(columns))
             }
         } else {
-            try prefillQMM.encode(
+            try encodePrefillBatchedProjection(
                 commandBuffer: commandBuffer,
                 weights: key.buffer,
                 weightsOffset: Int(key.offset),
@@ -536,9 +536,7 @@ extension RealForwardRunner {
                 x: blockInput,
                 y: destination.buffer,
                 yOffset: destination.offset,
-                t: tokens,
-                n: indexer.headDim,
-                k: Int(key.shape.1))
+                tokens: tokens, rows: indexer.headDim, columns: Int(key.shape.1))
         }
         try indexer.encodePoolPrefill(
             commandBuffer: commandBuffer,
@@ -570,7 +568,7 @@ extension RealForwardRunner {
                     }
                     return
                 }
-                try self.prefillQMM.encode(
+                try self.encodePrefillBatchedProjection(
                     commandBuffer: cb,
                     weights: view.buffer,
                     weightsOffset: Int(view.offset),
@@ -579,7 +577,7 @@ extension RealForwardRunner {
                     biases: view.buffer,
                     biasesOffset: Int(view.biasOffset),
                     x: x, y: y,
-                    t: count, n: rows, k: columns)
+                    tokens: count, rows: rows, columns: columns)
             })
         // The selection is a host computation over the scores, so the chunk's
         // command buffer has to land first. The same barrier the routed MoE
@@ -616,7 +614,8 @@ extension RealForwardRunner {
     ///
     /// A no-op for families without PLE. The gather is 16 rows of 320 bytes —
     /// 5 KiB — which is three orders of magnitude under one token's routed
-    /// expert traffic, so it is done inline rather than scheduled.
+    /// expert traffic, so it is done inline rather than scheduled; the 16
+    /// reads go out together, not one round trip each.
     func gatherPLERows(token: Int32) throws {
         guard let ple = pleBlock, let hash = pleHash, let table = ngramTable
         else { return }
@@ -625,7 +624,7 @@ extension RealForwardRunner {
             pleContext.removeLast(pleContext.count - hash.ngramSize)
         }
         let rows = hash.rows(context: pleContext)
-        try table.gather(rows: rows, into: ple.embedding.contents())
+        try table.gatherConcurrently(rows: rows, into: ple.embedding.contents())
     }
 
     /// Rewinds the n-gram block's carried state after a speculative pass whose
@@ -676,20 +675,26 @@ extension RealForwardRunner {
     /// Unlike decode, the context for row `i` is the chunk's own tokens plus
     /// whatever preceded the chunk, so this walks the chunk in order and
     /// leaves `pleContext` positioned for the next one.
+    ///
+    /// The row ids are hashed first, in order, because each token's context is
+    /// the tokens before it; then the whole chunk's rows are read together.
+    /// They land token-major, head order within a token -- where the one-token
+    /// gathers used to put them.
     func gatherPLERowsPrefill(tokens: ArraySlice<Int32>) throws {
         guard let ple = pleBlock, let hash = pleHash, let table = ngramTable
         else { return }
-        let rowBytes = hash.headCount * table.rowBytes
-        for (index, token) in tokens.enumerated() {
+        var rows: [UInt32] = []
+        rows.reserveCapacity(tokens.count * hash.headCount)
+        for token in tokens {
             pleContext.insert(token, at: 0)
             if pleContext.count > hash.ngramSize {
                 pleContext.removeLast(pleContext.count - hash.ngramSize)
             }
-            try table.gather(
-                rows: hash.rows(context: pleContext),
-                into: ple.embedding.contents()
-                    .advanced(by: index * rowBytes))
+            let tokenRows = hash.rows(context: pleContext)
+            precondition(tokenRows.count == hash.headCount, "PLE hash returned \(tokenRows.count) rows")
+            rows += tokenRows
         }
+        try table.gatherConcurrently(rows: rows, into: ple.embedding.contents())
     }
 
     /// Encodes the n-gram block over a whole prefill chunk.
@@ -729,7 +734,7 @@ extension RealForwardRunner {
                 }
                 return
             }
-            try prefillQMM.encode(
+            try encodePrefillBatchedProjection(
                 commandBuffer: cb,
                 weights: proj.weights,
                 weightsOffset: proj.weightsOffset,
@@ -738,7 +743,7 @@ extension RealForwardRunner {
                 biases: proj.biases,
                 biasesOffset: proj.biasesOffset,
                 x: x, y: y,
-                t: count, n: rows, k: columns)
+                tokens: count, rows: rows, columns: columns)
         }
     }
 
@@ -791,6 +796,79 @@ extension RealForwardRunner {
                 biasesOffset: Int(view.biasOffset),
                 x: x, xOffset: xOffset,
                 y: y, yOffset: yOffset,
+                m: 1, n: n)
+        }
+    }
+
+    /// A batched prefill projection that the scalar `prefillQMM` serves by
+    /// default: the hyper-connection gates, the QSA indexer and the PLE block.
+    /// With `prefillWideMPP` it goes to the MPP tensor-op QMM when this GPU has
+    /// one and the shape fits (both kernels are built for the attention width),
+    /// and to `prefillQMM` otherwise.
+    func encodePrefillBatchedProjection(
+        commandBuffer: MTLCommandBuffer,
+        weights: MTLBuffer, weightsOffset: Int,
+        scales: MTLBuffer, scalesOffset: Int,
+        biases: MTLBuffer, biasesOffset: Int,
+        x: MTLBuffer, y: MTLBuffer, yOffset: Int = 0,
+        tokens: Int, rows: Int, columns: Int
+    ) throws {
+        if let simdgroup = prefillSimdgroupQMMKernel,
+            simdgroup.accepts(bits: model.attentionWeightBits, k: columns)
+        {
+            try simdgroup.encode(
+                commandBuffer: commandBuffer,
+                weights: weights, weightsOffset: weightsOffset,
+                scales: scales, scalesOffset: scalesOffset,
+                biases: biases, biasesOffset: biasesOffset,
+                x: x, y: y, yOffset: yOffset,
+                t: tokens, n: rows, k: columns, bits: model.attentionWeightBits)
+            return
+        }
+        if prefillWideMPP, let mpp = prefillMPPAffineInt4,
+            try mpp.encode(
+                commandBuffer: commandBuffer,
+                weights: weights, weightsOffset: weightsOffset,
+                scales: scales, scalesOffset: scalesOffset,
+                biases: biases, biasesOffset: biasesOffset,
+                x: x, y: y, yOffset: yOffset,
+                m: tokens, n: rows, k: columns) == .affineThreadgroupF16
+        {
+            return
+        }
+        try prefillQMM.encode(
+            commandBuffer: commandBuffer,
+            weights: weights, weightsOffset: weightsOffset,
+            scales: scales, scalesOffset: scalesOffset,
+            biases: biases, biasesOffset: biasesOffset,
+            x: x, y: y, yOffset: yOffset,
+            t: tokens, n: rows, k: columns)
+    }
+
+    /// `encodeScalarGate` for a run of rows in one encoder (see `GEMVRows`).
+    func encodeScalarGateRows(
+        commandBuffer: MTLCommandBuffer,
+        view: TensorView,
+        x: MTLBuffer, y: MTLBuffer, run: GEMVRows,
+        n: UInt32
+    ) throws {
+        if view.dtype == 1 {
+            try requireBF16ScalarGate().encodeRows(
+                commandBuffer: commandBuffer,
+                weights: view.buffer,
+                weightsOffset: Int(view.offset),
+                x: x, y: y, rows: run,
+                m: 1, n: n)
+        } else {
+            try requireInt8ScalarGate().encodeRows(
+                commandBuffer: commandBuffer,
+                weights: view.buffer,
+                weightsOffset: Int(view.offset),
+                scales: view.buffer,
+                scalesOffset: Int(view.scaleOffset),
+                biases: view.buffer,
+                biasesOffset: Int(view.biasOffset),
+                x: x, y: y, rows: run,
                 m: 1, n: n)
         }
     }

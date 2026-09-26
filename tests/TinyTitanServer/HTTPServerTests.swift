@@ -550,6 +550,25 @@ struct HTTPServerTests {
         try await server.shutdown()
     }
 
+    @Test func prefillProgressIsReadableAndGETOnly() async throws {
+        let server = TinyTitanHTTPServer(
+            modelID: "test-model", queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let (data, response) = try await URLSession.shared.data(
+            from: try localURL(port: port, "/v1/prefill-progress"))
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let progress = try JSONDecoder().decode(PrefillProgress.self, from: data)
+        #expect(progress.total >= progress.done)
+
+        var post = URLRequest(url: try localURL(port: port, "/v1/prefill-progress"))
+        post.httpMethod = "POST"
+        let (_, refused) = try await URLSession.shared.data(for: post)
+        #expect((refused as? HTTPURLResponse)?.statusCode == 405)
+        try await server.shutdown()
+    }
+
     @Test func pipelinedStreamingThenHealthResponsesRemainOrdered() async throws {
         let backend = PipelinedRequestBackend()
         let server = TinyTitanHTTPServer(

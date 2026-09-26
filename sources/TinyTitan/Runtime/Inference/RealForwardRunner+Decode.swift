@@ -711,6 +711,43 @@ extension RealForwardRunner {
             m: m, n: n)
     }
 
+    /// `encodeRoleGEMV` for a run of consecutive rows in one encoder (see
+    /// `GEMVRows`): the same kernel choice, and so the same bits, per row.
+    func encodeRoleGEMVRows(
+        commandBuffer cb: MTLCommandBuffer,
+        projection p: TensorView,
+        weightBits: Int,
+        x: MTLBuffer, y: MTLBuffer, run: GEMVRows,
+        m: UInt32, n: UInt32
+    ) throws {
+        if p.dtype == 1 {
+            try bf16Projection.encodeRows(
+                commandBuffer: cb,
+                weights: p.buffer, weightsOffset: Int(p.offset),
+                x: x, y: y, rows: run, m: m, n: n)
+            return
+        }
+        if weightBits == 4 {
+            try int4.encodeRows(
+                commandBuffer: cb,
+                weights: p.buffer, weightsOffset: Int(p.offset),
+                scales: p.buffer, scalesOffset: Int(p.scaleOffset),
+                biases: p.buffer, biasesOffset: Int(p.biasOffset),
+                x: x, y: y, rows: run, m: m, n: n)
+            return
+        }
+        guard let dispatcher = affineByWidth[weightBits] else {
+            throw ModelError.unsupportedArchitecture(
+                detail: "no \(weightBits)-bit GEMV is built for a \(m)x\(n) projection")
+        }
+        try dispatcher.encodeRows(
+            commandBuffer: cb,
+            weights: p.buffer, weightsOffset: Int(p.offset),
+            scales: p.buffer, scalesOffset: Int(p.scaleOffset),
+            biases: p.buffer, biasesOffset: Int(p.biasOffset),
+            x: x, y: y, rows: run, m: m, n: n)
+    }
+
     func encodePrimaryGEMV(
         commandBuffer cb: MTLCommandBuffer,
         projection p: TensorView,

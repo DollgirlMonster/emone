@@ -330,6 +330,12 @@ private struct RunnerCounterSnapshot {
     let expertStreaming: ExpertStreamingStatistics
 }
 
+/// One mid-prefill checkpoint, held until the generation ends and it is banked.
+private struct FrontierCapture: Sendable {
+    let position: Int
+    let snapshot: InferenceStateSnapshot
+}
+
 /// Per-generation decode state that `runRawCompletion`'s progress closure
 /// mutates. Boxed so the closure captures a reference the compiler can send
 /// into the nonisolated call; Swift 6.4 rejects sending the captured mutable
@@ -347,6 +353,8 @@ private final class GenerationDecodeState: @unchecked Sendable {
     var output: AssistantOutput
     var decodingError: Error?
     var shouldStop = false
+    /// Frontier checkpoints captured mid-prefill, banked after the generation.
+    var frontierCaptures: [FrontierCapture] = []
 
     init(decoder: StructuredAssistantDecoder, output: AssistantOutput) {
         self.decoder = decoder
@@ -408,6 +416,19 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     private var promptCache: ServerPromptCache
     private let promptStateStore: ServerPromptStateStore?
     private var activePromptCacheEntryID: UUID?
+    /// Where the token-prefix frontier checkpoints go (see FrontierTracker),
+    /// and the ones that exist. Each `frontierEntries` row is a chunk-aligned
+    /// KV+GDN snapshot in `promptStateStore` whose `tokens` is the exact
+    /// prefix it covers; a later request that still begins with them restores
+    /// the deepest match and resumes from there, whatever changed after it --
+    /// the mutated-system-prompt case the message-shaped cache misses because
+    /// it keys on whole-message equality. They share the store's RAM and SSD
+    /// budgets and its oldest-first eviction with the message-shaped entries.
+    private var frontier: FrontierTracker
+    private var frontierEntries: [FrontierEntry] = []
+    /// Bumped on every frontier restore or store, so the row cap drops the
+    /// least recently useful checkpoint first.
+    private var frontierClock = 0
     /// Concise-mode system prompt injected into every completion, or nil when
     /// concise mode is off. Selected per quantization (see ConcisePrompt).
     private nonisolated let concisePrompt: String?
@@ -415,6 +436,12 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     private struct SlotWaiter {
         let id: UUID
         let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private struct FrontierEntry {
+        let tokens: [Int32]
+        let id: UUID
+        var lastUse: Int
     }
 
     /// A pure function of its arguments, so a caller can reproduce the
@@ -469,6 +496,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         promptCacheMemoryLimitBytes: Int = 256 * 1_048_576,
         promptCacheDiskDirectory: URL? = nil,
         promptCacheDiskLimitBytes: Int = 8_192 * 1_048_576,
+        promptCacheMemoryTTLSeconds: Int = 0,
         prefillChunkTokens requestedPrefillChunkTokens: Int? = nil,
         kvCachePrecision: KVCachePrecision = .int8,
         ropeScalingMode: RuntimeRoPEScalingMode = .none,
@@ -625,7 +653,9 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                 ?? ModelProfile.resolve(
                     modelID: model.modelID, family: model.config.family,
                     weightBits: model.routedExpertWeightBits
-                ).prefillChunkTokens
+                ).prefillChunkTokens.map {
+                    RuntimeConfiguration.profilePrefillChunk($0, forContext: maxContext)
+                }
                 ?? defaultPrefillChunkTokens(
                     family: model.config.family,
                     fallback: loadRuntime.prefillChunkTokens),
@@ -743,13 +773,28 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             slots: effectiveSlots)
         let promptStateStore: ServerPromptStateStore?
         let promptCache: ServerPromptCache
+        var frontierPrefixEntries: [ServerPromptCacheEntry] = []
         if effectivePromptCacheMode == .multiPrefix {
             let store = try ServerPromptStateStore(
                 configuration: ServerPromptCacheStorageConfiguration(
                     memoryLimitBytes: promptCacheMemoryLimitBytes,
                     diskDirectory: promptCacheDiskDirectory,
-                    diskLimitBytes: promptCacheDiskLimitBytes))
-            let persisted = store.loadEntries(domain: promptCacheDomain)
+                    diskLimitBytes: promptCacheDiskLimitBytes,
+                    memoryTTLSeconds: promptCacheMemoryTTLSeconds))
+            let loaded = store.loadEntries(domain: promptCacheDomain)
+            // Frontier checkpoints share the store but are matched by token
+            // prefix, not message shape, so they stay out of the
+            // ServerPromptCache trie and out of its entry count.
+            frontierPrefixEntries = loaded.filter(Self.isFrontierEntry)
+            if frontierPrefixEntries.count > Self.frontierMaximumEntries {
+                store.remove(
+                    entryIDs: frontierPrefixEntries
+                        .dropLast(Self.frontierMaximumEntries)
+                        .map(\.id))
+                frontierPrefixEntries = Array(
+                    frontierPrefixEntries.suffix(Self.frontierMaximumEntries))
+            }
+            let persisted = loaded.filter { !Self.isFrontierEntry($0) }
             if persisted.count > promptCacheMaximumEntries {
                 store.remove(
                     entryIDs:
@@ -784,6 +829,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             promptCacheDomain: promptCacheDomain,
             promptCache: promptCache,
             promptStateStore: promptStateStore,
+            frontierPrefixEntries: frontierPrefixEntries,
             concisePrompt: conciseModeEnabled()
                 ? ConcisePrompt.standard : nil)
     }
@@ -805,6 +851,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         promptCacheDomain: ServerPromptCacheDomain,
         promptCache: ServerPromptCache,
         promptStateStore: ServerPromptStateStore?,
+        frontierPrefixEntries: [ServerPromptCacheEntry] = [],
         concisePrompt: String?
     ) {
         self.context = context
@@ -835,6 +882,12 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         self.promptCacheDomain = promptCacheDomain
         self.promptCache = promptCache
         self.promptStateStore = promptStateStore
+        self.frontier = FrontierTracker(chunkTokens: prefillConfig.chunkTokens)
+        // Oldest first, as the store listed them, so the cap drops those first.
+        self.frontierEntries = frontierPrefixEntries.enumerated().map {
+            FrontierEntry(tokens: $1.kvBackedTokenIDs, id: $1.id, lastUse: $0)
+        }
+        self.frontierClock = frontierPrefixEntries.count
         self.concisePrompt = concisePrompt
     }
 
@@ -983,14 +1036,70 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         cacheRequest: ValidatedChatRequest,
         promptIDs: [Int32],
         requestedReasoning: RequestReasoning?
-    ) async throws -> (effectivePromptIDs: [Int32], start: RawCompletionStart) {
+    ) async throws -> (
+        effectivePromptIDs: [Int32], start: RawCompletionStart, captureBoundaries: [Int]
+    ) {
         if reasoningForbidsCacheReuse(requestedReasoning) {
             promptCache.invalidate()
             activePromptCacheEntryID = nil
-            return (promptIDs, .reset)
+            return (promptIDs, .reset, [])
         }
+        let frontierOn = frontierCacheActive
+        if frontierOn { frontier.observe(promptIDs) }
+        var (effectivePromptIDs, completionStart) = try await messageShapedStart(
+            cacheRequest: cacheRequest, promptIDs: promptIDs)
+        // Token-prefix frontier fallback. The message-shaped cache above keys
+        // on whole-message equality, so an edit to any earlier message (a
+        // mutated system prompt) drops it to a full re-prefill. A checkpoint
+        // taken at a chunk boundary on the shared frontier can still be an
+        // exact token prefix of this render: restore it and resume there. It
+        // only wins when it is deeper than what the message-shaped path found.
+        if frontierOn,
+            let restored = await restoreFrontierCheckpoint(
+                promptIDs: promptIDs,
+                beating: Self.resumePosition(completionStart))
+        {
+            effectivePromptIDs = promptIDs
+            completionStart = .resume(cachedPromptTokens: restored)
+        }
+        // S12: an identical-prompt replay whose render equals the entry's
+        // KV-backed prefix has nothing to prefill (cached == prompt count).
+        // The continuation API requires cached < prompt count (it must
+        // prefill at least one token), so resume as a full prefill; the
+        // entry stays active for later extending requests.
+        if case .resume(let cached) = completionStart,
+            cached >= effectivePromptIDs.count
+        {
+            completionStart = .reset
+        }
+        guard effectivePromptIDs.count < maxContext else {
+            throw ServerRequestError.invalid(
+                message: "effective prompt exceeds the configured context",
+                param: "messages",
+                code: "context_length_exceeded")
+        }
+        // A split prefill indexes the render by position, so it is only safe
+        // when the runner prefills the render verbatim -- not the spliced
+        // (KV-backed + bridge) array a message-shaped continuation hands it.
+        let captureBoundaries =
+            frontierOn && effectivePromptIDs == promptIDs
+            ? frontier.captureTargets(
+                render: promptIDs,
+                resumeFrom: Self.resumePosition(completionStart),
+                held: heldFrontierPositions(for: promptIDs))
+            : []
+        return (effectivePromptIDs, completionStart, captureBoundaries)
+    }
+
+    /// The message-shaped cache's decision: match on whole-message equality
+    /// and, on a hit, resume the live KV or restore a persisted snapshot.
+    /// Mutates `promptCache` and `activePromptCacheEntryID`.
+    private func messageShapedStart(
+        cacheRequest: ValidatedChatRequest,
+        promptIDs: [Int32]
+    ) async throws -> (effectivePromptIDs: [Int32], start: RawCompletionStart) {
         let effectivePromptIDs: [Int32]
-        var completionStart: RawCompletionStart
+        let completionStart: RawCompletionStart
         if promptCacheMode == .singlePrefix {
             switch promptCache.match(
                 domain: promptCacheDomain,
@@ -1077,23 +1186,154 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             effectivePromptIDs = promptIDs
             completionStart = .reset
         }
-        // S12: an identical-prompt replay whose render equals the entry's
-        // KV-backed prefix has nothing to prefill (cached == prompt count).
-        // The continuation API requires cached < prompt count (it must
-        // prefill at least one token), so resume as a full prefill; the
-        // entry stays active for later extending requests.
-        if case .resume(let cached) = completionStart,
-            cached >= effectivePromptIDs.count
-        {
-            completionStart = .reset
-        }
-        guard effectivePromptIDs.count < maxContext else {
-            throw ServerRequestError.invalid(
-                message: "effective prompt exceeds the configured context",
-                param: "messages",
-                code: "context_length_exceeded")
-        }
         return (effectivePromptIDs, completionStart)
+    }
+
+    /// Whether this session places and restores frontier checkpoints: the
+    /// multi-prefix store is in use *with an SSD tier*, and
+    /// `TINYTITAN_FRONTIER_CACHE` does not switch it off. RAM alone is left to
+    /// the message-shaped entries: at the default 256 MiB budget one long
+    /// prompt's checkpoints would evict them on arrival.
+    private var frontierCacheActive: Bool {
+        guard let promptStateStore, promptStateStore.persistsToDisk else { return false }
+        return Self.frontierCacheEnabled()
+    }
+
+    /// Off-switch for the token-prefix frontier checkpoints, matching the
+    /// codebase's other opt-out experiments. Default on; `off`/`0`/`false`/`no`
+    /// disables both capture and restore.
+    static func frontierCacheEnabled(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        switch environment["TINYTITAN_FRONTIER_CACHE"]?.lowercased() {
+        case "off", "0", "false", "no": return false
+        default: return true
+        }
+    }
+
+    /// Ceiling on one frontier checkpoint. A larger one is skipped rather than
+    /// allocated; the set as a whole is bounded by the store's budgets.
+    static let frontierCheckpointMaxBytes = 2 * 1_024 * 1_048_576
+    /// Ceiling on how many frontier checkpoints are kept, least recently used
+    /// dropped first, so they cannot crowd the message-shaped entries out of
+    /// the store by count.
+    static let frontierMaximumEntries = 16
+
+    /// A persisted entry is a frontier checkpoint when it carries a pure token
+    /// prefix and no message shape: no input messages, no uncommitted boundary,
+    /// every KV row backed by a token. A chat entry always has a message.
+    static func isFrontierEntry(_ entry: ServerPromptCacheEntry) -> Bool {
+        entry.inputMessages.isEmpty
+            && entry.uncommittedBoundaryTokenIDs.isEmpty
+            && entry.kvPosition > 0
+            && entry.kvPosition == entry.kvBackedTokenIDs.count
+    }
+
+    static func makeFrontierEntry(
+        domain: ServerPromptCacheDomain, tokens: [Int32]
+    ) -> ServerPromptCacheEntry {
+        ServerPromptCacheEntry(
+            id: UUID(),
+            domain: domain,
+            inputMessages: [],
+            tools: [],
+            assistantTurn: CachedAssistantTurn(
+                message: GFTokenizer.Message(role: .assistant, content: ""),
+                rawStopReason: .endOfTurn),
+            kvBackedTokenIDs: tokens,
+            uncommittedBoundaryTokenIDs: [],
+            kvPosition: tokens.count)
+    }
+
+    private static func resumePosition(_ start: RawCompletionStart) -> Int {
+        if case .resume(let count) = start { return count }
+        return 0
+    }
+
+    /// Positions whose checkpoint for exactly this render's prefix exists.
+    private func heldFrontierPositions(for promptIDs: [Int32]) -> Set<Int> {
+        Set(
+            frontierEntries.lazy
+                .filter { $0.tokens.count <= promptIDs.count }
+                .filter { promptIDs.prefix($0.tokens.count).elementsEqual($0.tokens) }
+                .map(\.tokens.count))
+    }
+
+    /// Restore the deepest frontier checkpoint that is an exact prefix of this
+    /// render and deeper than `cached`, and return its position; nil when
+    /// there is none or the restore failed (the runner is then reset, so the
+    /// request prefills from scratch).
+    private func restoreFrontierCheckpoint(promptIDs: [Int32], beating cached: Int) async -> Int? {
+        guard let store = promptStateStore else { return nil }
+        // Rows the store evicted on its own are gone; forget them first.
+        frontierEntries.removeAll { !store.contains($0.id) }
+        let candidates = frontierEntries.indices
+            .filter {
+                let n = frontierEntries[$0].tokens.count
+                return n > cached && n < promptIDs.count
+                    && promptIDs.prefix(n).elementsEqual(frontierEntries[$0].tokens)
+            }
+            .sorted { frontierEntries[$0].tokens.count > frontierEntries[$1].tokens.count }
+        guard let index = candidates.first else { return nil }
+        let entry = frontierEntries[index]
+        do {
+            let tier = try await store.restore(entryID: entry.id, into: runner)
+            if promptCacheMode == .singlePrefix { promptCache.invalidate() }
+            activePromptCacheEntryID = nil
+            frontierClock += 1
+            if let row = frontierEntries.firstIndex(where: { $0.id == entry.id }) {
+                frontierEntries[row].lastUse = frontierClock
+            }
+            print(
+                "TinyTitan prompt_cache hit tier=frontier-\(tier) "
+                    + "cached_tokens=\(entry.tokens.count)")
+            return entry.tokens.count
+        } catch {
+            FileHandle.standardError.write(
+                Data(
+                    ("TinyTitan prompt_cache frontier_restore_failed "
+                        + "entry=\(entry.id.uuidString.lowercased()) error=\(error)\n").utf8))
+            store.remove(entryIDs: [entry.id])
+            frontierEntries.removeAll { $0.id == entry.id }
+            activePromptCacheEntryID = nil
+            runner.reset()
+            return nil
+        }
+    }
+
+    /// Persist one chunk checkpoint, then register its row. Awaited (the write
+    /// runs on the store's serial disk queue, off this actor) so a request
+    /// that arrives right after cannot race a half-written snapshot. A row is
+    /// registered only once its backing exists, and the least recently used
+    /// rows past `frontierMaximumEntries` are dropped with their snapshots.
+    private func persistFrontierCheckpoint(
+        tokens: [Int32], snapshot: InferenceStateSnapshot
+    ) async {
+        guard let store = promptStateStore, !tokens.isEmpty,
+            snapshot.descriptor.position == tokens.count,
+            !frontierEntries.contains(where: { $0.tokens == tokens })
+        else { return }
+        let entry = Self.makeFrontierEntry(domain: promptCacheDomain, tokens: tokens)
+        let saved = await store.save(entry: entry, snapshot: snapshot)
+        if let diskError = saved.diskError {
+            FileHandle.standardError.write(
+                Data(("TinyTitan prompt_cache frontier disk_write_failed error=\(diskError)\n").utf8))
+        }
+        guard store.contains(entry.id) else { return }  // evicted on arrival
+        frontierClock += 1
+        frontierEntries.append(FrontierEntry(tokens: tokens, id: entry.id, lastUse: frontierClock))
+        if frontierEntries.count > Self.frontierMaximumEntries {
+            let overflow = frontierEntries
+                .sorted { $0.lastUse < $1.lastUse }
+                .prefix(frontierEntries.count - Self.frontierMaximumEntries)
+                .map(\.id)
+            store.remove(entryIDs: overflow)
+            let dropped = Set(overflow)
+            frontierEntries.removeAll { dropped.contains($0.id) }
+        }
+        print(
+            "TinyTitan prompt_cache frontier_stored tokens=\(tokens.count) "
+                + "state_bytes=\(snapshot.payload.count)")
     }
 
     /// lint:allow-long the request orchestrator: prompt preparation, cache
@@ -1258,6 +1498,13 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         let activePromptIDs =
             activeProducer is StreamingMTPDecoder
             ? promptIDs : effectivePromptIDs
+        // Frontier checkpointing rides only the plain runner path.
+        let captureBoundaries =
+            activeProducer is StreamingMTPDecoder ? [] : resolved.captureBoundaries
+        let progressGeneration = PrefillProgressMonitor.begin(
+            total: activePromptIDs.count,
+            cached: Self.resumePosition(activeStart))
+        defer { PrefillProgressMonitor.end(generation: progressGeneration) }
         // `@Sendable`: `runRawCompletion` is @concurrent, so a progress closure
         // that is still actor-isolated cannot be sent into it (Swift 6.4).
         // Everything these touch lives in the Sendable box above.
@@ -1283,10 +1530,27 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             prefillConfig: prefillConfig,
             start: activeStart,
             slot: slot,
+            captureBoundaries: captureBoundaries,
+            captureMaxBytes: min(
+                Self.frontierCheckpointMaxBytes,
+                promptStateStore?.maximumSnapshotBytes ?? 0),
+            // Always passed: with no boundaries `runRawCompletion` never calls
+            // it. (A `cond ? nil : { ... }` here types the literal before the
+            // annotation and loses `@Sendable`.)
+            onCapture: { @Sendable (position: Int, snapshot: InferenceStateSnapshot) in
+                state.frontierCaptures.append(
+                    FrontierCapture(position: position, snapshot: snapshot))
+            },
             // A watchdog stop is polled here, between tokens, alongside the
             // stop-string matcher's own flag.
             shouldStop: { @Sendable in state.shouldStop || watchdogs.wantsStop },
             onProgress: { @Sendable progress in
+                if case .prefill(let done, let total) = progress {
+                    PrefillProgressMonitor.prefill(
+                        done: done, total: total, generation: progressGeneration)
+                } else {
+                    PrefillProgressMonitor.decoding(generation: progressGeneration)
+                }
                 guard state.decodingError == nil else { return }
                 do {
                     switch progress {
@@ -1302,6 +1566,14 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                     state.shouldStop = true
                 }
             })
+        // Bank the checkpoints captured mid-prefill. Each is a pure prefix
+        // state, so it stands however the rest of this turn goes.
+        let captures = state.frontierCaptures
+        state.frontierCaptures = []
+        for capture in captures {
+            await persistFrontierCheckpoint(
+                tokens: Array(promptIDs.prefix(capture.position)), snapshot: capture.snapshot)
+        }
         emitGenerationDiagnostics(
             activeProducer: activeProducer,
             result: result,

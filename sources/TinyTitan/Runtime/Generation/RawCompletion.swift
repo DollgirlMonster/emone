@@ -102,6 +102,9 @@ public func runRawCompletion(
     prefillConfig: PrefillRuntimeConfig = .defaultChunked,
     start: RawCompletionStart = .reset,
     slot: Int = 0,
+    captureBoundaries: [Int] = [],
+    captureMaxBytes: Int? = nil,
+    onCapture: ((Int, InferenceStateSnapshot) -> Void)? = nil,
     shouldStop: () -> Bool = { false },
     onProgress: (RawDecodeProgress) -> Void
 ) async throws -> RawDecodeResult {
@@ -217,15 +220,51 @@ public func runRawCompletion(
                 PrefillError.chunkedRequiresChunkedRunnerReason)
         }
         let mode: PrefillOutputMode = fusedGreedy ? .greedyIfAvailable : .logits
+        // Optional mid-prefill checkpoints (the server's token-prefix frontier
+        // cache). Each position in `captureBoundaries` splits the prefill into
+        // one more adjacent chunked call, and the state snapshot taken between
+        // the calls is handed to `onCapture`. A boundary is used only when it
+        // sits a whole number of chunks past the current position, so it lands
+        // on a span boundary `PrefillChunkPlanner` would have cut anyway: the
+        // spans run are the same ones, in the same order, as a single call.
+        // Only a slot-0 `RealForwardRunner` can snapshot its state.
+        if let onCapture, slot == 0, let capturing = producer as? RealForwardRunner {
+            for boundary in capturePositions(
+                captureBoundaries, from: position,
+                promptCount: promptIds.count, chunkTokens: prefillConfig.chunkTokens)
+            {
+                // The seed is discarded: the final call below rewrites it.
+                _ = try await chunked.prefillChunked(
+                    tokens: promptIds[position..<boundary],
+                    startPosition: position,
+                    slot: slot,
+                    outputMode: mode,
+                    config: prefillConfig,
+                    into: scratch.logits
+                ) { [position] done in
+                    onProgress(.prefill(done: position + done, total: promptIds.count))
+                }
+                history.append(contentsOf: promptIds[position..<boundary])
+                position = boundary
+                // Best-effort: a checkpoint that cannot be captured (or is over
+                // the caller's ceiling) only means a later request re-prefills
+                // that span. The prefill itself already succeeded.
+                if let snapshot = try? capturing.captureInferenceState(
+                    maximumBytes: captureMaxBytes)
+                {
+                    onCapture(boundary, snapshot)
+                }
+            }
+        }
         let result = try await chunked.prefillChunked(
-            tokens: prefillTokens,
+            tokens: promptIds[position...],
             startPosition: position,
             slot: slot,
             outputMode: mode,
             config: prefillConfig,
             into: scratch.logits
-        ) { done in
-            onProgress(.prefill(done: cachedPromptTokens + done, total: promptIds.count))
+        ) { [position] done in
+            onProgress(.prefill(done: position + done, total: promptIds.count))
         }
         if mode == .logits, result.seed != .logitsWritten {
             throw PrefillError.unsupportedPrefillSeed(
@@ -236,9 +275,9 @@ public func runRawCompletion(
             throw PrefillError.unsupportedPrefillSeed(
                 "RawCompletion chunked prefill returned a greedy token for a sampling config")
         }
+        history.append(contentsOf: promptIds[position...])
         position = result.newPosition
         prefillSeed = result.seed
-        history.append(contentsOf: prefillTokens)
     case .off:
         for t in prefillTokens {
             try Task.checkCancellation()
@@ -588,4 +627,19 @@ func validatedToken(_ raw: UInt32, vocab: Int) throws -> Int32 {
         throw GeneratorError.samplerReturnedOutOfRangeToken(id: raw, vocab: vocab)
     }
     return Int32(bitPattern: raw)
+}
+
+/// The capture boundaries `runRawCompletion` will actually split at, ascending.
+///
+/// A boundary survives only if it lies strictly inside the uncached range and a
+/// whole number of chunks past `start`, which is what keeps the split prefill
+/// identical to one call. Ascending, so each split extends from where the last
+/// one stopped and every requested boundary is captured, not just the deepest.
+func capturePositions(
+    _ boundaries: [Int], from start: Int, promptCount: Int, chunkTokens: Int
+) -> [Int] {
+    guard chunkTokens > 0 else { return [] }
+    return Set(boundaries).sorted().filter {
+        $0 > start && $0 < promptCount && ($0 - start) % chunkTokens == 0
+    }
 }

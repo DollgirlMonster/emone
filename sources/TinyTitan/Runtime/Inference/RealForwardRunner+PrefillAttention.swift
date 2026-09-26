@@ -17,7 +17,7 @@ extension RealForwardRunner {
     /// Splitting it would thread a dozen buffers through sub-functions to make
     /// a line count smaller while making the data flow harder to follow.
     func encodeLinearAttentionPrefill(
-        cb: MTLCommandBuffer, layer L: Int,
+        cb: inout MTLCommandBuffer, layer L: Int,
         views: LayerPrefillQKVViews, scratch: PrefillChunkScratchBuffers,
         tokenCount t: Int, hiddenSize D: Int,
         snapshotGDNAfterFirstToken: Bool, useTwoRowProjection: Bool,
@@ -102,6 +102,7 @@ extension RealForwardRunner {
             xStrideElements: D,
             yStrideElements: la.numVHeads,
             useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_in_proj")
         let convW = linConv
         let tail = gdnState.convTailSlot(layer: L, slot: slot)
         try gdn.encodeConvPrefill(
@@ -154,6 +155,7 @@ extension RealForwardRunner {
             weightOffset: Int(gatedNormW.offset),
             out: scratch.attentionOutput,
             rows: t)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_scan")
         try encodeAffineProjection(
             commandBuffer: cb,
             family: .o,
@@ -167,6 +169,7 @@ extension RealForwardRunner {
             xStrideElements: la.valueDim,
             yStrideElements: D,
             useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_out_proj")
     }
 
     /// Softmax-attention branch of one chunked-prefill layer.
@@ -175,7 +178,7 @@ extension RealForwardRunner {
     /// KV-cache write and attention are one ordered pipeline over shared
     /// scratch, and the intermediate buffers have no meaning outside it.
     func encodeFullAttentionPrefill(
-        cb: MTLCommandBuffer, layer L: Int,
+        cb: inout MTLCommandBuffer, layer L: Int,
         views: LayerPrefillQKVViews, scratch: PrefillChunkScratchBuffers,
         tokenCount t: Int, hiddenSize D: Int, startPosition: Int,
         isFull: Bool, headDim: Int, numKVHeads: Int,
@@ -239,6 +242,7 @@ extension RealForwardRunner {
                 count: t * kvDim, position: startPosition)
         }
 
+        try prefillSplitPoint(&cb, role: "prefill_split_attn_qkv_proj")
         // The attention input Q: the packed q_proj output is split
         // into per-head query/gate halves for gated architectures.
         let attnQ: MTLBuffer
@@ -315,6 +319,7 @@ extension RealForwardRunner {
                 valueSource: scratch.vStage,
                 bytesPerToken: bytes / t)
         }
+        try prefillSplitPoint(&cb, role: "prefill_split_attn_rope_kv")
         let kvView = kv?.keyView(
             layer: L, slot: slot,
             validTokenCount: startPosition + t)
@@ -377,6 +382,7 @@ extension RealForwardRunner {
                 gate: scratch.attnGate,
                 count: t * qDim)
         }
+        try prefillSplitPoint(&cb, role: "prefill_split_attn_core")
         try encodeAffineProjection(
             commandBuffer: cb,
             family: .o,
@@ -390,5 +396,6 @@ extension RealForwardRunner {
             xStrideElements: qDim,
             yStrideElements: D,
             useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_attn_o_proj")
     }
 }

@@ -1,3 +1,53 @@
+# This fork: what differs from upstream
+
+This is [DollgirlMonster/TinyTitan](https://github.com/DollgirlMonster/TinyTitan),
+a private-use fork of [Pummelchen/TinyTitan](https://github.com/Pummelchen/TinyTitan).
+Everything below this section is upstream's README, unchanged. Its benchmarks were
+measured on upstream's 24 GB M3, not here. The fork's own changes:
+
+**Prefill for Qwen3.8-Flash-Next 125B-A6B 4-bit, tuned on an M1 Max** (32-core
+GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
+
+| step | prefill s | tok/s | output |
+| --- | ---: | ---: | --- |
+| upstream engine (estimated) | ~485 | ~35 | reference |
+| + grouped-query QSA attention kernel | 419-451 | 39 | identical |
+| + PLE n-gram rows read concurrently | 353-389 | 46 | identical |
+| + 8,192-token chunks, parallel host key selection | 297-301 | 57 | identical |
+| + remaining scalar GEMMs and the shared expert on the MPP tensor ops | 246-251 | 68 | rounding |
+| + routed-expert tiles as grouped MPP GEMMs, run concurrently | 213-215 | 79 | rounding |
+| + QSA indexer and QSA attention on the simdgroup matrix units, 16,384-token chunks | **156** | **108** | rounding |
+
+About **3.1x** faster than the upstream engine; 2.8x against the first
+measured baseline. The steps that change rounding passed a paired surprisal
+test against the switch-free engine: +0.011 nats per token over 512
+teacher-forced tokens, t = +0.92, which is no measurable change. The full
+record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
+
+- **Where the settings live.** The two QSA matrix-unit kernels are on by
+  default, and only Qwen3.8 uses QSA. The MPP switches and the 16K chunk are
+  set in Qwen3.8 4-bit's `ModelProfile` row, so no other model's output
+  changes. `TINYTITAN_PREFILL_MPP_WIDE`, `TINYTITAN_PREFILL_ROUTED_MPP`,
+  `TINYTITAN_QSA_SCORE_MMA` and `TINYTITAN_PREFILL_QSA_MMA` (each `0` or `1`)
+  override them. The profile's chunk is lowered to what a YaRN context allows.
+- **Prefill chunks of 8,192 and 16,384 tokens are allowed.** Each chunk
+  streams nearly the whole routed-expert corpus, so the number of chunks is
+  the cost.
+- **`tools/serve.sh <install>` is a one-line launcher** for an install
+  anywhere, including an external drive. It loads the model on the first
+  request, releases it after 15 idle minutes, and keeps the prefix cache on
+  disk.
+- **Server additions.** Token-prefix frontier checkpoints restore the deepest
+  cached prefix after a system-prompt edit. `--prompt-cache-memory-ttl-seconds`
+  releases idle RAM snapshots, and `GET /v1/prefill-progress` reports prefill
+  progress.
+- **Measurement tools.** `tools/m1_spike.sh` builds, tests and runs
+  interleaved A/B prefill arms, reporting GPU work in gigacycles.
+  `TinyTitanCLI --score` and `tools/prefill_surprisal_ab.sh` run the paired
+  surprisal test for any prefill numerics change.
+
+---
+
 <p align="center">
   ✨ NVMAI is now TinyTitan ! ✨
 </p>

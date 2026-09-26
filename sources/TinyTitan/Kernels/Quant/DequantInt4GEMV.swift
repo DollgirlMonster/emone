@@ -81,6 +81,24 @@ final class DequantInt4GEMV {
         m: UInt32,
         n: UInt32
     ) throws {
+        try encodeRows(
+            commandBuffer: commandBuffer,
+            weights: weights, weightsOffset: weightsOffset,
+            scales: scales, scalesOffset: scalesOffset,
+            biases: biases, biasesOffset: biasesOffset,
+            x: x, y: y, rows: .single(xOffset: xOffset, yOffset: yOffset),
+            m: m, n: n)
+    }
+
+    /// `encode` for several independent rows in one encoder (see `GEMVRows`).
+    func encodeRows(
+        commandBuffer: MTLCommandBuffer,
+        weights: MTLBuffer, weightsOffset: Int = 0,
+        scales: MTLBuffer, scalesOffset: Int = 0,
+        biases: MTLBuffer, biasesOffset: Int = 0,
+        x: MTLBuffer, y: MTLBuffer, rows: GEMVRows,
+        m: UInt32, n: UInt32
+    ) throws {
         precondition(
             n % UInt32(Quantization.groupSize) == 0,
             "N must be a multiple of \(Quantization.groupSize)")
@@ -97,8 +115,8 @@ final class DequantInt4GEMV {
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)
         encoder.setBuffer(scales, offset: scalesOffset, index: 1)
         encoder.setBuffer(biases, offset: biasesOffset, index: 2)
-        encoder.setBuffer(x, offset: xOffset, index: 3)
-        encoder.setBuffer(y, offset: yOffset, index: 4)
+        encoder.setBuffer(x, offset: rows.xOffset, index: 3)
+        encoder.setBuffer(y, offset: rows.yOffset, index: 4)
         var mValue = m
         var nValue = n
         encoder.setBytes(&mValue, length: MemoryLayout<UInt32>.size, index: 5)
@@ -112,9 +130,9 @@ final class DequantInt4GEMV {
             width: (Int(m) + Self.rowsPerThreadgroup - 1) / Self.rowsPerThreadgroup,
             height: 1,
             depth: 1)
-        encoder.dispatchThreadgroups(
-            threadgroupCount,
-            threadsPerThreadgroup: threadgroupSize)
+        rows.dispatch(
+            encoder, xIndex: 3, yIndex: 4,
+            threadgroups: threadgroupCount, threadsPerThreadgroup: threadgroupSize)
         encoder.endEncoding()
     }
 

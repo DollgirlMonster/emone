@@ -55,6 +55,43 @@ struct NgramTableReaderTests {
         }
     }
 
+    /// The concurrent gather exists only to overlap the reads; where every row
+    /// lands must not change. Many rows, repeats and a descending run, against
+    /// the serial gather byte for byte.
+    @Test("The concurrent gather lands every row where the serial one does")
+    func concurrentGatherMatchesSerial() throws {
+        let url = try Self.makeTable()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let r = try Self.reader(url)
+        var want: [UInt32] = (0..<500).map { UInt32(($0 * 37) % Int(Self.rowCount)) }
+        want += [5, 5, 5] + (0..<Self.rowCount).reversed().map { UInt32($0) }
+        var serial = [Float16](repeating: -1, count: want.count * Self.rowDim)
+        var concurrent = [Float16](repeating: -2, count: want.count * Self.rowDim)
+        try serial.withUnsafeMutableBytes {
+            try r.gather(rows: want, into: try #require($0.baseAddress))
+        }
+        try concurrent.withUnsafeMutableBytes {
+            try r.gatherConcurrently(rows: want, into: try #require($0.baseAddress))
+        }
+        #expect(serial == concurrent)
+        #expect(concurrent[3 * Self.rowDim] == Float16(want[3]))
+    }
+
+    @Test("The concurrent gather refuses a bad row before reading any")
+    func concurrentGatherChecksEveryRowFirst() throws {
+        let url = try Self.makeTable()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let r = try Self.reader(url)
+        let rows: [UInt32] = [1, 2, UInt32(Self.rowCount), 3]
+        var out = [Float16](repeating: -7, count: rows.count * Self.rowDim)
+        #expect(throws: NgramTableReader.Failure.self) {
+            try out.withUnsafeMutableBytes { buffer in
+                try r.gatherConcurrently(rows: rows, into: try #require(buffer.baseAddress))
+            }
+        }
+        #expect(out.allSatisfy { $0 == -7 }, "nothing is written when a row is refused")
+    }
+
     @Test("A row past the end is refused, not read out of bounds")
     func rejectsOutOfRange() throws {
         let url = try Self.makeTable()

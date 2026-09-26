@@ -40,6 +40,11 @@ public struct Args: Equatable, Sendable {
     public var prefillChunk: PrefillChunkChoice?
     public var kvCachePrecision: KVCachePrecision
     public var ropeScalingMode: RuntimeRoPEScalingMode
+    /// Score instead of generate: the prompt's last `scoreTokens` tokens are
+    /// teacher-forced after the rest is prefilled (`scoreContinuation`).
+    public var scoreTokens: Int?
+    /// One negative log-likelihood per scored token, one per line.
+    public var scoreOutput: String?
 
     public init(
         model: String,
@@ -66,7 +71,9 @@ public struct Args: Equatable, Sendable {
         rdadvise: String = "default",
         prefillChunk: PrefillChunkChoice? = nil,
         kvCachePrecision: KVCachePrecision = .int8,
-        ropeScalingMode: RuntimeRoPEScalingMode = .none
+        ropeScalingMode: RuntimeRoPEScalingMode = .none,
+        scoreTokens: Int? = nil,
+        scoreOutput: String? = nil
     ) {
         self.model = model
         self.prompt = prompt
@@ -87,6 +94,8 @@ public struct Args: Equatable, Sendable {
         self.prefillChunk = prefillChunk
         self.kvCachePrecision = kvCachePrecision
         self.ropeScalingMode = ropeScalingMode
+        self.scoreTokens = scoreTokens
+        self.scoreOutput = scoreOutput
         self.seed = seed
         self.stops = stops
         self.quiet = quiet
@@ -170,9 +179,14 @@ extension Args {
           --prefill-chunk <n|auto>  Prefill chunk tokens. Larger chunks reduce
                                     routed-expert file sweeps but use more GPU
                                     scratch. Allowed: 32, 64, 128, 256, 512,
-                                    1024, 2048, 4096; auto covers the prompt with
-                                    the smallest allowed chunk.
+                                    1024, 2048, 4096, 8192, 16384; auto covers
+                                    the prompt with the smallest allowed chunk.
           --kv-bits <4|8|16>        KV-cache storage precision (default 8).
+          --score <n>               Score instead of generate: prefill all but
+                                    the prompt's last n tokens, then report the
+                                    mean surprisal (NLL) of those n by teacher
+                                    forcing. Compares prefill paths on one text.
+          --score-out <file>        One NLL per scored token (needs --score).
           --concise                 Inject the per-quantization concise-mode
                                     system prompt (answers without preamble,
                                     filler, or closing codas).
@@ -220,6 +234,8 @@ extension Args {
         var prefillChunk: PrefillChunkChoice?
         var kvCachePrecision: KVCachePrecision = .int8
         var ropeScalingMode: RuntimeRoPEScalingMode = .none
+        var scoreTokens: Int?
+        var scoreOutput: String?
 
         var index = 0
         while index < argv.count {
@@ -349,6 +365,14 @@ extension Args {
                 } else {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
+            case "--score":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = Int(value), parsed >= 1 else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                scoreTokens = parsed
+            case "--score-out":
+                scoreOutput = try takeValue(argv, &index, flag: flag)
             case "--kv-bits":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let bits = Int(value),
@@ -369,6 +393,9 @@ extension Args {
             throw ArgsError.mutuallyExclusive("--prompt", "--messages-file")
         }
         if prompt == nil && messagesFile == nil { throw ArgsError.modeMissing }
+        if scoreOutput != nil && scoreTokens == nil {
+            throw ArgsError.requiredMissing("--score")
+        }
         if temperature > 0, topK == nil, let topP, topP < 1 {
             throw ArgsError.invalidValue(
                 flag: "--top-p",
@@ -416,7 +443,9 @@ extension Args {
             rdadvise: rdadvise,
             prefillChunk: prefillChunk,
             kvCachePrecision: kvCachePrecision,
-            ropeScalingMode: ropeScalingMode)
+            ropeScalingMode: ropeScalingMode,
+            scoreTokens: scoreTokens,
+            scoreOutput: scoreOutput)
     }
 
     private static func takeValue(

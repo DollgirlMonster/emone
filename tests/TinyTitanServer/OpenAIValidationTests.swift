@@ -382,10 +382,30 @@ struct ServerArgumentTests {
         #expect(arguments.promptCacheMemoryMiB == 256)
         #expect(arguments.promptCacheDiskDirectory == nil)
         #expect(arguments.promptCacheDiskMiB == 8_192)
+        #expect(arguments.promptCacheMemoryTTLSeconds == 0)
         #expect(arguments.prefillChunkTokens == nil)
         #expect(arguments.kvCachePrecision == .int8)
         #expect(arguments.ropeScalingMode == .none)
         #expect(arguments.thinkingMode == .off)
+    }
+
+    @Test func parsesThePromptCacheMemoryTTL() throws {
+        let arguments = try ServerArguments.parse(
+            ["--model", "model.gturbo", "--prompt-cache-memory-ttl-seconds", "600"],
+            environment: [:])
+        #expect(arguments.promptCacheMemoryTTLSeconds == 600)
+        let plan = ModelSessionPlan.from(
+            arguments: arguments,
+            modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
+            thinking: .off, reasoningEffort: nil, mtpModelDirectory: nil)
+        #expect(plan.promptCacheMemoryTTLSeconds == 600)
+        for bad in ["-1", "86401", "soon"] {
+            #expect(throws: ServerArgumentError.self) {
+                try ServerArguments.parse(
+                    ["--model", "model.gturbo", "--prompt-cache-memory-ttl-seconds", bad],
+                    environment: [:])
+            }
+        }
     }
 
     @Test func parsesOnlyBinaryThinkingModes() throws {
@@ -436,11 +456,20 @@ struct ServerArgumentTests {
             "--prefill-chunk", "4096",
         ])
         #expect(arguments.prefillChunkTokens == 4_096)
-        #expect(throws: ServerArgumentError.self) {
-            try ServerArguments.parse([
+        for chunk in [8_192, 16_384] {
+            let larger = try ServerArguments.parse([
                 "--model", "model.gturbo",
-                "--prefill-chunk", "8192",
+                "--prefill-chunk", String(chunk),
             ])
+            #expect(larger.prefillChunkTokens == chunk)
+        }
+        for refused in ["32768", "3000"] {
+            #expect(throws: ServerArgumentError.self) {
+                try ServerArguments.parse([
+                    "--model", "model.gturbo",
+                    "--prefill-chunk", refused,
+                ])
+            }
         }
     }
 

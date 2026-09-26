@@ -69,6 +69,22 @@ void sigmoid_scalar_mul_fp16(
     y[tid] = half(float(y[tid]) / (1.0f + exp(-g)));
 }
 
+// y[r, i] *= sigmoid(gate[r]) for every row of a prefill chunk in one
+// dispatch -- sigmoid_scalar_mul_fp16 applied per row, with the identical
+// per-element expression, so each element gets the same bits.
+[[kernel, max_total_threads_per_threadgroup(256)]]
+void sigmoid_rows_mul_fp16(
+    device half*       y     [[buffer(0)]],   // [rows, width]
+    device const half* gate  [[buffer(1)]],   // [rows]
+    constant uint&     width [[buffer(2)]],
+    constant uint&     count [[buffer(3)]],   // rows * width
+    uint               tid   [[thread_position_in_grid]]
+) {
+    if (tid >= count) return;
+    const float g = float(gate[tid / width]);
+    y[tid] = half(float(y[tid]) / (1.0f + exp(-g)));
+}
+
 // Qwen 3.6 q_proj emits per-head [query(D) ; gate(D)] pairs. Split them into
 // contiguous q [H, D] and gate [H, D] so the per-head norm, RoPE, and
 // attention kernels see their usual layout.

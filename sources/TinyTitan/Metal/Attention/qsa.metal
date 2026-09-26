@@ -1,4 +1,5 @@
 #include <metal_stdlib>
+#include <metal_simdgroup_matrix>
 using namespace metal;
 
 // Qwen Sparse Attention's indexer: the small head set that scores whole
@@ -127,6 +128,98 @@ void qsa_block_scores_rows(
         total += max(dot, 0.0f);
     }
     scores[tid] = total;
+}
+
+// `qsa_block_scores_rows` on the simdgroup matrix units. The scalar kernel
+// gives every (query, block) pair its own thread and walks H x D products one
+// at a time -- ~26 GFLOPS on an M1 Max, 17 s of a 16.9K-token prefill. Per
+// head the scores are a [T x D] x [D x blocks] product, so this tiles 32
+// queries x 32 blocks per threadgroup (four simdgroups, 16 x 16 each as 2 x 2
+// blocks of 8 x 8), accumulates each head's product in fp32, and applies the
+// per-head ReLU and the sum over heads through threadgroup memory. Same
+// arithmetic per product, different summation order: scores differ from the
+// scalar kernel only by float rounding. Needs D % 32 == 0.
+constant constexpr uint kQSAScoreTile = 32u;
+constant constexpr uint kQSAScoreThreads = 128u;
+
+[[kernel, max_total_threads_per_threadgroup(128)]]
+void qsa_block_scores_rows_mma(
+    device const half*  query   [[buffer(0)]],  // [T, H, D], normed and roped
+    device const half*  pooled  [[buffer(1)]],  // [n_blocks, D]
+    device       float* scores  [[buffer(2)]],  // [T, n_blocks]
+    constant     uint&  D       [[buffer(3)]],
+    constant     uint&  H       [[buffer(4)]],
+    constant     uint&  blocks  [[buffer(5)]],
+    constant     uint&  T       [[buffer(6)]],
+    uint2               tgid    [[threadgroup_position_in_grid]],
+    uint                lid     [[thread_index_in_threadgroup]],
+    uint                sg      [[simdgroup_index_in_threadgroup]]
+) {
+    threadgroup float qs[kQSAScoreTile * kQSAScoreTile];   // [query][d]
+    threadgroup float ps[kQSAScoreTile * kQSAScoreTile];   // [block][d]
+    threadgroup float head[kQSAScoreTile * kQSAScoreTile]; // [query][block]
+
+    const uint t0 = tgid.y * kQSAScoreTile;
+    const uint b0 = tgid.x * kQSAScoreTile;
+    const uint sm = (sg >> 1u) * 16u;
+    const uint sn = (sg & 1u) * 16u;
+    constexpr uint kPerThread = kQSAScoreTile * kQSAScoreTile / kQSAScoreThreads;
+    float total[kPerThread];
+    for (uint i = 0u; i < kPerThread; ++i) { total[i] = 0.0f; }
+
+    for (uint h = 0u; h < H; ++h) {
+        simdgroup_float8x8 acc00 = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        simdgroup_float8x8 acc01 = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        simdgroup_float8x8 acc10 = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        simdgroup_float8x8 acc11 = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        for (uint k0 = 0u; k0 < D; k0 += kQSAScoreTile) {
+            for (uint i = lid; i < kQSAScoreTile * kQSAScoreTile; i += kQSAScoreThreads) {
+                const uint r = i / kQSAScoreTile;
+                const uint c = i % kQSAScoreTile;
+                const uint t = t0 + r;
+                const uint b = b0 + r;
+                qs[i] = t < T ? float(query[(t * H + h) * D + k0 + c]) : 0.0f;
+                ps[i] = b < blocks ? float(pooled[b * D + k0 + c]) : 0.0f;
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            for (uint kk = 0u; kk < kQSAScoreTile; kk += 8u) {
+                simdgroup_float8x8 a0;
+                simdgroup_float8x8 a1;
+                simdgroup_float8x8 w0;
+                simdgroup_float8x8 w1;
+                simdgroup_load(a0, qs + (sm + 0u) * kQSAScoreTile + kk, kQSAScoreTile);
+                simdgroup_load(a1, qs + (sm + 8u) * kQSAScoreTile + kk, kQSAScoreTile);
+                // [d][block] = pooled rows, loaded transposed.
+                simdgroup_load(
+                    w0, ps + (sn + 0u) * kQSAScoreTile + kk, kQSAScoreTile, ulong2(0, 0), true);
+                simdgroup_load(
+                    w1, ps + (sn + 8u) * kQSAScoreTile + kk, kQSAScoreTile, ulong2(0, 0), true);
+                simdgroup_multiply_accumulate(acc00, a0, w0, acc00);
+                simdgroup_multiply_accumulate(acc01, a0, w1, acc01);
+                simdgroup_multiply_accumulate(acc10, a1, w0, acc10);
+                simdgroup_multiply_accumulate(acc11, a1, w1, acc11);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        simdgroup_store(acc00, head + (sm + 0u) * kQSAScoreTile + sn + 0u, kQSAScoreTile);
+        simdgroup_store(acc01, head + (sm + 0u) * kQSAScoreTile + sn + 8u, kQSAScoreTile);
+        simdgroup_store(acc10, head + (sm + 8u) * kQSAScoreTile + sn + 0u, kQSAScoreTile);
+        simdgroup_store(acc11, head + (sm + 8u) * kQSAScoreTile + sn + 8u, kQSAScoreTile);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint i = 0u; i < kPerThread; ++i) {
+            total[i] += max(head[lid + i * kQSAScoreThreads], 0.0f);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (uint i = 0u; i < kPerThread; ++i) {
+        const uint index = lid + i * kQSAScoreThreads;
+        const uint t = t0 + index / kQSAScoreTile;
+        const uint b = b0 + index % kQSAScoreTile;
+        if (t < T && b < blocks) {
+            scores[t * blocks + b] = total[i];
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

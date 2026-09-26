@@ -51,9 +51,9 @@ enum ServerModelIdentity {
         manifestModelID: String,
         family: ModelFamily
     ) -> String {
-        for suffix in ["-4bit", "-8bit", "-6bit"]
-        where manifestModelID.hasSuffix(suffix) {
-            return String(manifestModelID.dropLast(suffix.count))
+        let stripped = ModelProfile.tableModelID(manifestModelID)
+        if stripped != manifestModelID {
+            return stripped
         }
         if manifestModelID != "unknown/snapshot" {
             return manifestModelID
@@ -87,6 +87,7 @@ public struct ModelSessionPlan: Sendable {
     public let promptCacheMemoryLimitBytes: Int
     public let promptCacheDiskDirectory: URL?
     public let promptCacheDiskLimitBytes: Int
+    public let promptCacheMemoryTTLSeconds: Int
     public let prefillChunkTokens: Int?
     public let kvCachePrecision: KVCachePrecision
     public let ropeScalingMode: RuntimeRoPEScalingMode
@@ -109,6 +110,7 @@ public struct ModelSessionPlan: Sendable {
         promptCacheMemoryLimitBytes: Int,
         promptCacheDiskDirectory: URL?,
         promptCacheDiskLimitBytes: Int,
+        promptCacheMemoryTTLSeconds: Int = 0,
         prefillChunkTokens: Int?,
         kvCachePrecision: KVCachePrecision = .int8,
         ropeScalingMode: RuntimeRoPEScalingMode = .none,
@@ -127,6 +129,7 @@ public struct ModelSessionPlan: Sendable {
         self.promptCacheMemoryLimitBytes = promptCacheMemoryLimitBytes
         self.promptCacheDiskDirectory = promptCacheDiskDirectory
         self.promptCacheDiskLimitBytes = promptCacheDiskLimitBytes
+        self.promptCacheMemoryTTLSeconds = promptCacheMemoryTTLSeconds
         self.prefillChunkTokens = prefillChunkTokens
         self.kvCachePrecision = kvCachePrecision
         self.ropeScalingMode = ropeScalingMode
@@ -164,6 +167,7 @@ public struct ModelSessionPlan: Sendable {
                 URL(fileURLWithPath: $0).standardizedFileURL
             },
             promptCacheDiskLimitBytes: arguments.promptCacheDiskMiB * 1_048_576,
+            promptCacheMemoryTTLSeconds: arguments.promptCacheMemoryTTLSeconds,
             prefillChunkTokens: arguments.prefillChunkTokens,
             kvCachePrecision: arguments.kvCachePrecision,
             ropeScalingMode: arguments.ropeScalingMode,
@@ -187,6 +191,7 @@ public struct ModelSessionPlan: Sendable {
             promptCacheMemoryLimitBytes: promptCacheMemoryLimitBytes,
             promptCacheDiskDirectory: promptCacheDiskDirectory,
             promptCacheDiskLimitBytes: promptCacheDiskLimitBytes,
+            promptCacheMemoryTTLSeconds: promptCacheMemoryTTLSeconds,
             prefillChunkTokens: prefillChunkTokens,
             kvCachePrecision: kvCachePrecision,
             ropeScalingMode: ropeScalingMode,
@@ -232,7 +237,9 @@ public struct ModelSessionPlan: Sendable {
         // input, and family comes from the manifest.
         let resolvedChunk =
             prefillChunkTokens
-            ?? ModelProfile.resolve(identity: identity).prefillChunkTokens
+            ?? ModelProfile.resolve(identity: identity).prefillChunkTokens.map {
+                RuntimeConfiguration.profilePrefillChunk($0, forContext: maxContext)
+            }
             ?? (family == .qwen36
                 ? RuntimeConfiguration.qwenLongPrefillChunkTokens
                 : RuntimeConfiguration.production.prefillChunkTokens)

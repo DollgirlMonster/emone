@@ -52,6 +52,15 @@ public struct ModelProfile: Sendable, Equatable {
     /// way measured a wash on decode (-0.37%) and is gone, so a row that wires
     /// the cache keeps it wired.
     public var keepExpertCacheWired: Bool
+    /// Prefill's remaining scalar GEMMs (hyper-connection gates, QSA indexer
+    /// projections) on the MPP tensor-op QMM, and the shared expert as GEMMs
+    /// over the chunk. Changes the output by rounding, so it ships only on a
+    /// row whose surprisal A/B passed. `TINYTITAN_PREFILL_MPP_WIDE` overrides.
+    public var prefillWideMPP: Bool
+    /// Streamed routed-expert tiles as grouped MPP GEMMs
+    /// (`PrefillRoutedExpertGEMM`). Same rule; `TINYTITAN_PREFILL_ROUTED_MPP`
+    /// overrides.
+    public var prefillRoutedMPP: Bool
 
     /// The shipped entries. Measured values, each on its own install.
     public static let table:
@@ -59,7 +68,8 @@ public struct ModelProfile: Sendable, Equatable {
             budget: Int, prefetch: Int, chunk: Int?,
             sampling: GenerationDefaults.Sampling,
             topKSimd: Bool, attnSimd: Bool,
-            hcFused: Bool, qsaSelect: Bool, keepWired: Bool
+            hcFused: Bool, qsaSelect: Bool, keepWired: Bool,
+            wideMPP: Bool, routedMPP: Bool
         )] = [
             // The 35B rows take prefetch depth 1 and hold the expert cache wired
             // through prefill (2026-09-05, on the repaired ring). Measured per
@@ -99,22 +109,24 @@ public struct ModelProfile: Sendable, Equatable {
                 10 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true
+                true, true, false, false, true, false, false
             ),
             Key("qwen3.6-35b-a3b", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true
+                true, true, false, false, true, false, false
             ),
             // Ornith 1.5, same geometry, measured on its own 2026-09-05: 4-bit
             // 128 slots 19.91 / 20.41 vs 160 20.84 / 21.02; 8-bit 64 slots
             // 8.69 / 9.12 vs 96 10.83 / 10.86, swap flat on every arm.
             Key("ornith-1.5-35b-a3b", 4): (
-                10 << 30, 1, 4_096, GenerationDefaults.house, true, true, false, false, true
+                10 << 30, 1, 4_096, GenerationDefaults.house,
+                true, true, false, false, true, false, false
             ),
             Key("ornith-1.5-35b-a3b", 8): (
-                12 << 30, 1, 4_096, GenerationDefaults.house, true, true, false, false, true
+                12 << 30, 1, 4_096, GenerationDefaults.house,
+                true, true, false, false, true, false, false
             ),
             // AgentWorld, measured on its own 2026-09-05: 4-bit 128 slots 20.52 /
             // 20.50 vs 160 21.11 / 20.92; 8-bit 64 slots 9.31 / 9.25 vs 96
@@ -126,13 +138,13 @@ public struct ModelProfile: Sendable, Equatable {
                 10 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true
+                true, true, false, false, true, false, false
             ),
             Key("qwen-agentworld", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true
+                true, true, false, false, true, false, false
             ),
             // KAT-Coder-V2.5-Dev: a Qwen3.6-35B-A3B fine-tune with the same
             // geometry, so the cache budget, prefetch depth and wired cache are
@@ -147,13 +159,13 @@ public struct ModelProfile: Sendable, Equatable {
                 10 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 1.0, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true
+                true, true, false, false, true, false, false
             ),
             Key("kat-coder-v2.5", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 1.0, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true
+                true, true, false, false, true, false, false
             ),
             // Qwen3.8-Flash-Next: 96 slots (12 GiB) still climbing; its card
             // specifies temperature 1.0 / top-p 0.95. The fused hyper-connection
@@ -170,10 +182,18 @@ public struct ModelProfile: Sendable, Equatable {
             // Sampling is the *thinking* row here; the request's thinking mode
             // selects between it and the instruct row at validation time
             // (`GenerationDefaults.forFamily(_:thinking:)`).
+            // Prefill, 2026-09-26 on an M1 Max 64 GB (docs/m1-prefill-spike.md,
+            // spikes 5-10): chunk 16,384 and both MPP switches take a
+            // 16,931-token prefill from 353-389 s (4,096, switches off) to 156 s.
+            // The expert corpus is swept once per chunk, so the chunk count is
+            // the cost. Surprisal against the switch-free 8,192 reference over
+            // 512 teacher-forced tokens: +0.011 nats, t +0.92 (no measurable
+            // change). The front ends cap the chunk to what the context allows
+            // (`RuntimeConfiguration.largestPrefillChunk(forContext:)`).
             Key("qwen3.8-flash-next", 4): (
-                12 << 30, 1, 4_096,
+                12 << 30, 1, 16_384,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, true
+                true, true, false, false, true, true, true
             ),
             // 8-bit: 32 slots (8 GiB) 2.05 / 2.06 tok/s; 40 slots (9.5 GiB) 2.18 /
             // 2.27 with swap falling; 48 (13 GiB) 2.24-2.33 but ~1 GB of swap
@@ -181,11 +201,13 @@ public struct ModelProfile: Sendable, Equatable {
             // Prefetch depth 1 here is inferred from the 4-bit A/B, not measured:
             // the ring is family-level and width-independent, and this install is
             // not present to A/B. The depth-0 this replaces was inferred the same
-            // way from the 2026-09-05 measurement.
+            // way from the 2026-09-05 measurement. The 4-bit row's prefill
+            // switches are not carried over: the routed GEMMs would run on 8-bit
+            // weights no surprisal check has seen.
             Key("qwen3.8-flash-next", 8): (
                 Int(9.5 * Double(1 << 30)), 1, 4_096,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, true
+                true, true, false, false, true, false, false
             ),
         ]
 
@@ -198,14 +220,15 @@ public struct ModelProfile: Sendable, Equatable {
     ) -> ModelProfile {
         let familyTuning = RuntimeConfiguration.decodeTuning(family: family, weightBits: weightBits)
         var profile = ModelProfile(
-            key: Key(modelID, weightBits), family: family,
+            key: Key(tableModelID(modelID), weightBits), family: family,
             expertCacheBudgetBytes: familyTuning.expertCacheBudgetBytes,
             prefetchDepth: familyTuning.prefetchDepth,
             prefillChunkTokens: nil,
             sampling: GenerationDefaults.forFamily(family),
             routerTopKSimd: true, attentionSimdPartial: true,
             hcFused: false, qsaGPUSelect: false,
-            keepExpertCacheWired: false)
+            keepExpertCacheWired: false,
+            prefillWideMPP: false, prefillRoutedMPP: false)
         if let row = table[profile.key] {
             profile.expertCacheBudgetBytes = row.budget
             profile.prefetchDepth = row.prefetch
@@ -216,6 +239,8 @@ public struct ModelProfile: Sendable, Equatable {
             profile.hcFused = row.hcFused
             profile.qsaGPUSelect = row.qsaSelect
             profile.keepExpertCacheWired = row.keepWired
+            profile.prefillWideMPP = row.wideMPP
+            profile.prefillRoutedMPP = row.routedMPP
         }
         if let v = env["TINYTITAN_ROUTER_TOPK_SIMD"] { profile.routerTopKSimd = v != "0" }
         if let v = env["TINYTITAN_ATTN_SIMD_PARTIAL"] { profile.attentionSimdPartial = v != "0" }
@@ -223,6 +248,8 @@ public struct ModelProfile: Sendable, Equatable {
         if let v = env["TINYTITAN_QSA_GPU_SELECT"] {
             profile.qsaGPUSelect = v == "1" || v == "verify"
         }
+        if let v = env["TINYTITAN_PREFILL_MPP_WIDE"] { profile.prefillWideMPP = v == "1" }
+        if let v = env["TINYTITAN_PREFILL_ROUTED_MPP"] { profile.prefillRoutedMPP = v == "1" }
         if let v = env["TINYTITAN_PREDICTIVE_PREFETCH"] {
             profile.prefetchDepth = v == "1" ? max(1, profile.prefetchDepth) : 0
         }
@@ -230,6 +257,18 @@ public struct ModelProfile: Sendable, Equatable {
         // loss (docs/qwen38-prefetch-predictor-study.md, Lever 5/8), so the
         // profile row's depth is the only source.
         return profile
+    }
+
+    /// The table's name for an install: the manifest id without the width
+    /// suffix the installer writes (`qwen3.8-flash-next-4bit`), because the
+    /// width is already the key's other half. Without this every installer-made
+    /// model missed its row and ran on its family's fallback -- on Qwen3.8 that
+    /// dropped the wired expert cache, 1.6-4.7 s per request.
+    public static func tableModelID(_ manifestModelID: String) -> String {
+        for suffix in ["-4bit", "-8bit", "-6bit"] where manifestModelID.hasSuffix(suffix) {
+            return String(manifestModelID.dropLast(suffix.count))
+        }
+        return manifestModelID
     }
 
     public static func resolve(identity: ManifestIdentity) -> ModelProfile {
@@ -248,6 +287,7 @@ public struct ModelProfile: Sendable, Equatable {
             + "chunk=\(prefillChunkTokens.map(String.init) ?? "fallback") "
             + "sampling=\(sampling.temperature)/\(sampling.topK)/\(sampling.topP) "
             + "topk_simd=\(routerTopKSimd) attn_simd=\(attentionSimdPartial) "
-            + "hc_fused=\(hcFused) qsa_select=\(qsaGPUSelect) keep_wired=\(keepExpertCacheWired)"
+            + "hc_fused=\(hcFused) qsa_select=\(qsaGPUSelect) keep_wired=\(keepExpertCacheWired) "
+            + "mpp_wide=\(prefillWideMPP) routed_mpp=\(prefillRoutedMPP)"
     }
 }

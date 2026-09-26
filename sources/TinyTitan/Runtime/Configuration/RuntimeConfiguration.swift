@@ -102,6 +102,7 @@ public enum RuntimeConfigurationError: Error, CustomStringConvertible, Equatable
     case invalidDecodeExpertExecution(String)
     case invalidExpertIOSynchronization(String)
     case invalidExpertIOSubmission(String)
+    case prefillChunkTooLargeForContext(chunk: Int, maxContext: Int)
 
     public var description: String {
         switch self {
@@ -128,6 +129,9 @@ public enum RuntimeConfigurationError: Error, CustomStringConvertible, Equatable
             return "unsupported expert I/O synchronization '\(value)'; allowed: host, event"
         case .invalidExpertIOSubmission(let value):
             return "unsupported expert I/O submission '\(value)'; allowed: deferred, immediate"
+        case .prefillChunkTooLargeForContext(let chunk, let maxContext):
+            return
+                "prefill chunk \(chunk) x context \(maxContext) overflows the 32-bit per-chunk key-selection index; use a chunk of \(RuntimeConfiguration.largestPrefillChunk(forContext: maxContext)) or less"
         }
     }
 }
@@ -435,9 +439,37 @@ public struct RuntimeConfiguration: Sendable, Equatable {
         return fitting.last ?? allowedExpertCacheSlots.first ?? 8
     }
 
+    /// 8K and 16K exist for streamed-expert models on a slow drive: each chunk
+    /// streams nearly the whole routed-expert corpus (432 of 512 experts per
+    /// layer at 4,096 tokens on Qwen3.8), so the chunk count sets how many
+    /// times the corpus is read. Qwen3.8 4-bit's profile row takes 16K.
     public static let allowedPrefillChunkTokens = [
-        32, 64, 128, 256, 512, 1_024, 2_048, 4_096,
+        32, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192, 16_384,
     ]
+
+    /// A chunk's key selection is indexed `row * visibleKeys + key` in 32 bits
+    /// on the GPU. The largest index is chunk x context - 1, so the product may
+    /// reach 2^32 but not pass it: 4,096 x the 1M YaRN context is exactly 2^32.
+    public static func prefillChunkFits(chunk: Int, maxContext: Int) -> Bool {
+        let (cells, overflow) = chunk.multipliedReportingOverflow(by: maxContext)
+        return !overflow && cells <= 1 << 32
+    }
+
+    /// The largest allowed chunk that fits `maxContext`, for the error message.
+    public static func largestPrefillChunk(forContext maxContext: Int) -> Int {
+        allowedPrefillChunkTokens.last { prefillChunkFits(chunk: $0, maxContext: maxContext) }
+            ?? allowedPrefillChunkTokens[0]
+    }
+
+    /// A profile row's chunk, lowered to the largest `maxContext` allows. A row
+    /// is tuned at the native context; a YaRN context (Qwen3.8's 16,384 against
+    /// 524,288, say) would otherwise refuse to load over a chunk nobody asked
+    /// for. An explicit `--prefill-chunk` is not capped: it still fails, naming
+    /// the chunk that fits.
+    public static func profilePrefillChunk(_ chunk: Int, forContext maxContext: Int) -> Int {
+        prefillChunkFits(chunk: chunk, maxContext: maxContext)
+            ? chunk : min(chunk, largestPrefillChunk(forContext: maxContext))
+    }
     public static let qwenLongPrefillChunkTokens = 4_096
 
     public let expertCacheSlots: Int
@@ -505,6 +537,10 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 throw RuntimeConfigurationError.yaRNContextMismatch(
                     maxContext: maxContext, configured: yarnContextTokens)
             }
+        }
+        guard Self.prefillChunkFits(chunk: prefillChunkTokens, maxContext: maxContext) else {
+            throw RuntimeConfigurationError.prefillChunkTooLargeForContext(
+                chunk: prefillChunkTokens, maxContext: maxContext)
         }
     }
 

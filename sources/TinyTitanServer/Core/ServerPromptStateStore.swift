@@ -7,17 +7,24 @@ struct ServerPromptCacheStorageConfiguration: Sendable, Equatable {
     let memoryLimitBytes: Int
     let diskDirectory: URL?
     let diskLimitBytes: Int
+    /// Idle seconds after which a RAM snapshot is released, keeping only its
+    /// SSD copy. 0 disables expiry. Only snapshots that already have an SSD
+    /// copy expire; without one, dropping the RAM copy would lose the entry.
+    let memoryTTLSeconds: Int
 
     init(
         memoryLimitBytes: Int,
         diskDirectory: URL?,
-        diskLimitBytes: Int
+        diskLimitBytes: Int,
+        memoryTTLSeconds: Int = 0
     ) {
         precondition(memoryLimitBytes >= 0)
         precondition(diskLimitBytes >= 0)
+        precondition(memoryTTLSeconds >= 0)
         self.memoryLimitBytes = memoryLimitBytes
         self.diskDirectory = diskDirectory
         self.diskLimitBytes = diskLimitBytes
+        self.memoryTTLSeconds = memoryTTLSeconds
     }
 }
 
@@ -81,6 +88,7 @@ final class ServerPromptStateStore: @unchecked Sendable {
     private struct State {
         var memory: [UUID: InferenceStateSnapshot] = [:]
         var memoryLRU: [UUID] = []
+        var memoryLastUse: [UUID: ContinuousClock.Instant] = [:]
         var memoryBytes = 0
         var disk: [UUID: DiskRecord] = [:]
         var diskLRU: [UUID] = []
@@ -93,6 +101,13 @@ final class ServerPromptStateStore: @unchecked Sendable {
     private let diskQueue = DispatchQueue(
         label: "tinytitan.prompt-state-store.disk",
         qos: .utility)
+    /// Written once, in `init`, before the store is shared; never mutated after.
+    private var expiryTimer: DispatchSourceTimer?
+
+    /// Whether snapshots can outlive the process (an SSD tier is configured).
+    var persistsToDisk: Bool {
+        configuration.diskDirectory != nil && configuration.diskLimitBytes > 0
+    }
 
     var maximumSnapshotBytes: Int {
         min(
@@ -117,6 +132,63 @@ final class ServerPromptStateStore: @unchecked Sendable {
                 [.posixPermissions: 0o700],
                 ofItemAtPath: root.path)
         }
+        startExpiryTimer()
+    }
+
+    deinit {
+        expiryTimer?.cancel()
+    }
+
+    /// Release RAM snapshots idle for `memoryTTLSeconds` when an SSD copy
+    /// exists. A background timer drives this so an idle server gives the RAM
+    /// back without waiting for the next request. A later request that needs
+    /// an expired entry restores it from SSD and re-promotes it to RAM.
+    private func startExpiryTimer() {
+        guard configuration.memoryTTLSeconds > 0,
+            configuration.diskDirectory != nil,
+            configuration.diskLimitBytes > 0
+        else { return }
+        let interval = max(1, min(30, configuration.memoryTTLSeconds / 4))
+        let timer = DispatchSource.makeTimerSource(queue: diskQueue)
+        timer.schedule(
+            deadline: .now() + .seconds(interval),
+            repeating: .seconds(interval))
+        timer.setEventHandler { [weak self] in
+            _ = self?.expireIdleMemory()
+        }
+        expiryTimer = timer
+        timer.resume()
+    }
+
+    /// Drop RAM snapshots idle past the TTL that still have an SSD copy.
+    /// Returns the ids released. `now` is injectable for tests.
+    @discardableResult
+    func expireIdleMemory(now: ContinuousClock.Instant = .now) -> [UUID] {
+        guard configuration.memoryTTLSeconds > 0 else { return [] }
+        let ttl = Duration.seconds(configuration.memoryTTLSeconds)
+        return state.withLock { state -> [UUID] in
+            var expired: [UUID] = []
+            for id in state.memoryLRU {
+                guard state.disk[id] != nil,
+                    let last = state.memoryLastUse[id],
+                    now - last >= ttl,
+                    let snapshot = state.memory.removeValue(forKey: id)
+                else { continue }
+                state.memoryBytes -= snapshot.payload.count
+                state.memoryLastUse.removeValue(forKey: id)
+                expired.append(id)
+            }
+            if !expired.isEmpty {
+                let gone = Set(expired)
+                state.memoryLRU.removeAll { gone.contains($0) }
+            }
+            return expired
+        }
+    }
+
+    /// Whether `entryID` currently has a RAM copy. For tests and diagnostics.
+    func hasMemoryCopy(_ entryID: UUID) -> Bool {
+        state.withLock { $0.memory[entryID] != nil }
     }
 
     func loadEntries(domain: ServerPromptCacheDomain) -> [ServerPromptCacheEntry] {
@@ -350,6 +422,7 @@ final class ServerPromptStateStore: @unchecked Sendable {
                     state.memoryBytes -= snapshot.payload.count
                 }
                 state.memoryLRU.removeAll { $0 == id }
+                state.memoryLastUse.removeValue(forKey: id)
                 if let record = state.disk.removeValue(forKey: id) {
                     state.diskBytes -= record.metadata.descriptor.payloadBytes
                     directories.append(record.directory)
@@ -376,6 +449,7 @@ final class ServerPromptStateStore: @unchecked Sendable {
         state.withLock { state in
             state.memoryLRU.removeAll { $0 == id }
             state.memoryLRU.append(id)
+            state.memoryLastUse[id] = .now
         }
     }
 
@@ -406,6 +480,7 @@ final class ServerPromptStateStore: @unchecked Sendable {
                 let id = state.memoryLRU.first
             {
                 state.memoryLRU.removeFirst()
+                state.memoryLastUse.removeValue(forKey: id)
                 if let snapshot = state.memory.removeValue(forKey: id) {
                     state.memoryBytes -= snapshot.payload.count
                     evicted.append(id)

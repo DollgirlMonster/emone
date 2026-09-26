@@ -74,6 +74,24 @@ final class AffineQuantGEMV {
         y: MTLBuffer, yOffset: Int = 0,
         m: UInt32, n: UInt32
     ) throws {
+        try encodeRows(
+            commandBuffer: commandBuffer,
+            weights: weights, weightsOffset: weightsOffset,
+            scales: scales, scalesOffset: scalesOffset,
+            biases: biases, biasesOffset: biasesOffset,
+            x: x, y: y, rows: .single(xOffset: xOffset, yOffset: yOffset),
+            m: m, n: n)
+    }
+
+    /// `encode` for several independent rows in one encoder (see `GEMVRows`).
+    func encodeRows(
+        commandBuffer: MTLCommandBuffer,
+        weights: MTLBuffer, weightsOffset: Int = 0,
+        scales: MTLBuffer, scalesOffset: Int = 0,
+        biases: MTLBuffer, biasesOffset: Int = 0,
+        x: MTLBuffer, y: MTLBuffer, rows: GEMVRows,
+        m: UInt32, n: UInt32
+    ) throws {
         precondition(n.isMultiple(of: UInt32(Quantization.groupSize)))
         precondition(weightsOffset.isMultiple(of: MemoryLayout<UInt32>.alignment))
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -83,15 +101,16 @@ final class AffineQuantGEMV {
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)
         encoder.setBuffer(scales, offset: scalesOffset, index: 1)
         encoder.setBuffer(biases, offset: biasesOffset, index: 2)
-        encoder.setBuffer(x, offset: xOffset, index: 3)
-        encoder.setBuffer(y, offset: yOffset, index: 4)
-        var rows = m
+        encoder.setBuffer(x, offset: rows.xOffset, index: 3)
+        encoder.setBuffer(y, offset: rows.yOffset, index: 4)
+        var outputRows = m
         var columns = n
-        encoder.setBytes(&rows, length: MemoryLayout<UInt32>.size, index: 5)
+        encoder.setBytes(&outputRows, length: MemoryLayout<UInt32>.size, index: 5)
         encoder.setBytes(&columns, length: MemoryLayout<UInt32>.size, index: 6)
         let rowsPerThreadgroup = 8
-        encoder.dispatchThreadgroups(
-            MTLSize(
+        rows.dispatch(
+            encoder, xIndex: 3, yIndex: 4,
+            threadgroups: MTLSize(
                 width: (Int(m) + rowsPerThreadgroup - 1) / rowsPerThreadgroup,
                 height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(

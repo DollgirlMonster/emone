@@ -123,6 +123,52 @@ struct ServerPromptStateStoreTests {
                 atPath: payload.deletingLastPathComponent().path))
     }
 
+    @Test func idleRAMCopiesExpireToTheirSSDCopyAndComeBack() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try ServerPromptStateStore(
+            configuration: ServerPromptCacheStorageConfiguration(
+                memoryLimitBytes: 1_024,
+                diskDirectory: root,
+                diskLimitBytes: 1_024,
+                memoryTTLSeconds: 60))
+        let entry = makeEntry(tokens: [1, 2])
+        _ = await store.save(
+            entry: entry,
+            snapshot: makeSnapshot(position: 2, payload: Data([1, 2, 3, 4, 5, 6, 7])))
+        #expect(store.hasMemoryCopy(entry.id))
+
+        // Not yet idle long enough.
+        #expect(store.expireIdleMemory(now: .now + .seconds(30)).isEmpty)
+        #expect(store.hasMemoryCopy(entry.id))
+
+        #expect(store.expireIdleMemory(now: .now + .seconds(61)) == [entry.id])
+        #expect(!store.hasMemoryCopy(entry.id))
+        #expect(store.contains(entry.id))
+
+        // The SSD copy restores and is promoted back to RAM.
+        let loaded = try store.loadSnapshot(entryID: entry.id)
+        #expect(loaded.tier == "ssd")
+        #expect(store.hasMemoryCopy(entry.id))
+    }
+
+    @Test func aRAMOnlySnapshotNeverExpires() async throws {
+        let store = try ServerPromptStateStore(
+            configuration: ServerPromptCacheStorageConfiguration(
+                memoryLimitBytes: 1_024,
+                diskDirectory: nil,
+                diskLimitBytes: 0,
+                memoryTTLSeconds: 1))
+        let entry = makeEntry(tokens: [1, 2])
+        _ = await store.save(
+            entry: entry,
+            snapshot: makeSnapshot(position: 2, payload: Data([1, 2, 3, 4, 5, 6, 7])))
+        // Dropping the only copy would lose the entry, so it stays.
+        #expect(store.expireIdleMemory(now: .now + .seconds(3_600)).isEmpty)
+        #expect(store.hasMemoryCopy(entry.id))
+        #expect(!store.persistsToDisk)
+    }
+
     private func makeEntry(tokens: [Int32]) -> ServerPromptCacheEntry {
         ServerPromptCacheEntry(
             id: UUID(),

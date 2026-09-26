@@ -65,10 +65,29 @@ final class DequantInt8GEMV {
         m: UInt32,
         n: UInt32
     ) throws {
+        try encodeRows(
+            commandBuffer: commandBuffer,
+            weights: weights, weightsOffset: weightsOffset,
+            scales: scales, scalesOffset: scalesOffset,
+            biases: biases, biasesOffset: biasesOffset,
+            x: x, y: y, rows: .single(xOffset: xOffset, yOffset: yOffset),
+            m: m, n: n)
+    }
+
+    /// `encode` for several independent rows in one encoder (see `GEMVRows`).
+    func encodeRows(
+        commandBuffer: MTLCommandBuffer,
+        weights: MTLBuffer, weightsOffset: Int = 0,
+        scales: MTLBuffer, scalesOffset: Int = 0,
+        biases: MTLBuffer, biasesOffset: Int = 0,
+        x: MTLBuffer, y: MTLBuffer, rows: GEMVRows,
+        m: UInt32, n: UInt32
+    ) throws {
         precondition(
             n % UInt32(Quantization.groupSize) == 0,
             "N must be a multiple of \(Quantization.groupSize)")
-        precondition(xOffset >= 0 && yOffset >= 0, "buffer offsets must be non-negative")
+        precondition(
+            rows.xOffset >= 0 && rows.yOffset >= 0, "buffer offsets must be non-negative")
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }
@@ -76,8 +95,8 @@ final class DequantInt8GEMV {
         enc.setBuffer(weights, offset: weightsOffset, index: 0)
         enc.setBuffer(scales, offset: scalesOffset, index: 1)
         enc.setBuffer(biases, offset: biasesOffset, index: 2)
-        enc.setBuffer(x, offset: xOffset, index: 3)
-        enc.setBuffer(y, offset: yOffset, index: 4)
+        enc.setBuffer(x, offset: rows.xOffset, index: 3)
+        enc.setBuffer(y, offset: rows.yOffset, index: 4)
         var mVar = m
         var nVar = n
         enc.setBytes(&mVar, length: MemoryLayout<UInt32>.size, index: 5)
@@ -88,7 +107,9 @@ final class DequantInt8GEMV {
         let tgCount = MTLSize(
             width: (Int(m) + rowsPerTG - 1) / rowsPerTG,
             height: 1, depth: 1)
-        enc.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+        rows.dispatch(
+            enc, xIndex: 3, yIndex: 4,
+            threadgroups: tgCount, threadsPerThreadgroup: tgSize)
         enc.endEncoding()
     }
 }

@@ -75,6 +75,10 @@ extension ServerHTTPHandler {
                         ownedBy: "tinytitan"),
                 ])
             writeCodable(context, status: .ok, response)
+        case (.GET, "/v1/prefill-progress"):
+            // Coarse progress of the in-flight generation, so a client can
+            // draw a bar through a long prompt that produces no tokens yet.
+            writeCodable(context, status: .ok, PrefillProgressMonitor.snapshot)
         case (.HEAD, "/health"), (.HEAD, "/v1/models"):
             // S28: HEAD is answered with headers only.
             writeHeadOnly(context, status: .ok)
@@ -127,7 +131,7 @@ extension ServerHTTPHandler {
         case (.POST, "/v1/models/unload"):
             handleUnload(context: context)
         case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"), (_, "/v1/responses"),
-            (_, "/v1/responses/compact"),
+            (_, "/v1/responses/compact"), (_, "/v1/prefill-progress"),
             (_, "/v1/models/unload"), (_, "/v1/messages"), (_, "/v1/messages/count_tokens"):
             writeRequestError(
                 context,
