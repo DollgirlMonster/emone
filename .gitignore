@@ -64,3 +64,6 @@ models/gguf/
 
 # Agent scratch (worktrees, caches); keep git status clean
 .claude/
+
+# Prompt-cache snapshots (tools/serve.sh)
+/.prompt-cache/

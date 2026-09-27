@@ -16,7 +16,8 @@
 # By default the server binds at once, loads the model on the first request
 # and releases it after --idle seconds without one, so a model does not sit
 # resident between sessions. The prefix cache is kept on disk
-# (~/.tinytitan/prompt-cache/<install>), so an unload does not cost the next
+# (<checkout>/.prompt-cache/<install>, beside the models on the external
+# drive rather than the internal SSD), so an unload does not cost the next
 # request its whole prompt. Its budget is 100 GiB by default (--disk-cache-gib):
 # a Qwen3.8 snapshot at 40K tokens is ~2.8 GB, so the server's own 8 GiB
 # default keeps only about three conversations.
@@ -31,7 +32,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODEL="${TINYTITAN_MODEL:-}"
 PORT="${TINYTITAN_PORT:-8089}"
 IDLE=900
-CACHE_ROOT="${TINYTITAN_PROMPT_CACHE_ROOT:-$HOME/.tinytitan/prompt-cache}"
+CACHE_ROOT="${TINYTITAN_PROMPT_CACHE_ROOT:-$ROOT/.prompt-cache}"
 REASONING=on
 DISK_GIB=100
 DRY_RUN=0
