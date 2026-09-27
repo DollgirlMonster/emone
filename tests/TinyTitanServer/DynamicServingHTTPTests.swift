@@ -117,7 +117,7 @@ struct DynamicServingHTTPTests {
                         RoutingFixture.dense.id, "\(RoutingFixture.dense.id)@cpu",
                     ])
             #expect(models.allSatisfy { $0["object"] as? String == "model" })
-            #expect(models.allSatisfy { $0["owned_by"] as? String == "tinytitan" })
+            #expect(models.allSatisfy { $0["owned_by"] as? String == "emone" })
         }
     }
 
