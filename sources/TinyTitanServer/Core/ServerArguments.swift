@@ -153,7 +153,7 @@ public struct ServerArguments: Equatable, Sendable {
           --prompt-cache-disk <dir>
                                  Optional persistent SSD cache directory.
           --prompt-cache-disk-mib <MiB>
-                                 SSD snapshot budget, 0...65536 (default 8192).
+                                 SSD snapshot budget, 0...1048576 (default 8192).
           --prompt-cache-memory-ttl-seconds <n>
                                  Release a RAM snapshot after n idle seconds,
                                  keeping its SSD copy (0...86400, default 0,
@@ -382,9 +382,12 @@ public struct ServerArguments: Equatable, Sendable {
                 }
                 promptCacheDiskDirectory = value
             case "--prompt-cache-disk-mib":
-                guard let parsed = Int(value), (0...65_536).contains(parsed) else {
+                // Up to 1 TiB. One Qwen3.8-Flash-Next snapshot at 40K tokens is
+                // about 2.8 GB on disk, so the old 64 GiB ceiling held ~20 and
+                // the 8 GiB default about 3; the store evicts the oldest past it.
+                guard let parsed = Int(value), (0...1_048_576).contains(parsed) else {
                     throw ServerArgumentError.invalid(
-                        "--prompt-cache-disk-mib must be between 0 and 65536")
+                        "--prompt-cache-disk-mib must be between 0 and 1048576")
                 }
                 promptCacheDiskMiB = parsed
             case "--prompt-cache-memory-ttl-seconds":

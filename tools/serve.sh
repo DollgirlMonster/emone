@@ -17,7 +17,9 @@
 # and releases it after --idle seconds without one, so a model does not sit
 # resident between sessions. The prefix cache is kept on disk
 # (~/.tinytitan/prompt-cache/<install>), so an unload does not cost the next
-# request its whole prompt.
+# request its whole prompt. Its budget is 100 GiB by default (--disk-cache-gib):
+# a Qwen3.8 snapshot at 40K tokens is ~2.8 GB, so the server's own 8 GiB
+# default keeps only about three conversations.
 #
 # Nothing here downloads or installs a model, and nothing is killed: another
 # model process, or an install without its receipt, stops it.
@@ -31,6 +33,7 @@ PORT="${TINYTITAN_PORT:-8089}"
 IDLE=900
 CACHE_ROOT="${TINYTITAN_PROMPT_CACHE_ROOT:-$HOME/.tinytitan/prompt-cache}"
 REASONING=on
+DISK_GIB=100
 DRY_RUN=0
 EXTRA=()
 
@@ -42,6 +45,7 @@ Options:
   --port <n>           default 8089 (TINYTITAN_PORT)
   --idle <seconds>     release the model after this long idle (default 900;
                        0 keeps it loaded from the first request on)
+  --disk-cache-gib <n> SSD prompt-cache budget in GiB (default 100; 0 disables)
   --reasoning <level>  off, on, minimal, low, medium, high, xhigh or max
                        (default on); skipped when the server args after --
                        carry --reasoning, --thinking or --reasoning-effort
@@ -60,6 +64,7 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift 2 ;;
     --idle) IDLE="$2"; shift 2 ;;
     --reasoning) REASONING="$2"; shift 2 ;;
+    --disk-cache-gib) DISK_GIB="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h | --help) usage; exit 0 ;;
     --) shift; EXTRA=("$@"); break ;;
@@ -74,8 +79,8 @@ case "$MODEL" in
   *) MODEL="$PWD/$MODEL" ;;
 esac
 MODEL="${MODEL%/}"
-case "$PORT$IDLE" in
-  *[!0-9]*) die "--port and --idle take whole numbers" ;;
+case "$PORT$IDLE$DISK_GIB" in
+  *[!0-9]*) die "--port, --idle and --disk-cache-gib take whole numbers" ;;
 esac
 
 [ -d "$MODEL" ] || die "$MODEL is not a directory (is the drive mounted?)"
@@ -83,7 +88,8 @@ esac
 
 name="$(basename "$MODEL")"
 cache_dir="$CACHE_ROOT/${name%.gturbo}"
-server_args=(--model "$MODEL" --port "$PORT" --prompt-cache-disk "$cache_dir")
+server_args=(--model "$MODEL" --port "$PORT" --prompt-cache-disk "$cache_dir"
+  --prompt-cache-disk-mib "$((DISK_GIB * 1024))")
 if [ "$IDLE" -gt 0 ]; then
   server_args+=(--idle-unload-seconds "$IDLE")
 fi
