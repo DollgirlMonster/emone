@@ -615,7 +615,7 @@ public struct GFTokenizer: @unchecked Sendable {
     /// `content.split('</think>')[0] … split('<think>')[-1]` for the reasoning
     /// and `content.split('</think>')[-1].lstrip('\n')` for the answer. The
     /// reasoning is whitespace-trimmed either way (`reasoning_content|trim`).
-    static func splitThinking(_ content: String) -> (reasoning: String, answer: String) {
+    public static func splitThinking(_ content: String) -> (reasoning: String, answer: String) {
         guard let firstClose = content.range(of: "</think>") else { return ("", content) }
         let beforeFirst = String(content[content.startIndex..<firstClose.lowerBound])
         let afterLast =
@@ -710,6 +710,14 @@ public struct GFTokenizer: @unchecked Sendable {
         messages: [Message],
         tools: [FunctionDefinition]
     ) throws -> [Int32] {
+        try renderToolChat(messages: messages, tools: tools, addGenerationPrompt: true)
+    }
+
+    private func renderToolChat(
+        messages: [Message],
+        tools: [FunctionDefinition],
+        addGenerationPrompt: Bool
+    ) throws -> [Int32] {
         guard tokenizer.hasChatTemplate else {
             throw GFTokenizerError.missingToolTemplate
         }
@@ -747,7 +755,7 @@ public struct GFTokenizer: @unchecked Sendable {
         return try tokenizer.applyChatTemplate(
             messages: upstreamMessages,
             chatTemplate: nil,
-            addGenerationPrompt: true,
+            addGenerationPrompt: addGenerationPrompt,
             truncation: false,
             maxLength: nil,
             tools: upstreamTools,
@@ -766,18 +774,45 @@ public struct GFTokenizer: @unchecked Sendable {
                 addBOS: false)
     }
 
+    /// The tokens that follow a cached tool-calling turn: its closing
+    /// `<|im_end|>`, the tool results in `incomingMessages` after that turn, and
+    /// the generation suffix. The cached KV already holds the turn as it was
+    /// *generated*, so only this tail is prefilled.
+    ///
+    /// The tail is cut from a render of a stand-in conversation -- one user
+    /// query, the cached assistant turn, the tool results -- rather than the
+    /// request's own render: the template's `<think>` stripping depends on each
+    /// assistant turn's position relative to the last user query, so the full
+    /// render is not guaranteed to extend the cached tokens. Tool results
+    /// render the same whatever precedes the assistant turn they answer.
     public func encodeToolResultContinuation(
         cachedMessages: [Message],
         assistant: Message,
         incomingMessages: [Message],
         tools: [FunctionDefinition]
     ) throws -> [Int32] {
-        // The ChatML template's `<think>` stripping depends on each assistant
-        // turn's position relative to the last user query, so a re-rendered
-        // prefix is not guaranteed to be a token prefix of the full render.
-        // Callers (ServerPromptCache) fall back to prefix matching; the
-        // tool-result KV continuation is unsupported for ChatML.
-        throw GFTokenizerError.unsupportedForDialect("tool-result KV continuation")
+        let continuation = Array(incomingMessages.dropFirst(cachedMessages.count + 1))
+        guard !continuation.isEmpty else {
+            throw GFTokenizerError.invalidChatTemplate("tool-result continuation needs tool results")
+        }
+        let anchor = [
+            Message(role: .user, content: "."),
+            Message(
+                role: .assistant, content: assistant.content ?? "",
+                toolCalls: assistant.toolCalls),
+        ]
+        let head = try renderToolChat(messages: anchor, tools: [], addGenerationPrompt: false)
+        let full = try renderToolChat(
+            messages: anchor + continuation, tools: [], addGenerationPrompt: true)
+        // `head` ends on the turn's `<|im_end|>` and newline; the bridge starts
+        // at that `<|im_end|>`, which is the uncommitted boundary token.
+        guard head.count >= 2, full.count > head.count, full.starts(with: head),
+            head[head.count - 2] == endOfTurnID
+        else {
+            throw GFTokenizerError.invalidChatTemplate(
+                "tool results do not extend the assistant turn's render")
+        }
+        return Array(full[(head.count - 2)...])
     }
 }
 
