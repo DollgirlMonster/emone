@@ -276,16 +276,27 @@ struct ServerPromptCache: Sendable {
         continuation: [GFTokenizer.Message],
         tokenizer: GFTokenizer
     ) -> (effective: [Int32], cached: Int)? {
+        // One result per call, in order, then optionally text turns the
+        // client appended before sending (a user interjecting mid-loop). The
+        // appended turns only extend the prompt past what the cache holds, so
+        // they are prefilled with the results instead of forcing a miss. If
+        // any follow, the last is a user turn, as in `matchTextContinuation`.
         let calls = entry.assistantTurn.message.toolCalls
+        let appended = continuation.dropFirst(calls.count)
         guard entry.assistantTurn.rawStopReason == .toolCalls,
-            continuation.count == calls.count,
+            continuation.count >= calls.count,
             zip(continuation, calls).allSatisfy({ message, call in
                 message.role == .tool
                     && message.toolCallID == call.id
                     && (message.name == nil || message.name == call.name)
                     && message.content != nil
                     && message.toolCalls.isEmpty
-            })
+            }),
+            appended.allSatisfy({
+                ($0.role == .user || $0.role == .assistant)
+                    && $0.toolCallID == nil && $0.toolCalls.isEmpty
+            }),
+            appended.last.map({ $0.role == .user }) ?? true
         else {
             return nil
         }

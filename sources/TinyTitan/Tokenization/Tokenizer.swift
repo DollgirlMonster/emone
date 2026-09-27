@@ -775,16 +775,24 @@ public struct GFTokenizer: @unchecked Sendable {
     }
 
     /// The tokens that follow a cached tool-calling turn: its closing
-    /// `<|im_end|>`, the tool results in `incomingMessages` after that turn, and
-    /// the generation suffix. The cached KV already holds the turn as it was
-    /// *generated*, so only this tail is prefilled.
+    /// `<|im_end|>`, the tool results in `incomingMessages` after that turn,
+    /// any text turns the client appended after them (a user interjecting
+    /// mid-loop), and the generation suffix. The cached KV already holds the
+    /// turn as it was *generated*, so only this tail is prefilled.
     ///
     /// The tail is cut from a render of a stand-in conversation -- one user
-    /// query, the cached assistant turn, the tool results -- rather than the
+    /// query, the cached assistant turn, the continuation -- rather than the
     /// request's own render: the template's `<think>` stripping depends on each
     /// assistant turn's position relative to the last user query, so the full
-    /// render is not guaranteed to extend the cached tokens. Tool results
-    /// render the same whatever precedes the assistant turn they answer.
+    /// render is not guaranteed to extend the cached tokens. What follows the
+    /// assistant turn renders the same whatever precedes it.
+    ///
+    /// The stand-in's head must render the assistant turn the way the full
+    /// stand-in does. With only tool results after it, the turn is after the
+    /// last user query in both. With a user message after the tool results it
+    /// is *before* it, and most bundled templates then drop its thinking; so
+    /// the head is cut from a render that also ends in a user query, at that
+    /// query's `<|im_start|>`.
     public func encodeToolResultContinuation(
         cachedMessages: [Message],
         assistant: Message,
@@ -801,7 +809,20 @@ public struct GFTokenizer: @unchecked Sendable {
                 role: .assistant, content: assistant.content ?? "",
                 toolCalls: assistant.toolCalls),
         ]
-        let head = try renderToolChat(messages: anchor, tools: [], addGenerationPrompt: false)
+        let head: [Int32]
+        if continuation.contains(where: { $0.role == .user }) {
+            let probe = try renderToolChat(
+                messages: anchor + [Message(role: .user, content: ".")],
+                tools: [], addGenerationPrompt: false)
+            let imStart = encode(Self.imStartMark, addBOS: false)
+            guard imStart.count == 1, let cut = probe.lastIndex(of: imStart[0]) else {
+                throw GFTokenizerError.invalidChatTemplate(
+                    "cannot locate the probe query in the assistant turn's render")
+            }
+            head = Array(probe[..<cut])
+        } else {
+            head = try renderToolChat(messages: anchor, tools: [], addGenerationPrompt: false)
+        }
         let full = try renderToolChat(
             messages: anchor + continuation, tools: [], addGenerationPrompt: true)
         // `head` ends on the turn's `<|im_end|>` and newline; the bridge starts
