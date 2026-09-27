@@ -10,7 +10,8 @@
 #
 # Targets: ornith-4, ornith-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8,
 # agentworld-4, agentworld-8, katcoder-4, katcoder-8, and the dense
-# qwen35-{2b,4b,9b}-{4,8}. The katcoder and qwen35 targets are declared whether
+# qwen35-{2b,4b,9b}-{4,8} and qwen38-27b-{4,8}. The katcoder, qwen35 and
+# qwen38-27b targets are declared whether
 # or not their install is present: a target is inert until the directory is
 # there, and release.sh demands the baseline as soon as it is.
 # Bare 4 and 8 still mean
@@ -277,7 +278,11 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     qwen35-4b-8) dir="qwen3.5_4B_8Bit"; file="qwen3.5-4b-8bit.txt"; q=8 ;;
     qwen35-9b-4) dir="qwen3.5_9B_4Bit"; file="qwen3.5-9b-4bit.txt"; q=4 ;;
     qwen35-9b-8) dir="qwen3.5_9B_8Bit"; file="qwen3.5-9b-8bit.txt"; q=8 ;;
-    *) echo "unknown target: $t (ornith-4, ornith-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8, katcoder-4, katcoder-8, qwen35-2b-4, qwen35-2b-8, qwen35-4b-4, qwen35-4b-8, qwen35-9b-4, qwen35-9b-8)" >&2
+    # Qwen3.8-27B, the same dense family at 27B. No baseline is stored yet: the
+    # first --capture on an install makes it.
+    qwen38-27b-4) dir="qwen3.8_27B_4Bit"; file="qwen3.8-27b-4bit.txt"; q=4 ;;
+    qwen38-27b-8) dir="qwen3.8_27B_8Bit"; file="qwen3.8-27b-8bit.txt"; q=8 ;;
+    *) echo "unknown target: $t (ornith-4, ornith-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8, katcoder-4, katcoder-8, qwen35-2b-4, qwen35-2b-8, qwen35-4b-4, qwen35-4b-8, qwen35-9b-4, qwen35-9b-8, qwen38-27b-4, qwen38-27b-8)" >&2
        status=1; continue ;;
   esac
   model="$ROOT/models/$dir"

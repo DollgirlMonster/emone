@@ -209,6 +209,25 @@ public struct ModelProfile: Sendable, Equatable {
                 GenerationDefaults.qwen38Thinking,
                 true, true, false, false, true, false, false
             ),
+            // Qwen3.8-27B: the Qwen3.8 generation's dense model, served by the
+            // Qwen 3.5 dense family (same `qwen3_5_text` architecture). Dense,
+            // so there is no expert cache or prefetch ring: the budget and depth
+            // are the family's fallback values and nothing reads them. Chunk
+            // 4,096, the size the dense ANE sidecar is exported at. Sampling is
+            // the card's thinking-mode row (1.0 / top-k 20 / 0.95), the same as
+            // Flash-Next's; its instruct row (0.7 / 0.80, presence 1.5) is not
+            // applied yet, because this family has one row for both modes
+            // (docs/next-models-research.md). Nothing here is measured.
+            Key("qwen3.8-27b", 4): (
+                RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
+                GenerationDefaults.qwen38Thinking,
+                true, true, false, false, false, false, false
+            ),
+            Key("qwen3.8-27b", 8): (
+                RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
+                GenerationDefaults.qwen38Thinking,
+                true, true, false, false, false, false, false
+            ),
         ]
 
     /// Environment switches applied last. Read once per process.

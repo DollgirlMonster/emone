@@ -365,6 +365,7 @@ public struct ModelCatalog: Sendable {
         "qwen3.5-2b": "Qwen 3.5 2B",
         "qwen3.5-4b": "Qwen 3.5 4B",
         "qwen3.5-9b": "Qwen 3.5 9B",
+        "qwen3.8-27b": "Qwen 3.8 27B",
     ]
 
     /// Allocated bytes, so an APFS clone or a sparse file reports what it

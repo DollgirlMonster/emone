@@ -313,7 +313,7 @@ struct ModelCatalogTests {
         let shipped = [
             "qwen3.6-35b-a3b", "ornith-1.5-35b-a3b", "qwen-agentworld",
             "kat-coder-v2.5", "qwen3.8-flash-next",
-            "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b",
+            "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b", "qwen3.8-27b",
         ]
         for id in shipped {
             let name = ModelCatalog.displayNames[id]

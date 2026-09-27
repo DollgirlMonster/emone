@@ -71,6 +71,8 @@ TINYTITAN_MODEL_CHOICES=(
   "qwen35-9b-8bit|Qwen 3.5 9B|8|11.0|Dense 9B at 8-bit."
   "qwen35-2b|Qwen 3.5 2B|4|2.3|Dense 2B: seconds to load. Weak at arithmetic and long instructions."
   "qwen35-2b-8bit|Qwen 3.5 2B|8|2.2|Dense 2B at 8-bit."
+  "qwen38-27b|Qwen3.8-27B|4|17.0|Dense 27B, Qwen3.8 generation: a general assistant, all in RAM."
+  "qwen38-27b-8bit|Qwen3.8-27B|8|29.0|Dense 27B at 8-bit."
   "qwen38flash|Qwen3.8-Flash-Next 125B-A6B|4|162.0|The largest model, and the most disk."
   "qwen38flash-8bit|Qwen3.8-Flash-Next 125B-A6B|8|220.0|The largest model at 8-bit."
 )
@@ -191,8 +193,18 @@ tinytitan_resolve_model() {
       TINYTITAN_MODEL_FAMILY=qwen3_5_dense
       TINYTITAN_MODEL_ENGINES="gpu,cpu"
       TINYTITAN_MODEL_THINKING="off,on" ;;
+    # Qwen3.8-27B: the dense family at 27B. Offered on the GPU only here; the
+    # CPU engine implements the family but reads 16.5 GB per token.
+    qwen38-27b|qwen3.8-27b)
+      # shellcheck disable=SC2034  # read by callers of tinytitan_resolve_model
+      TINYTITAN_MODEL_KEY=qwen38-27b
+      TINYTITAN_MODEL_STEM="qwen3.8_27B"
+      TINYTITAN_MODEL_LABEL="Qwen3.8-27B"
+      TINYTITAN_MODEL_FAMILY=qwen3_5_dense
+      TINYTITAN_MODEL_ENGINES=gpu
+      TINYTITAN_MODEL_THINKING="off,on" ;;
     *)
-      echo "unknown AI model: ${1:-} (ornith|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b)" >&2
+      echo "unknown AI model: ${1:-} (ornith|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|qwen38-27b)" >&2
       return 2 ;;
   esac
 }
@@ -216,7 +228,7 @@ tinytitan_model_port() {
 # Every model this checkout knows about, for help text and for the fallback
 # list when the server cannot report its catalog. One list: the catalog is
 # still the source of what is installed.
-TINYTITAN_ALL_MODELS=(ornith qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b)
+TINYTITAN_ALL_MODELS=(ornith qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b qwen38-27b)
 
 # --- Installed models, from the server's catalog -----------------------
 #
