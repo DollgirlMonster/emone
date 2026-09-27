@@ -276,11 +276,11 @@ extension Model {
     /// the kernel do it.
     ///
     /// The bound is per kernel family because a model dispatches one or the
-    /// other: the MoE tiles are 2816 wide and the dense Qwen 3.5 9B (4096) never
-    /// reaches them, while its Gated-DeltaNet layers do reach the staging tile,
-    /// which is sized for 4096.
+    /// other: the MoE tiles are 2816 wide and the dense models (Qwen 3.5 9B at
+    /// 4096, Qwen3.8-27B at 5120) never reach them, while their Gated-DeltaNet
+    /// layers do reach the staging tile, which is sized for 5120.
     static let maximumThreadgroupTileWidth = 2816
-    static let maximumDenseThreadgroupTileWidth = 4096
+    static let maximumDenseThreadgroupTileWidth = 5120
 
     /// Refuses model geometry the compiled kernels cannot serve.
     ///
