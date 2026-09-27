@@ -1305,8 +1305,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         }
         let kvLengths = try kv.snapshotSegmentLengths(at: kv.position)
         let gdnLengths = gdnState?.snapshotSegmentLengths() ?? []
+        let qsaLayers = qsaIndexer?.snapshotLayers ?? []
+        let qsaLengths = qsaIndexer?.snapshotSegmentLengths(position: kv.position) ?? []
+        let pleLengths = pleBlock.map { [$0.windowBytes] } ?? []
         var payloadBytes = 0
-        for length in kvLengths + gdnLengths {
+        for length in kvLengths + gdnLengths + qsaLengths + pleLengths {
             let (next, overflow) = payloadBytes.addingReportingOverflow(length)
             guard !overflow else { throw InferenceStateSnapshotError.integerOverflow }
             payloadBytes = next
@@ -1320,6 +1323,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         payload.reserveCapacity(payloadBytes)
         try kv.appendSnapshotPayload(to: &payload, segmentLengths: kvLengths)
         try gdnState?.appendSnapshotPayload(to: &payload, segmentLengths: gdnLengths)
+        qsaIndexer?.appendSnapshotPayload(to: &payload, position: kv.position)
+        pleBlock?.appendWindow(to: &payload)
         guard payload.count == payloadBytes else {
             throw InferenceStateSnapshotError.invalidPayloadSize(
                 expected: payloadBytes,
@@ -1330,6 +1335,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                 position: kv.position,
                 kvSegmentLengths: kvLengths,
                 gdnSegmentLengths: gdnLengths,
+                qsaLayers: qsaLayers,
+                qsaSegmentLengths: qsaLengths,
+                pleSegmentLengths: pleLengths,
+                pleContext: pleBlock == nil ? [] : pleContext,
                 payloadBytes: payloadBytes),
             payload: payload)
     }
@@ -1337,7 +1346,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     public func restoreInferenceState(_ snapshot: InferenceStateSnapshot) throws {
         do {
             let descriptor = snapshot.descriptor
-            guard descriptor.version == InferenceStateSnapshotDescriptor.currentVersion else {
+            guard InferenceStateSnapshotDescriptor.supportedVersions.contains(descriptor.version)
+            else {
                 throw InferenceStateSnapshotError.unsupportedVersion(descriptor.version)
             }
             guard descriptor.position > 0, descriptor.position <= maxContext else {
@@ -1350,28 +1360,26 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                     actual: snapshot.payload.count)
             }
             guard let kv else { throw InferenceStateSnapshotError.invalidLayout }
-            // Refuse when a subsystem this snapshot does not carry is live.
-            //
-            // `reset()` clears the sparse indexer and the PLE block;
-            // `restoreInferenceState` only calls `resetTransientState()`, which
-            // does not. Restoring would therefore leave the indexer ranking
-            // blocks from pooled keys that were never rebuilt for this prefix,
-            // and the n-gram hashing starting from the previous conversation's
-            // predecessors. The model attends to a wrong subset of keys and
-            // answers fluently and wrongly, with no error anywhere -- the
-            // failure this project refuses. Throwing here costs the caller a
-            // re-prefill, not a wrong answer.
-            //
-            // Both are non-nil only for a family that enables them
-            // (Qwen3.8-Flash-Next), so the MoE families keep restoring. Carrying
-            // these buffers in the snapshot, or replaying the prefix to rebuild
-            // them, is the real fix; it is recorded in
-            // the wiki's project tracker.
-            if qsaIndexer != nil {
+            // Every live subsystem must be carried. `reset()` clears the
+            // sparse indexer and the n-gram block; a restore that left either
+            // in place would rank blocks from pooled keys never rebuilt for
+            // this prefix, or hash n-grams from the previous conversation's
+            // tokens -- fluent, wrong answers with no error anywhere. Version 2
+            // snapshots carry both (Qwen3.8-Flash-Next); a version 1 snapshot,
+            // or one taken on a runtime without them, is refused here and
+            // costs the caller a re-prefill, not a wrong answer.
+            if qsaIndexer != nil, descriptor.qsaLayers.isEmpty {
                 throw InferenceStateSnapshotError.stateNotInSnapshot("sparse-indexer")
             }
-            if pleBlock != nil {
-                throw InferenceStateSnapshotError.stateNotInSnapshot("PLE")
+            if qsaIndexer == nil, !descriptor.qsaLayers.isEmpty {
+                throw InferenceStateSnapshotError.invalidLayout
+            }
+            if let pleBlock {
+                guard descriptor.pleSegmentLengths == [pleBlock.windowBytes] else {
+                    throw InferenceStateSnapshotError.stateNotInSnapshot("PLE")
+                }
+            } else if !descriptor.pleSegmentLengths.isEmpty {
+                throw InferenceStateSnapshotError.invalidLayout
             }
             try snapshot.payload.withUnsafeBytes { bytes in
                 var offset = 0
@@ -1388,10 +1396,19 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                 } else if !descriptor.gdnSegmentLengths.isEmpty {
                     throw InferenceStateSnapshotError.invalidLayout
                 }
+                try qsaIndexer?.restoreSnapshot(
+                    layers: descriptor.qsaLayers,
+                    segmentLengths: descriptor.qsaSegmentLengths,
+                    position: descriptor.position,
+                    bytes: bytes, offset: &offset)
+                if let pleBlock {
+                    try pleBlock.restoreWindow(from: bytes, offset: &offset)
+                }
                 guard offset == bytes.count else {
                     throw InferenceStateSnapshotError.invalidLayout
                 }
             }
+            pleContext = pleBlock == nil ? [] : descriptor.pleContext
             resetTransientState()
         } catch {
             reset()
