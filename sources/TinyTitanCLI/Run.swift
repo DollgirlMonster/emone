@@ -308,13 +308,14 @@ public func run(
             // the gaps are the problem or the kernels are. The runner has
             // collected both all along and nothing printed them.
             let summary = runner.kernelGPUTimingSummary()
+            let maxima = runner.kernelGPUTimingMaxima()
             let occupancy = runner.kernelGPUOccupancy()
             var lines = "\n[gpu by role over \(stats.newTokens) tokens]\n"
             for entry in summary.prefix(24) {
                 lines += String(
-                    format: "  %@ %8.1f ms  x%d\n",
+                    format: "  %@ %8.1f ms  x%d  max %.1f ms\n",
                     entry.role.padding(toLength: 24, withPad: " ", startingAt: 0),
-                    entry.millis, entry.count)
+                    entry.millis, entry.count, maxima[entry.role] ?? 0)
             }
             lines += String(
                 format: "  busy %.0f ms of %.0f ms span (%.0f%% occupied)\n",
