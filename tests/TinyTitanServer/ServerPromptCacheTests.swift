@@ -343,6 +343,83 @@ struct ServerPromptCacheTests {
         #expect(rawEffective != effective)
     }
 
+    /// A user message sent while the agent is mid tool loop lands after the
+    /// tool results. It only extends the prompt past the cached turn, so the
+    /// request must resume from the cache, not re-prefill the whole session.
+    @Test func toolResultsFollowedByUserMessageHit() async throws {
+        let tokenizer = try await GFTokenizer.load(from: TokenizerFixture.folder())
+        let initial = request(messages: [
+            GFTokenizer.Message(role: .user, content: "add a recipe toolbelt")
+        ])
+        let initialPrompt = try tokenizer.encodeToolChat(messages: initial.messages, tools: [])
+        // Generated text the render will not reproduce, so the hit has to come
+        // from the message-shaped match rather than the direct token prefix.
+        let kvBacked = initialPrompt + tokenizer.encode("generated call", addBOS: false)
+        let call = ParsedToolCall(
+            id: "call_1", name: "create_file",
+            arguments: .object(["path": .string("recipe.py")]),
+            argumentsJSON: #"{"path":"recipe.py"}"#)
+        let assistant = GFTokenizer.Message(
+            role: .assistant, content: nil,
+            toolCalls: [.init(id: call.id, name: call.name, arguments: call.arguments)])
+        let result = GFTokenizer.Message(
+            role: .tool, content: "Error: File already exists",
+            toolCallID: "call_1", name: "create_file")
+        let interjection = GFTokenizer.Message(role: .user, content: "how's it coming?")
+
+        func cache() -> ServerPromptCache {
+            var cache = ServerPromptCache()
+            cache.publish(
+                domain: domain,
+                request: initial,
+                content: "",
+                calls: [call],
+                result: rawResult(
+                    prompt: initialPrompt,
+                    kvBacked: kvBacked,
+                    boundary: tokenizer.endOfTurnID,
+                    reason: .toolCalls))
+            return cache
+        }
+        func match(_ tail: [GFTokenizer.Message]) throws -> ServerPromptCacheMatch {
+            let messages = initial.messages + [assistant] + tail
+            var cache = cache()
+            return cache.match(
+                domain: domain,
+                request: request(messages: messages),
+                renderedPromptIDs: try tokenizer.encodeToolChat(messages: messages, tools: []),
+                tokenizer: tokenizer)
+        }
+
+        for tail in [[result], [result, interjection]] {
+            guard case .hit(_, let effective, let cached) = try match(tail) else {
+                Issue.record("expected a hit for \(tail.map(\.role))")
+                continue
+            }
+            let bridge = try tokenizer.encodeToolResultContinuation(
+                cachedMessages: initial.messages,
+                assistant: assistant,
+                incomingMessages: initial.messages + [assistant] + tail,
+                tools: [])
+            #expect(cached == kvBacked.count)
+            #expect(effective == kvBacked + bridge)
+        }
+
+        // Shapes that are not a continuation of the cached turn still miss: a
+        // call left unanswered, a tail that does not end on a user turn, and a
+        // result for a call the cached turn never made.
+        #expect(try match([interjection]) == .miss)
+        #expect(
+            try match([result, GFTokenizer.Message(role: .assistant, content: "done")]) == .miss)
+        #expect(
+            try match([
+                result,
+                GFTokenizer.Message(
+                    role: .tool, content: "x", toolCallID: "call_9", name: "create_file"),
+                interjection,
+            ]) == .miss)
+    }
+
     /// The post-strip view swaps only the messages and tools; every other
     /// validated field must survive, or the cached turn would silently change
     /// sampling or streaming behavior.
