@@ -3,13 +3,15 @@
 #
 #   tools/serve.sh /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
 #   TINYTITAN_MODEL=/path/to/install tools/serve.sh --idle 600
-#   tools/serve.sh <install> -- --reasoning xhigh --kv-bits 4
+#   tools/serve.sh <install> --reasoning xhigh -- --kv-bits 4
 #
 # The short path for a model that lives anywhere, including an external
 # drive; tools/server_launcher.sh is the full, interactive one for models/.
 # Everything tuned per model -- the prefill chunk, the prefill kernel
 # switches, the expert-cache budget, sampling -- comes from the install's
 # ModelProfile row, so this script sets no TINYTITAN_* switch of its own.
+# The one server default it does set is reasoning: on, so a thinking model
+# thinks (the model's template default effort -- extra high on Qwen3.8).
 #
 # By default the server binds at once, loads the model on the first request
 # and releases it after --idle seconds without one, so a model does not sit
@@ -28,6 +30,7 @@ MODEL="${TINYTITAN_MODEL:-}"
 PORT="${TINYTITAN_PORT:-8089}"
 IDLE=900
 CACHE_ROOT="${TINYTITAN_PROMPT_CACHE_ROOT:-$HOME/.tinytitan/prompt-cache}"
+REASONING=on
 DRY_RUN=0
 EXTRA=()
 
@@ -39,6 +42,9 @@ Options:
   --port <n>           default 8089 (TINYTITAN_PORT)
   --idle <seconds>     release the model after this long idle (default 900;
                        0 keeps it loaded from the first request on)
+  --reasoning <level>  off, on, minimal, low, medium, high, xhigh or max
+                       (default on); skipped when the server args after --
+                       carry --reasoning, --thinking or --reasoning-effort
   --dry-run            print the server command and start nothing
   -- <server args>     passed to TinyTitanServer unchanged, last, so they win
 USAGE
@@ -53,6 +59,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
     --idle) IDLE="$2"; shift 2 ;;
+    --reasoning) REASONING="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h | --help) usage; exit 0 ;;
     --) shift; EXTRA=("$@"); break ;;
@@ -79,6 +86,16 @@ cache_dir="$CACHE_ROOT/${name%.gturbo}"
 server_args=(--model "$MODEL" --port "$PORT" --prompt-cache-disk "$cache_dir")
 if [ "$IDLE" -gt 0 ]; then
   server_args+=(--idle-unload-seconds "$IDLE")
+fi
+# The server refuses --reasoning alongside --thinking/--reasoning-effort, so
+# a reasoning flag passed through after -- replaces this default outright.
+for arg in ${EXTRA[@]+"${EXTRA[@]}"}; do
+  case "$arg" in
+    --reasoning | --thinking | --reasoning-effort) REASONING="" ;;
+  esac
+done
+if [ -n "$REASONING" ]; then
+  server_args+=(--reasoning "$REASONING")
 fi
 
 cd "$ROOT"
