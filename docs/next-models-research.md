@@ -7,6 +7,47 @@ models on an external Thunderbolt NVMe (~2.3 GB/s measured in the prefill
 spikes). Every speed below is an estimate from bytes and FLOPs, not a
 measurement.
 
+## Decision, 2026-09-27: Qwen3.8-27B instead of a Gemma port
+
+The assistant model is **Qwen3.8-27B** (`Qwen/Qwen3.8-27B` @ `1d4bf0f`), wired
+in `55e7508`. It is published as `qwen3_5_text`, the dense family this engine
+already serves, so it is a converter and profile entry rather than a port. Its
+chat template is byte-identical to Flash-Next's. Vendor-reported scores; the
+Gemma column is Google's own card, and "--" means not reported:
+
+| benchmark | Qwen3.8-27B | Gemma 4 26B-A4B | Qwen3.8-Flash-Next | GLM-5.3-Flash |
+| --- | ---: | ---: | ---: | ---: |
+| GPQA Diamond | 89.2 | 82.3 | 91.7 | 90.15 |
+| LiveCodeBench v6 | 90.3 | 77.1 | 91.9 | -- |
+| HLE (no tools) | 30.8 | 8.7 | 35.9 | -- |
+| IFBench | 79.5 | -- | 81.3 | -- |
+| Toolathlon Verified | 67.1 | -- | 73.5 | 78.4 |
+| CoWorkBench | 70.7 | -- | 73.9 | -- |
+| SWE-bench Pro | 61.7 | -- | 62.5 | -- |
+| DeepSWE 1.1 | 42.2 | -- | 58.7 | 63.4 |
+| Tau2 | -- | 68.2 | -- | -- |
+
+Qwen's Qwen 3.6 card also measures Gemma 4 26B-A4B directly, and there it
+trails Qwen 3.6 35B-A3B on every agent benchmark listed:
+- TAU3 59.0 against 67.2;
+- MCP-Atlas 50.0 against 62.8;
+- Tool Decathlon 12.0 against 26.9.
+
+Trade-offs:
+- **Speed.** A dense 27B reads all of its 16.5 GB (4-bit) or 28.6 GB (8-bit)
+  per token. That gives a decode ceiling of roughly 18 or 10 tok/s here,
+  against several times that for an A4B MoE held in RAM.
+- **Tone.** Benchmarks say nothing about tone or verbosity; that needs the
+  user's own evals.
+- **Not yet in this step.** Qwen3.8's reasoning-effort levels (low, medium,
+  xhigh) and its instruct-mode sampling row (0.7 / 0.80, presence 1.5). Both
+  are keyed by family, and this model runs as the Qwen 3.5 dense family. Until
+  then thinking is on or off, and the template's default effort (xhigh)
+  applies when it is on.
+
+The Gemma 4 26B-A4B research below stays as the record, in case its tone
+wins the user's evals.
+
 ## Gemma 4 26B-A4B (the MoE)
 
 `google/gemma-4-26B-A4B-it` at `4d7ae4984b7db7de8f8457170b3f1a419ee76d52`, not
