@@ -33,6 +33,7 @@ needs is read from the config this writes:
     2b      24     2048       8 / 2            16 / 16                1
     4b      32     2560      16 / 4            16 / 32                2
     9b      32     4096      16 / 4            16 / 32                4
+    27b     64     5120      24 / 4            16 / 48               18
 
 The 4B's 32 value heads over 16 key heads is the one shape the 2B never
 exercised; the engine's head-sharing tests pin it, and the 9B repeats it at
@@ -40,6 +41,19 @@ a wider hidden size rather than adding a fourth shape. The 9B is the
 vision-language build: its checkpoint nests the text model under
 `text_config` and ships a `model.visual.*` tower that this converter drops,
 so it produces the same text-only snapshot as the other two.
+
+The 27B is **Qwen3.8-27B**, a newer generation published as the same
+`qwen3_5_text` model type: its config differs from the 9B's only in sizes
+(and `output_gate_type: swish`, which is silu). Its 48 value heads over 16
+key heads is the 3:1 sharing Qwen3.8-Flash-Next's delta-rule layers already
+run on the GPU, and its chat template is byte-identical to Flash-Next's.
+Checked 2026-09-27 by range-reading single tensors of the pinned shards:
+the norms are stored zero-centred like the others' (input_layernorm layer 3
+mean +0.249; post_attention_layernorm minimums -0.996; q_norm/k_norm means
++0.22 to +0.55 with minimums near -1; final norm mean +0.944) and
+`linear_attn.norm` sits around one (+0.869, minimum +0.785), so the same
+folding applies. The tensor kinds match the 9B's one for one, `mtp.*` and
+`model.visual.*` included, and `lm_head.weight` is untied.
 
 Verified against each checkpoint before converting it, not assumed:
 `input_layernorm`, `post_attention_layernorm`, `q_norm`, `k_norm` and the
@@ -150,6 +164,19 @@ SIZES = {
         4096,
         "Qwen 3.5 9B",
         "qwen3.5-9b",
+        False,
+    ),
+    # Qwen3.8-27B: the Qwen3.8 generation's dense model, published as the
+    # same `qwen3_5_text` architecture (see the module docstring). A
+    # vision-language build like the 9B, untied like the 9B. 55.6 GB of bf16
+    # in 18 shards; the converter streams them, so the footprint is unchanged.
+    "27b": Size(
+        "Qwen/Qwen3.8-27B",
+        "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+        64,
+        5120,
+        "Qwen 3.8 27B",
+        "qwen3.8-27b",
         False,
     ),
 }

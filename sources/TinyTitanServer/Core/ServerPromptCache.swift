@@ -91,9 +91,11 @@ struct ServerPromptCache: Sendable {
                 name: $0.name,
                 arguments: $0.arguments)
         }
+        // A tool-calling turn keeps its text too: models often say what they
+        // are about to do before the call, and a client replays that text.
         let assistant = GFTokenizer.Message(
             role: .assistant,
-            content: calls.isEmpty ? content : nil,
+            content: calls.isEmpty || !content.isEmpty ? content : nil,
             toolCalls: historicalCalls)
         let entry = ServerPromptCacheEntry(
             id: UUID(),
@@ -213,11 +215,16 @@ struct ServerPromptCache: Sendable {
         else {
             return false
         }
-        if !cached.toolCalls.isEmpty {
-            return (incoming.content ?? "").isEmpty
-                && (cached.content ?? "").isEmpty
-        }
-        return incoming.content == cached.content
+        return Self.answer(incoming.content) == Self.answer(cached.content)
+    }
+
+    /// A turn's answer as the template renders it. Clients replay a turn's
+    /// thinking inline (`<think>…</think>` ahead of the answer), which the
+    /// cached turn keeps apart; the template trims content, so whitespace at
+    /// either end is not part of the turn either.
+    private static func answer(_ content: String?) -> String {
+        GFTokenizer.splitThinking(content ?? "").answer
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func matchTextContinuation(

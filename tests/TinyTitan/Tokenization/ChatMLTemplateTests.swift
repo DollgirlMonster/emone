@@ -181,19 +181,24 @@ struct ChatMLTemplateTests {
                 + "<|im_start|>assistant\n<think>\n\n</think>\n\n")
     }
 
-    @Test("Tool-result KV continuation is unsupported for chatml")
-    func toolResultContinuationUnsupported() {
-        #expect(throws: GFTokenizerError.self) {
-            _ = try tok.encodeToolResultContinuation(
-                cachedMessages: [Message(role: .user, content: "Hi")],
-                assistant: Message(
-                    role: .assistant, content: nil,
-                    toolCalls: [
-                        .init(id: "call_1", name: "lookup", arguments: .object([:]))
-                    ]),
-                incomingMessages: [Message(role: .user, content: "Hi")],
-                tools: [])
-        }
+    @Test("Tool-result continuation bridges from im_end through the tool results")
+    func toolResultContinuation() throws {
+        let assistant = Message(
+            role: .assistant, content: "Looking it up.",
+            toolCalls: [.init(id: "call_1", name: "lookup", arguments: .object([:]))])
+        let cached = [Message(role: .user, content: "Hi")]
+        let ids = try tok.encodeToolResultContinuation(
+            cachedMessages: cached,
+            assistant: assistant,
+            incomingMessages: cached + [
+                assistant,
+                Message(role: .tool, content: "42", toolCallID: "call_1", name: "lookup"),
+            ],
+            tools: [])
+        #expect(ids.first == tok.endOfTurnID)
+        let text = tok.decode(ids, skipSpecialTokens: false)
+        #expect(text.hasPrefix("<|im_end|>\n<|im_start|>user\n<tool_response>\n42\n</tool_response><|im_end|>\n"))
+        #expect(text.contains("<|im_start|>assistant\n"))
     }
 
     @Test("Tool chat renders the bundled Jinja template with thinking disabled")

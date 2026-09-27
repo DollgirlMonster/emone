@@ -519,6 +519,15 @@ struct ServerArgumentTests {
         #expect(multi.promptCacheMemoryMiB == 512)
         #expect(multi.promptCacheDiskDirectory == "/tmp/tinytitan-cache")
         #expect(multi.promptCacheDiskMiB == 16_384)
+        let large = try ServerArguments.parse([
+            "--model", "model.gturbo", "--prompt-cache-disk-mib", "102400",
+        ])
+        #expect(large.promptCacheDiskMiB == 102_400)
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo", "--prompt-cache-disk-mib", "1048577",
+            ])
+        }
         let rollback = try ServerArguments.parse([
             "--model", "model.gturbo",
             "--prompt-cache-mode", "off",

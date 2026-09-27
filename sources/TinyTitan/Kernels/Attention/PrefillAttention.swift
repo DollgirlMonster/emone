@@ -167,6 +167,7 @@ final class PrefillAttention {
         keepIndices: MTLBuffer? = nil,
         keepIndexStride: Int = 0,
         keepCounts: MTLBuffer? = nil,
+        keepRowOffset: Int = 0,
         path: RuntimePrefillAttentionPath = .causalTiled,
         groupedQueryHeads: Bool = PrefillAttention.qsaGroupedQueryHeads,
         matrixUnits: Bool = PrefillAttention.qsaMatrixUnits
@@ -217,11 +218,20 @@ final class PrefillAttention {
         var useKeep = UInt32(keepMask == nil ? 0 : (compacted ? 2 : 1))
         var stride = UInt32(keepStride)
         var indexStride = UInt32(keepIndexStride)
-        enc.setBuffer(keepMask ?? emptyKeepMask, offset: 0, index: 5)
+        // A row tile (see encodeCausalTiled) starts `keepRowOffset` rows into
+        // the chunk's selection: the kernels index it by dispatch-local row.
+        enc.setBuffer(
+            keepMask ?? emptyKeepMask,
+            offset: keepMask == nil ? 0 : keepRowOffset * keepStride, index: 5)
         enc.setBytes(&useKeep, length: MemoryLayout<UInt32>.size, index: 6)
         enc.setBytes(&stride, length: MemoryLayout<UInt32>.size, index: 7)
-        enc.setBuffer(keepIndices ?? emptyKeepMask, offset: 0, index: 8)
-        enc.setBuffer(keepCounts ?? emptyKeepMask, offset: 0, index: 9)
+        let u32 = MemoryLayout<UInt32>.stride
+        enc.setBuffer(
+            keepIndices ?? emptyKeepMask,
+            offset: keepIndices == nil ? 0 : keepRowOffset * keepIndexStride * u32, index: 8)
+        enc.setBuffer(
+            keepCounts ?? emptyKeepMask,
+            offset: keepCounts == nil ? 0 : keepRowOffset * u32, index: 9)
         enc.setBytes(&indexStride, length: MemoryLayout<UInt32>.size, index: 10)
         let groups =
             useTensorOps
@@ -238,6 +248,91 @@ final class PrefillAttention {
             groups,
             threadsPerThreadgroup: MTLSize(width: threadCount, height: 1, depth: 1))
         enc.endEncoding()
+    }
+
+    /// Query rows per command buffer for a chunk whose last query sees
+    /// `visibleEnd` keys, or nil to keep the whole chunk in one.
+    ///
+    /// macOS kills a command buffer that holds the GPU long enough to stall
+    /// the display (kIOGPUCommandBufferCallbackErrorImpactingInteractivity).
+    /// Measured on an M1 Max, Qwen3.8 4-bit: a 16,384-row attention core at
+    /// ~74K context held the GPU 3.26 s in one buffer, and a request at ~70K
+    /// failed that way. Splitting rows is exact -- every kernel here indexes
+    /// by dispatch-local row and derives the query's position from
+    /// `startPosition + row` -- and costs one commit per tile, with no wait.
+    /// ~3.6K rows at 74K and 1K at 262K keep a tile well under a second.
+    /// `TINYTITAN_PREFILL_ATTN_TILE_ROWS` overrides the row count; 0 disables.
+    static func causalTileRows(queryCount: Int, visibleEnd: Int) -> Int? {
+        let override = ProcessInfo.processInfo.environment["TINYTITAN_PREFILL_ATTN_TILE_ROWS"]
+            .flatMap(Int.init)
+        let rows: Int
+        if let override {
+            guard override > 0 else { return nil }
+            rows = override
+        } else {
+            let scaled = 4_096 * 65_536 / max(visibleEnd, 65_536)
+            rows = max(256, scaled / 128 * 128)
+        }
+        return rows < queryCount ? rows : nil
+    }
+
+    /// `encodeCausal` over the chunk in row tiles, each tile its own command
+    /// buffer, committed without waiting so the GPU queue stays full. Returns
+    /// the command buffer the caller continues in. One tile is exactly
+    /// `encodeCausal`.
+    func encodeCausalTiled(
+        commandBuffer: MTLCommandBuffer,
+        queue: MTLCommandQueue,
+        q: MTLBuffer,
+        k: MTLBuffer, kOffset: Int = 0,
+        v: MTLBuffer, vOffset: Int = 0,
+        out: MTLBuffer,
+        params: PrefillAttentionParams,
+        kvRingCapacity: UInt32 = 0,
+        keepMask: MTLBuffer? = nil,
+        keepStride: Int = 0,
+        keepIndices: MTLBuffer? = nil,
+        keepIndexStride: Int = 0,
+        keepCounts: MTLBuffer? = nil,
+        path: RuntimePrefillAttentionPath = .causalTiled,
+        tileRows: Int? = nil
+    ) throws -> MTLCommandBuffer {
+        let total = Int(params.queryCount)
+        let rows =
+            tileRows
+            ?? Self.causalTileRows(
+                queryCount: total,
+                visibleEnd: Int(params.startPosition) + total)
+            ?? total
+        var cb = commandBuffer
+        var first = 0
+        while first < total {
+            let count = min(rows, total - first)
+            var tile = params
+            tile.startPosition = params.startPosition + UInt32(first)
+            tile.queryCount = UInt32(count)
+            try encodeCausal(
+                commandBuffer: cb,
+                q: q, qOffset: first * Int(params.qTokenStrideElements) * 2,
+                k: k, kOffset: kOffset,
+                v: v, vOffset: vOffset,
+                out: out, outOffset: first * Int(params.oTokenStrideElements) * 2,
+                params: tile,
+                kvRingCapacity: kvRingCapacity,
+                keepMask: keepMask, keepStride: keepStride,
+                keepIndices: keepIndices, keepIndexStride: keepIndexStride,
+                keepCounts: keepCounts, keepRowOffset: first,
+                path: path)
+            first += count
+            if first < total {
+                cb.commit()
+                guard let next = queue.makeCommandBuffer() else {
+                    throw PrefillAttentionError.commandEncoderFailed
+                }
+                cb = next
+            }
+        }
+        return cb
     }
 
     /// Which kernel serves this call: TensorOps for the one shape it covers,

@@ -67,12 +67,12 @@ extension ServerHTTPHandler {
                         id: modelID,
                         object: "model",
                         created: nil,
-                        ownedBy: "tinytitan"),
+                        ownedBy: "emone"),
                     .init(
                         id: modelID + "-fast",
                         object: "model",
                         created: nil,
-                        ownedBy: "tinytitan"),
+                        ownedBy: "emone"),
                 ])
             writeCodable(context, status: .ok, response)
         case (.GET, "/v1/prefill-progress"):
@@ -256,7 +256,7 @@ extension ServerHTTPHandler {
             OpenAIModelList(
                 object: "list",
                 data: models.map {
-                    .init(id: $0.id, object: "model", created: nil, ownedBy: "tinytitan")
+                    .init(id: $0.id, object: "model", created: nil, ownedBy: "emone")
                 }))
     }
 
@@ -297,7 +297,7 @@ extension ServerHTTPHandler {
         } else {
             writeCodable(
                 context, status: .ok,
-                OpenAIModelList.Model(id: id, object: "model", created: nil, ownedBy: "tinytitan"))
+                OpenAIModelList.Model(id: id, object: "model", created: nil, ownedBy: "emone"))
         }
     }
 

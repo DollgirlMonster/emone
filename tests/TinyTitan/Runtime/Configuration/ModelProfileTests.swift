@@ -8,7 +8,7 @@ import Testing
     static let shipped: [(String, ModelFamily)] = [
         ("qwen3.6-35b-a3b", .qwen36), ("ornith-1.5-35b-a3b", .qwen36),
         ("qwen-agentworld", .qwen36), ("kat-coder-v2.5", .qwen36),
-        ("qwen3.8-flash-next", .qwen38flash),
+        ("qwen3.8-flash-next", .qwen38flash), ("qwen3.8-27b", .qwen35Dense),
     ]
 
     @Test func everyShippedInstallHasItsOwnRow() {
@@ -20,7 +20,7 @@ import Testing
                 #expect(p.key == ModelProfile.Key(id, bits))
             }
         }
-        #expect(ModelProfile.table.count == 10)
+        #expect(ModelProfile.table.count == 12)
     }
 
     @Test func modelsSharingAFamilyResolveIndependently() {
@@ -94,6 +94,9 @@ import Testing
             // swept along by the 0.6 the rest of the qwen36 series uses.
             ("kat-coder-v2.5", .qwen36, qwen38Series),
             ("qwen3.8-flash-next", .qwen38flash, qwen38Series),
+            // Its card's thinking row, the same as Flash-Next's; the dense family
+            // would otherwise hand it Qwen 3.5's 0.6.
+            ("qwen3.8-27b", .qwen35Dense, qwen38Series),
             // Not a Qwen-named series: it keeps the house values until its own
             // card is checked.
             ("ornith-1.5-35b-a3b", .qwen36, GenerationDefaults.house),

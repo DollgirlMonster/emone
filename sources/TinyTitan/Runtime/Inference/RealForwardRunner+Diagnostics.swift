@@ -38,6 +38,18 @@ extension RealForwardRunner {
             .sorted { $0.millis > $1.millis }
     }
 
+    /// The longest single command buffer per role, in milliseconds. macOS
+    /// kills a command buffer that holds the GPU long enough to stall the
+    /// display (kIOGPUCommandBufferCallbackErrorImpactingInteractivity), so
+    /// the maximum, not the sum, is what says whether a schedule is safe.
+    public func kernelGPUTimingMaxima() -> [String: Double] {
+        var maxima: [String: Double] = [:]
+        for t in kernelGPUTimings {
+            maxima[t.role] = max(maxima[t.role] ?? 0, (t.end - t.start) * 1000)
+        }
+        return maxima
+    }
+
     /// Wall-clock span in which *any* recorded command buffer was on the GPU,
     /// and the span from the first start to the last end.
     ///

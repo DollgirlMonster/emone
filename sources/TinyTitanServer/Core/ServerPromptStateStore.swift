@@ -235,8 +235,8 @@ final class ServerPromptStateStore: @unchecked Sendable {
                     from: metadataData),
                 metadata.version == DiskMetadata.currentVersion,
                 metadata.entry.id == directoryID,
-                metadata.descriptor.version
-                    == InferenceStateSnapshotDescriptor.currentVersion,
+                InferenceStateSnapshotDescriptor.supportedVersions
+                    .contains(metadata.descriptor.version),
                 metadata.entry.kvPosition == metadata.descriptor.position,
                 (try? metadata.descriptor.validatedPayloadBytes()) != nil,
                 let payloadValues = try? payloadURL.resourceValues(

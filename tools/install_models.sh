@@ -300,6 +300,11 @@ CATALOGUE=(
   "qwen35-4b-8bit|qwen3.5_4B_8Bit|8|convert_qwen35"
   "qwen35-9b|qwen3.5_9B_4Bit|4|convert_qwen35"
   "qwen35-9b-8bit|qwen3.5_9B_8Bit|8|convert_qwen35"
+  # Qwen3.8-27B: the Qwen3.8 generation's dense model, the same architecture
+  # as the Qwen 3.5 dense models at 27B. GPU only in practice: 16.5 GB (4-bit)
+  # or 28.6 GB (8-bit) resident, read whole for every token.
+  "qwen38-27b|qwen3.8_27B_4Bit|4|convert_qwen35"
+  "qwen38-27b-8bit|qwen3.8_27B_8Bit|8|convert_qwen35"
 )
 
 usage() {
@@ -341,6 +346,7 @@ Coverage
   Qwen-AgentWorld 35B-A3B   4-bit, 8-bit
   KAT-Coder-V2.5-Dev 35B-A3B 4-bit, 8-bit
   Qwen 3.5 2B / 4B / 9B     4-bit, 8-bit (CPU models)
+  Qwen3.8-27B (dense)       4-bit, 8-bit
 
 Sources
 
@@ -356,11 +362,12 @@ Sources
                       `<name> both` installs 4-bit and 8-bit for the cost of
                       one fetch; one width alone already converts both and
                       keeps the other snapshot for a later run.
-  convert_qwen35      tools/prepare_qwen35.py --size {2b,4b,9b}, then
+  convert_qwen35      tools/prepare_qwen35.py --size {2b,4b,9b,27b}, then
                       TinyTitanRepack --input-snapshot. One fetch yields both
                       widths. These are the dense models, and the only ones
                       the CPU engine runs; the 9B is the vision-language
-                      build, converted text-only like the others.
+                      build, converted text-only like the others. The 27B
+                      is Qwen3.8-27B (same architecture, a 55.6 GB fetch).
                       tools/repack_dense.sh re-runs the repack and the
                       equivalence check against a retained snapshot.
   convert             tools/prepare_qwen38.py, one 360 GB fetch per width.
@@ -655,6 +662,7 @@ install_one() {
           qwen35-2b) size_key=2b; model_id="qwen3.5-2b" ;;
           qwen35-4b) size_key=4b; model_id="qwen3.5-4b" ;;
           qwen35-9b) size_key=9b; model_id="qwen3.5-9b" ;;
+          qwen38-27b) size_key=27b; model_id="qwen3.8-27b" ;;
           *) echo "unknown Qwen 3.5 size: $preset" >&2; return 2 ;;
         esac
         [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }

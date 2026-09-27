@@ -169,6 +169,27 @@ final class PLEBlock {
             history * rowBytes)
     }
 
+    /// Bytes of the carried convolution window: the `history` rows the next
+    /// row convolves over.
+    var windowBytes: Int { history * hcDim * MemoryLayout<Float16>.stride }
+
+    /// The carried window, for an inference-state snapshot. Read only after
+    /// the command buffers that advanced it have completed.
+    func appendWindow(to payload: inout Data) {
+        payload.append(
+            xpad[xpadIndex].contents().assumingMemoryBound(to: UInt8.self), count: windowBytes)
+    }
+
+    /// Replaces the carried window with a snapshot's.
+    func restoreWindow(from bytes: UnsafeRawBufferPointer, offset: inout Int) throws {
+        guard offset + windowBytes <= bytes.count, let base = bytes.baseAddress else {
+            throw InferenceStateSnapshotError.invalidLayout
+        }
+        resetState()
+        memcpy(xpad[0].contents(), base.advanced(by: offset), windowBytes)
+        offset += windowBytes
+    }
+
     /// Clears the carried convolution history. Call between completions: a
     /// state left over from a previous prompt would leak that prompt's
     /// n-grams into the first tokens of the next one.

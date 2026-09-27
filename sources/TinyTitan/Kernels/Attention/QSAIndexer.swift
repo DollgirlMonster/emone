@@ -169,6 +169,65 @@ final class QSAIndexer {
         pooled.removeAll()
     }
 
+    // MARK: - Snapshot
+
+    /// Layers holding state, in payload order.
+    var snapshotLayers: [Int] { rawKeys.keys.sorted() }
+
+    /// Per layer, in `snapshotLayers` order: the raw keys of positions
+    /// `0..<position`, then the pooled blocks those positions touch (a partial
+    /// tail block included). Everything past them is written before it is
+    /// read, exactly as after `reset()`.
+    func snapshotSegmentLengths(position: Int) -> [Int] {
+        let f16 = MemoryLayout<Float16>.stride
+        let blocks = (position + compressRatio - 1) / compressRatio
+        return snapshotLayers.flatMap { _ in
+            [position * headDim * f16, blocks * headDim * f16]
+        }
+    }
+
+    /// Callers read only after the command buffers that wrote these keys have
+    /// completed, as for the K/V cache.
+    func appendSnapshotPayload(to payload: inout Data, position: Int) {
+        let lengths = snapshotSegmentLengths(position: position)
+        for (i, layer) in snapshotLayers.enumerated() {
+            guard let raw = rawKeys[layer], let pool = pooled[layer] else { continue }
+            payload.append(
+                raw.contents().assumingMemoryBound(to: UInt8.self), count: lengths[2 * i])
+            payload.append(
+                pool.contents().assumingMemoryBound(to: UInt8.self), count: lengths[2 * i + 1])
+        }
+    }
+
+    /// Replaces all indexer state with a snapshot's. Throws on a layout that
+    /// does not fit this indexer; the caller resets the runner on any throw.
+    func restoreSnapshot(
+        layers: [Int], segmentLengths: [Int], position: Int,
+        bytes: UnsafeRawBufferPointer, offset: inout Int
+    ) throws {
+        guard position <= capacity else {
+            throw InferenceStateSnapshotError.invalidPosition(position)
+        }
+        let f16 = MemoryLayout<Float16>.stride
+        let blocks = (position + compressRatio - 1) / compressRatio
+        let expected = layers.flatMap { _ in [position * headDim * f16, blocks * headDim * f16] }
+        guard segmentLengths == expected else {
+            throw InferenceStateSnapshotError.invalidLayout
+        }
+        reset()
+        for (i, layer) in layers.enumerated() {
+            let buffers = try layerBuffers(layer)
+            for (segment, destination) in [(2 * i, buffers.raw), (2 * i + 1, buffers.pooled)] {
+                let length = segmentLengths[segment]
+                guard offset + length <= bytes.count, length <= destination.length,
+                    let base = bytes.baseAddress
+                else { throw InferenceStateSnapshotError.invalidLayout }
+                memcpy(destination.contents(), base.advanced(by: offset), length)
+                offset += length
+            }
+        }
+    }
+
     private func layerBuffers(_ layer: Int) throws -> (raw: MTLBuffer, pooled: MTLBuffer) {
         if let raw = rawKeys[layer], let pool = pooled[layer] {
             return (raw, pool)

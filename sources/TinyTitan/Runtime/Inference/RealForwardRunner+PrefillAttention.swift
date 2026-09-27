@@ -353,8 +353,13 @@ extension RealForwardRunner {
                 ringCapacity > 0 && startPosition + t > ringCapacity
                 ? UInt32(ringCapacity)
                 : 0
-            try prefillAttention.encodeCausal(
+            // Row tiles, each its own command buffer, so a deep chunk cannot
+            // hold the GPU long enough for macOS to kill it (see
+            // PrefillAttention.causalTileRows). Exact; a chunk of up to 4,096
+            // rows is still one dispatch.
+            cb = try prefillAttention.encodeCausalTiled(
                 commandBuffer: cb,
+                queue: ctx.queue,
                 q: attnQ,
                 k: keyView.buffer, kOffset: keyView.offset,
                 v: valueView.buffer, vOffset: valueView.offset,
