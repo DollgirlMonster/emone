@@ -132,7 +132,6 @@ struct ServerPromptCache: Sendable {
         var best: (index: Int, effective: [Int32], cached: Int)?
         for (index, entry) in entries.enumerated() {
             guard entry.domain == domain,
-                entry.tools == request.tools,
                 entry.kvPosition == entry.kvBackedTokenIDs.count,
                 entry.kvPosition > 0,
                 entry.uncommittedBoundaryTokenIDs.count == 1,
@@ -178,8 +177,15 @@ struct ServerPromptCache: Sendable {
             return (renderedPromptIDs, entry.kvPosition)
         }
 
+        // Past this point the match is by message shape, and the bridge is
+        // rendered from the entry's messages with the request's tools, so
+        // the tool list has to be the one the entry was rendered with. The
+        // direct hit above needs no such check: the rendered tokens are the
+        // comparison, tool definitions included, so a request whose tool
+        // list differs but renders the same prefix still reuses it.
         let inputCount = entry.inputMessages.count
-        guard request.messages.count > inputCount + 1,
+        guard entry.tools == request.tools,
+            request.messages.count > inputCount + 1,
             request.messages.prefix(inputCount)
                 .elementsEqual(entry.inputMessages),
             assistantMatches(

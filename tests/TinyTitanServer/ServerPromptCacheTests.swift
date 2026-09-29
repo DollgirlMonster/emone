@@ -241,6 +241,63 @@ struct ServerPromptCacheTests {
                     cachedPromptTokens: prompt.count))
     }
 
+    /// A direct prefix hit is decided by the rendered tokens, which already
+    /// carry the tool definitions, so a request whose tool list differs from
+    /// the entry's still reuses it when its render begins with the entry's
+    /// KV-backed tokens. A message-shaped continuation, whose bridge is
+    /// rendered with the request's tools, still needs the same list.
+    @Test func directPrefixHitIgnoresTheToolListButContinuationsDoNot() async throws {
+        let tokenizer = try await GFTokenizer.load(from: TokenizerFixture.folder())
+        let initial = request(messages: [
+            GFTokenizer.Message(role: .user, content: "first")
+        ])
+        let prompt = tokenizer.encode(
+            try tokenizer.applyChatTemplate(initial.messages),
+            addBOS: false)
+        let kvBacked = prompt + tokenizer.encode("answer", addBOS: false)
+        var cache = ServerPromptCache()
+        let publication = cache.publish(
+            domain: domain,
+            request: initial,
+            content: "answer",
+            calls: [],
+            result: rawResult(
+                prompt: prompt,
+                kvBacked: kvBacked,
+                boundary: tokenizer.endOfTurnID,
+                reason: .endOfTurn))
+        let entry = try #require(publication)
+        let tool = GFTokenizer.FunctionDefinition(
+            name: "skill_tool", description: "d", parameters: .object([:]))
+        let messages =
+            initial.messages + [
+                GFTokenizer.Message(role: .assistant, content: "answer"),
+                GFTokenizer.Message(role: .user, content: "second"),
+            ]
+        let extended = kvBacked + tokenizer.encode("more", addBOS: false)
+
+        #expect(
+            cache.match(
+                domain: domain,
+                request: request(messages: messages, tools: [tool]),
+                renderedPromptIDs: extended,
+                tokenizer: tokenizer)
+                == .hit(
+                    entryID: entry.entry.id,
+                    effectivePromptIDs: extended,
+                    cachedPromptTokens: kvBacked.count))
+
+        let rendered = tokenizer.encode(
+            try tokenizer.applyChatTemplate(messages),
+            addBOS: false)
+        #expect(
+            cache.match(
+                domain: domain,
+                request: request(messages: messages, tools: [tool]),
+                renderedPromptIDs: rendered,
+                tokenizer: tokenizer) == .miss)
+    }
+
     /// Regression: the cache keys on the post-strip view of a request, so a
     /// "<model>-fast" continuation re-renders its tail through CLIStrip too.
     /// Keying on the raw request instead produced a bridge that still carried

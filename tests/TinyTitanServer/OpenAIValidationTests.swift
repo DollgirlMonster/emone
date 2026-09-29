@@ -378,7 +378,7 @@ struct ServerArgumentTests {
         #expect(arguments.maxContext == 262_144)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .multiPrefix)
-        #expect(arguments.promptCacheMaximumEntries == 4)
+        #expect(arguments.promptCacheMaximumEntries == 16)
         #expect(arguments.promptCacheMemoryMiB == 256)
         #expect(arguments.promptCacheDiskDirectory == nil)
         #expect(arguments.promptCacheDiskMiB == 8_192)

@@ -492,7 +492,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         maxContext: Int,
         slots: Int = 1,
         promptCacheMode: ServerPromptCacheMode = .multiPrefix,
-        promptCacheMaximumEntries: Int = 4,
+        promptCacheMaximumEntries: Int = 16,
         promptCacheMemoryLimitBytes: Int = 256 * 1_048_576,
         promptCacheDiskDirectory: URL? = nil,
         promptCacheDiskLimitBytes: Int = 8_192 * 1_048_576,

@@ -147,7 +147,7 @@ public struct ServerArguments: Equatable, Sendable {
           --prompt-cache-mode <off|single-prefix|multi-prefix>
                                  Prompt KV reuse mode (default multi-prefix).
           --prompt-cache-entries <count>
-                                 Maximum retained prefixes, 1...64 (default 4).
+                                 Maximum retained prefixes, 1...64 (default 16).
           --prompt-cache-memory-mib <MiB>
                                  RAM snapshot budget, 0...4096 (default 256).
           --prompt-cache-disk <dir>
@@ -241,7 +241,11 @@ public struct ServerArguments: Equatable, Sendable {
         // surprise on a default launch.
         var maxConcurrentSequences = 1
         var promptCacheMode: ServerPromptCacheMode = .multiPrefix
-        var promptCacheMaximumEntries = 4
+        // Counted, not sized: the byte budgets below bound what the entries
+        // hold. Four let an idle client's periodic requests (a heartbeat
+        // every few minutes, each a new prefix) push a conversation's entry
+        // out within twenty minutes; sixteen keeps it through hours of them.
+        var promptCacheMaximumEntries = 16
         var promptCacheMemoryMiB = 256
         var promptCacheDiskDirectory: String?
         var promptCacheDiskMiB = 8_192

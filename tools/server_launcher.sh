@@ -82,6 +82,13 @@
 #   --prompt-cache <multi-prefix|off>  prompt-state reuse (default multi-prefix,
 #              a 256 MiB cache). `off` is for the cache A/B harnesses, which
 #              have to be able to ask for the arm they measure.
+#   --disk-cache-gib <n>  add an SSD tier of n GiB to the prompt cache, under
+#              <checkout>/.prompt-cache/launcher (default 0: RAM only, the
+#              setup every published number was taken with). One long prompt's
+#              snapshot is larger than the 256 MiB RAM budget, so without it a
+#              conversation keeps its prefix only while its KV is live, and
+#              token-prefix (frontier) checkpoints are off. tools/serve.sh
+#              turns it on by default.
 #   --mtp-model <dir>   attach a native speculative draft head. GPU only (the
 #              draft shares the target's embedding and head), and not a catalog
 #              entry, because a sidecar has no weights for the catalog to
@@ -169,7 +176,7 @@ if [[ "${TINYTITAN_LAUNCHER_ASSUME_TTY:-0}" == "1" ]]; then INTERACTIVE=1; fi
 
 CLIENT=""; MODE=""; MODEL_ARG=""; BITS=""; ANSWERS=""; THINKING_ARG=""
 RAM_ARG=""; CONTEXT_ARG=""; KV_ARG=""; YARN=0; PORT_ARG=""; MEMORY=0; ENGINE_ARG=""
-CACHE_ARG=""; MTP_MODEL_ARG=""; MTP_MEMORY_ARG=""; CONCURRENCY_ARG=""
+CACHE_ARG=""; DISK_CACHE_GIB=0; MTP_MODEL_ARG=""; MTP_MEMORY_ARG=""; CONCURRENCY_ARG=""
 # --web: after the server is up, hand the terminal over to TinyTitan's own
 # DeepSeek Harness, which opens a prompt box in the default browser. It is a
 # mode rather than a `--client` entry on purpose: the client list in
@@ -219,6 +226,7 @@ while [[ $# -gt 0 ]]; do
     # launcher has to be able to turn it off; `multi-prefix` (the default) is
     # the 256 MiB cache every published number was taken with.
     --prompt-cache) CACHE_ARG="${2:?--prompt-cache needs multi-prefix or off}"; shift 2 ;;
+    --disk-cache-gib) DISK_CACHE_GIB="${2:?--disk-cache-gib needs a whole number of GiB}"; shift 2 ;;
     # The native speculative draft head. It is not a catalog entry (a sidecar
     # has no weights of its own for the catalog to describe), and it is the
     # only way to reach the speculative path, so a harness that measures MTP
@@ -1056,6 +1064,17 @@ case "$CACHE_ARG" in
   *) echo "unknown --prompt-cache: $CACHE_ARG (multi-prefix or off)" >&2; exit 2 ;;
 esac
 gpu_runtime=(--prompt-cache-mode "$prompt_cache_mode" --prompt-cache-memory-mib "$prompt_cache_mib" --kv-bits "$kv_bits")
+case "$DISK_CACHE_GIB" in
+  ""|*[!0-9]*) echo "--disk-cache-gib takes a whole number of GiB, not $DISK_CACHE_GIB" >&2; exit 2 ;;
+esac
+# One directory for every catalog model: an entry is keyed by its model and
+# runtime, and a load reads back only its own.
+disk_cache_note=""
+if (( 10#$DISK_CACHE_GIB > 0 )) && [[ "$prompt_cache_mode" != "off" ]]; then
+  gpu_runtime+=(--prompt-cache-disk "$BASE_DIR/.prompt-cache/launcher"
+    --prompt-cache-disk-mib "$(( 10#$DISK_CACHE_GIB * 1024 ))")
+  disk_cache_note=" + SSD ${DISK_CACHE_GIB} GiB"
+fi
 if [[ -n "$max_context" ]]; then
   gpu_runtime+=(--max-context "$max_context" --rope-scaling "$rope_scaling")
 elif [[ "$rope_scaling" == "none" ]]; then
@@ -1103,7 +1122,7 @@ else
   # The cache mode in force, not the one asked for: above one slot the server
   # switches the session-wide cache off, and a summary that said "multi-prefix"
   # while the server ran `prompt_cache=off` would be a misreport.
-  cache_note="$prompt_cache_mode"
+  cache_note="$prompt_cache_mode$disk_cache_note"
   if (( concurrency > 1 )); then cache_note="off (above 1 at once)"; fi
   runtime_note="context ${max_context:-262144} | KV ${kv_bits}-bit | cache ${cache_note} | MTP ${mtp_note}"
   if (( concurrency > 1 )); then
