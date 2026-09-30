@@ -61,9 +61,14 @@ import TinyTitan
         ])
         #expect(larger.prefillChunk == .fixed(16_384))
 
-        #expect(throws: ArgsError.invalidValue(flag: "--prefill-chunk", value: "32768")) {
+        let largest = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi", "--prefill-chunk", "32768",
+        ])
+        #expect(largest.prefillChunk == .fixed(32_768))
+
+        #expect(throws: ArgsError.invalidValue(flag: "--prefill-chunk", value: "65536")) {
             _ = try Args.parse([
-                "--model", "m.gturbo", "--prompt", "hi", "--prefill-chunk", "32768",
+                "--model", "m.gturbo", "--prompt", "hi", "--prefill-chunk", "65536",
             ])
         }
     }
@@ -215,7 +220,7 @@ import TinyTitan
             "--model", "--prompt", "--messages-file", "--max-new", "--max-context",
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
             "--presence-penalty",
-            "--seed", "--stop", "--quiet", "--help",
+            "--seed", "--stop", "--quiet", "--help", "--ignore-eos",
             "--rdadvise", "--expert-cache-slots", "--prefill-chunk", "--concise",
             "--kv-bits", "--rope-scaling", "--thinking", "--reasoning-effort",
             "--score", "--score-out",
@@ -257,5 +262,12 @@ import TinyTitan
                 "--messages-file", "chat.json",
             ])
         }
+    }
+
+    @Test func ignoreEOSIsOffByDefaultAndParses() throws {
+        #expect(!(try Args.parse(["--model", "m.gturbo", "--prompt", "hi"])).ignoreEOS)
+        let on = try Args.parse(["--model", "m.gturbo", "--ignore-eos", "--prompt", "hi"])
+        #expect(on.ignoreEOS)
+        #expect(on.prompt == "hi")
     }
 }

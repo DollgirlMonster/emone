@@ -50,7 +50,7 @@ import Testing
         #expect(q38.sampling.temperature == 1.0 && q38.sampling.topP == 0.95)
         #expect(!q38.hcFused && !q38.qsaGPUSelect)
         // Prefill, spike 10 and its surprisal A/B (docs/m1-prefill-spike.md).
-        #expect(q38.prefillChunkTokens == 16_384)
+        #expect(q38.prefillChunkTokens == 32_768)
         #expect(q38.prefillWideMPP && q38.prefillRoutedMPP)
         // Not carried to 8-bit: no surprisal check has seen those weights.
         #expect(q38b.prefillChunkTokens == 4_096)

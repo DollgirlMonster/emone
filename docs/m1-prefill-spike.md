@@ -486,3 +486,20 @@ Launch configuration (108 tok/s prefill on the ~17K prompt):
 
     TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 \
     TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1 ... --prefill-chunk 16384
+
+## Spike 11 (2026-09-30, three rounds, 16,931-token prompt): 32,768-token chunks
+
+`RuntimeConfiguration.allowedPrefillChunkTokens` and
+`PrefillRuntimeConfig.maxChunkTokens` now reach 32,768. At 16,384 this prompt
+ran as 16,384 + a 547-token tail, and the tail's routed sweep cost ~13 s for 3%
+of the tokens (the expert fetch is set by the experts a chunk touches, not its
+token count). Arm `c32768` against the spike-10 launch configuration:
+
+| arm | prefill s (r1, r2, r3) | tok/s | decode tok/s | routed phase s | output |
+| --- | --- | ---: | --- | --- | --- |
+| base (16,384) | 159.9, 155.7, 154.7 | 106-110 | 4.40, 2.75*, 4.22 | 48.9, 48.1, 47.6 | reference |
+| c32768 | 143.7, 151.2, 142.4 | 112-119 | 3.69, 4.26, 4.31 | 35.8, 39.8, 35.3 | same as base |
+
+\* one expert-I/O stall (20.5 s of `expert io await` against ~9 s in every other
+run). Prefill -7.0%, dense phase unchanged (~98 s), RSS +0.2 GiB, no swap. It is
+now Qwen3.8 4-bit's profile chunk; a context over 131,072 caps it to 16,384.

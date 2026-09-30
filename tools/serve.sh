@@ -121,6 +121,13 @@ $busy"
 swift build -c release --product TinyTitanServer >&2
 BIN_DIR="$(swift build -c release --show-bin-path)"
 mkdir -p "$cache_dir"
+# Prefix-reuse measurement: hashes only, one line per request, read by
+# benchmark/prefix_log_report.py. Set TINYTITAN_PREFIX_LOG= (empty) to turn it off.
+export TINYTITAN_PREFIX_LOG="${TINYTITAN_PREFIX_LOG-$CACHE_ROOT/prefix-log/${name%.gturbo}.jsonl}"
+if [ -n "$TINYTITAN_PREFIX_LOG" ]; then
+  mkdir -p "$(dirname "$TINYTITAN_PREFIX_LOG")"
+  echo "serve: prefix log $TINYTITAN_PREFIX_LOG" >&2
+fi
 
 echo "serve: $name on http://127.0.0.1:$PORT (idle unload: ${IDLE}s, prompt cache: $cache_dir)" >&2
 exec "$BIN_DIR/TinyTitanServer" ${server_args[@]+"${server_args[@]}"} ${EXTRA[@]+"${EXTRA[@]}"}

@@ -186,7 +186,7 @@ public struct PrefillRuntimeConfig: Sendable, Equatable {
     /// long prompt prefill. Scratch and KV-ring allocations are sized from the
     /// configured chunk, so the larger ceiling does not change memory use for
     /// callers that retain a smaller setting.
-    public static let maxChunkTokens = 16_384
+    public static let maxChunkTokens = 32_768
 
     public let mode: Mode
     public let chunkTokens: Int

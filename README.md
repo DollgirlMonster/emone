@@ -16,23 +16,26 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 | + 8,192-token chunks, parallel host key selection | 297-301 | 57 | identical |
 | + remaining scalar GEMMs and the shared expert on the MPP tensor ops | 246-251 | 68 | rounding |
 | + routed-expert tiles as grouped MPP GEMMs, run concurrently | 213-215 | 79 | rounding |
-| + QSA indexer and QSA attention on the simdgroup matrix units, 16,384-token chunks | **156** | **108** | rounding |
+| + QSA indexer and QSA attention on the simdgroup matrix units, 16,384-token chunks | 156 | 108 | rounding |
+| + 32,768-token chunks: this prompt in one chunk, no 547-token tail sweep (-7.0%) | **142-151** | **115** | identical |
 
-About **3.1x** faster than the upstream engine; 2.8x against the first
-measured baseline. The steps that change rounding passed a paired surprisal
+About **3.3x** faster than the upstream engine; 3.0x against the first
+measured baseline. Decode is unchanged by the 32K chunk (median 4.22 -> 4.26
+tok/s over three interleaved rounds). The steps that change rounding passed a paired surprisal
 test against the switch-free engine: +0.011 nats per token over 512
 teacher-forced tokens, t = +0.92, which is no measurable change. The full
 record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
 
 - **Where the settings live.** The two QSA matrix-unit kernels are on by
-  default, and only Qwen3.8 uses QSA. The MPP switches and the 16K chunk are
+  default, and only Qwen3.8 uses QSA. The MPP switches and the 32K chunk are
   set in Qwen3.8 4-bit's `ModelProfile` row, so no other model's output
   changes. `TINYTITAN_PREFILL_MPP_WIDE`, `TINYTITAN_PREFILL_ROUTED_MPP`,
   `TINYTITAN_QSA_SCORE_MMA` and `TINYTITAN_PREFILL_QSA_MMA` (each `0` or `1`)
   override them. The profile's chunk is lowered to what a YaRN context allows.
-- **Prefill chunks of 8,192 and 16,384 tokens are allowed.** Each chunk
+- **Prefill chunks of 8,192, 16,384 and 32,768 tokens are allowed.** Each chunk
   streams nearly the whole routed-expert corpus, so the number of chunks is
-  the cost.
+  the cost. A 32,768-token chunk fits a context up to 131,072 tokens; a larger
+  context caps the profile's chunk back to 16,384.
 - **`tools/serve.sh <install>` is a one-line launcher** for an install
   anywhere, including an external drive. It loads the model on the first
   request, releases it after 15 idle minutes, and keeps the prefix cache on

@@ -44,6 +44,37 @@ struct FrontierTracker: Equatable {
         }
     }
 
+    /// Recent renders that were prefilled verbatim -- new conversations, and
+    /// side requests -- as opposed to message-shaped continuations. Bounded,
+    /// newest last, so one side call (a title, a classifier) cannot evict the
+    /// conversation start it would otherwise be compared against.
+    private(set) var recentVerbatimRenders: [[Int32]] = []
+    static let recentVerbatimLimit = 4
+
+    /// The longest prefix `render` shares with a recent verbatim render: the
+    /// part of a new conversation proven to repeat across conversations. It
+    /// stops wherever the client's first turn first varies -- a date inside the
+    /// system prompt, or past it through an AGENTS.md the client inlines -- so
+    /// it is where a cross-conversation checkpoint belongs, which the end of
+    /// the system block is not when the block itself varies.
+    func provenSharedPrefix(_ render: [Int32]) -> Int {
+        recentVerbatimRenders.map { commonPrefixLength($0, render) }.max() ?? 0
+    }
+
+    mutating func rememberVerbatimRender(_ render: [Int32]) {
+        recentVerbatimRenders.append(render)
+        if recentVerbatimRenders.count > Self.recentVerbatimLimit {
+            recentVerbatimRenders.removeFirst()
+        }
+    }
+
+    /// Where a verbatim prefill should take its unaligned anchor: the prefix
+    /// proven shared with a recent conversation when there is a useful one,
+    /// else the end of the system block (the first conversation's best guess).
+    static func anchor(proven: Int, systemBlockEnd: Int?) -> Int? {
+        proven >= anchorMinimumGain ? proven : systemBlockEnd
+    }
+
     /// The chunk-aligned positions this prefill should checkpoint, deepest
     /// first. Each one is on the frontier (a real shared prefix that long), a
     /// whole number of chunks past `resumeFrom`, strictly inside the render,
@@ -58,14 +89,42 @@ struct FrontierTracker: Equatable {
     /// Coverage is not lost for long: when a later render diverges at M, the
     /// frontier shrinks to M and the deepest boundary under M is the first
     /// rung of that request's own ladder.
-    func captureTargets(render: [Int32], resumeFrom: Int, held: Set<Int>) -> [Int] {
+    ///
+    /// `anchor` is where the render's leading system block ends -- the prefix
+    /// every new conversation from the same client shares, and so the one
+    /// checkpoint a first turn most wants. It is taken even though it is not
+    /// chunk-aligned, which costs this prefill one extra partial chunk pass:
+    /// on a model with 16K chunks a whole agent system prompt fits inside the
+    /// first chunk, so without it no checkpoint could ever cover that prompt.
+    /// It is skipped when it is already held, or when an aligned boundary sits
+    /// within `anchorMinimumGain` tokens under it (small chunks already cover
+    /// it). Ladder rungs past the anchor then count chunks from the anchor,
+    /// since the prefill resumes from there.
+    func captureTargets(
+        render: [Int32], resumeFrom: Int, held: Set<Int>, anchor: Int? = nil
+    ) -> [Int] {
         guard chunkTokens > 0 else { return [] }
         let shared = min(commonPrefixLength(frontier, render), render.count - 1)
-        guard shared > resumeFrom else { return [] }
+        if let anchor, anchor > resumeFrom, anchor < render.count, !held.contains(anchor),
+            (anchor - resumeFrom) % chunkTokens >= Self.anchorMinimumGain
+        {
+            return ladder(from: anchor, to: shared, held: held) + [anchor]
+                + ladder(from: resumeFrom, to: min(shared, anchor - 1), held: held)
+        }
+        return ladder(from: resumeFrom, to: shared, held: held)
+    }
+
+    /// Smallest distance past the deepest aligned boundary for which an
+    /// unaligned anchor checkpoint is worth its extra prefill pass.
+    static let anchorMinimumGain = 1_024
+
+    /// Halving ladder of whole-chunk positions past `start`, up to `limit`.
+    private func ladder(from start: Int, to limit: Int, held: Set<Int>) -> [Int] {
+        guard limit > start else { return [] }
         var targets: [Int] = []
-        var chunks = (shared - resumeFrom) / chunkTokens
+        var chunks = (limit - start) / chunkTokens
         while chunks > 0 {
-            let position = resumeFrom + chunks * chunkTokens
+            let position = start + chunks * chunkTokens
             if !held.contains(position) { targets.append(position) }
             chunks /= 2
         }

@@ -190,8 +190,14 @@ public struct ModelProfile: Sendable, Equatable {
             // 512 teacher-forced tokens: +0.011 nats, t +0.92 (no measurable
             // change). The front ends cap the chunk to what the context allows
             // (`RuntimeConfiguration.largestPrefillChunk(forContext:)`).
+            // 2026-09-30, same machine: chunk 32,768 puts that prompt in one
+            // chunk instead of 16,384 + a 547-token tail whose expert sweep
+            // cost ~13 s. Three interleaved rounds: prefill 154.7-159.9 s ->
+            // 142.4-151.2 s (-7.0%), output byte-identical, decode unchanged
+            // (median 4.22 -> 4.26 tok/s), RSS +0.2 GiB, no swap. It fits a
+            // context up to 131,072; a larger one is capped back to 16,384.
             Key("qwen3.8-flash-next", 4): (
-                12 << 30, 1, 16_384,
+                12 << 30, 1, 32_768,
                 GenerationDefaults.qwen38Thinking,
                 true, true, false, false, true, true, true
             ),

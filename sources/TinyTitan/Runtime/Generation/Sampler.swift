@@ -101,6 +101,10 @@ public struct GenerationConfig: Sendable {
     public var seed: UInt64?  // nil = nondeterministic
     public var stopStrings: [String] = []
     public var extraStopTokens: Set<Int32> = []
+    /// Benchmarks only (the CLI's `--ignore-eos`): keep generating through stop
+    /// tokens so a decode measurement always covers `maxNewTokens`, instead of
+    /// however long the model's answer happens to be. Stop strings still apply.
+    public var ignoreStopTokens: Bool = false
     /// A grammar the sampled tokens must stay inside, when the request asked
     /// for structured output. Nil -- the only value every caller but the
     /// server's JSON modes uses -- means the whole vocabulary is available and

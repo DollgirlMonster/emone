@@ -70,6 +70,31 @@ same prefix are never rewritten.
 `prompt_cache frontier_stored tokens=N state_bytes=B`, and
 `frontier_restore_failed` / `frontier disk_write_failed` on stderr.
 
+### The system-prompt anchor
+
+Aligned rungs alone never cover a prompt shorter than one chunk, and on
+Qwen3.8 4-bit the chunk is 16,384 tokens: an agent's whole system prompt
+(about 9K tokens for October) fits inside the first one, so every new
+conversation re-prefilled it from zero. So a first turn also checkpoints the
+end of the render's leading system block -- found by rendering that block
+plus a stand-in user query and taking what it shares with the full render --
+even though it is not chunk-aligned. It costs that prefill one extra partial
+chunk pass, and is skipped when it is already held or lies within 1,024
+tokens of an aligned rung. Rungs past it count chunks from it.
+
+Measured on an M1 Max, 16K chunks, October's 9.2K-token prompt: the first
+conversation 87-91 s -> 94.7 s; the next new conversation 87-101 s -> 5.7 s
+(`tier=frontier-ssd cached_tokens=9174`).
+
+### A reasoning switch bypasses the cache
+
+A request at another reasoning level than the server loaded (a client's side
+call with `enable_thinking: false`, say) used to clear the whole message-shaped
+cache, so the main conversation's next turn re-prefilled everything. It now
+bypasses it: it neither matches nor publishes, and in multi-prefix mode the
+other entries stay and restore from their snapshots. Single-prefix, which has
+only the live KV, still clears.
+
 ## 2. `--prompt-cache-memory-ttl-seconds <n>`
 
 Releases a RAM snapshot after `n` idle seconds when it also has an SSD copy

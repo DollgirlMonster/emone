@@ -103,6 +103,7 @@ public func runRawCompletion(
     start: RawCompletionStart = .reset,
     slot: Int = 0,
     captureBoundaries: [Int] = [],
+    captureAnchor: Int? = nil,
     captureMaxBytes: Int? = nil,
     onCapture: ((Int, InferenceStateSnapshot) -> Void)? = nil,
     shouldStop: () -> Bool = { false },
@@ -227,11 +228,14 @@ public func runRawCompletion(
         // sits a whole number of chunks past the current position, so it lands
         // on a span boundary `PrefillChunkPlanner` would have cut anyway: the
         // spans run are the same ones, in the same order, as a single call.
+        // The one exception is `captureAnchor`, which the caller asks for
+        // knowing it costs an extra partial chunk (see `capturePositions`).
         // Only a slot-0 `RealForwardRunner` can snapshot its state.
         if let onCapture, slot == 0, let capturing = producer as? RealForwardRunner {
             for boundary in capturePositions(
                 captureBoundaries, from: position,
-                promptCount: promptIds.count, chunkTokens: prefillConfig.chunkTokens)
+                promptCount: promptIds.count, chunkTokens: prefillConfig.chunkTokens,
+                anchor: captureAnchor)
             {
                 // The seed is discarded: the final call below rewrites it.
                 _ = try await chunked.prefillChunked(
@@ -357,7 +361,9 @@ public func runRawCompletion(
             start: tokenizer.toolCallStartID,
             end: tokenizer.toolCallEndID)
 
-        if tokenizer.stopTokenIDs.contains(tokenID) || config.extraStopTokens.contains(tokenID) {
+        if !config.ignoreStopTokens,
+            tokenizer.stopTokenIDs.contains(tokenID) || config.extraStopTokens.contains(tokenID)
+        {
             if tokenID == tokenizer.endOfTurnID {
                 // The stop token says the turn ended, not why: `<|im_end|>`
                 // closes both a prose answer and a tool call. `toolCalls` is
@@ -489,8 +495,9 @@ private func runStreamingMTPCompletion(
                 start: tokenizer.toolCallStartID,
                 end: tokenizer.toolCallEndID)
 
-            if tokenizer.stopTokenIDs.contains(item.token)
-                || config.extraStopTokens.contains(item.token)
+            if !config.ignoreStopTokens,
+                tokenizer.stopTokenIDs.contains(item.token)
+                    || config.extraStopTokens.contains(item.token)
             {
                 // Same classification as the scalar loop above.
                 if item.token == tokenizer.endOfTurnID {
@@ -632,14 +639,27 @@ func validatedToken(_ raw: UInt32, vocab: Int) throws -> Int32 {
 /// The capture boundaries `runRawCompletion` will actually split at, ascending.
 ///
 /// A boundary survives only if it lies strictly inside the uncached range and a
-/// whole number of chunks past `start`, which is what keeps the split prefill
-/// identical to one call. Ascending, so each split extends from where the last
-/// one stopped and every requested boundary is captured, not just the deepest.
+/// whole number of chunks past the previous surviving boundary (or `start`),
+/// which is what keeps the split prefill identical to one call. Ascending, so
+/// each split extends from where the last one stopped and every requested
+/// boundary is captured, not just the deepest.
+///
+/// `anchor`, when it is one of `boundaries`, survives whether aligned or not:
+/// the caller has decided that checkpoint is worth one extra partial chunk
+/// pass. Boundaries past it then count whole chunks from the anchor, because
+/// that is where the next call's spans start.
 func capturePositions(
-    _ boundaries: [Int], from start: Int, promptCount: Int, chunkTokens: Int
+    _ boundaries: [Int], from start: Int, promptCount: Int, chunkTokens: Int,
+    anchor: Int? = nil
 ) -> [Int] {
     guard chunkTokens > 0 else { return [] }
-    return Set(boundaries).sorted().filter {
-        $0 > start && $0 < promptCount && ($0 - start) % chunkTokens == 0
+    var kept: [Int] = []
+    var last = start
+    for boundary in Set(boundaries).sorted() where boundary > start && boundary < promptCount {
+        if boundary == anchor || (boundary - last) % chunkTokens == 0 {
+            kept.append(boundary)
+            last = boundary
+        }
     }
+    return kept
 }

@@ -19,6 +19,36 @@ struct RawCompletionCaptureTests {
         #expect(capturePositions([4], from: 0, promptCount: 16, chunkTokens: 0).isEmpty)
     }
 
+    @Test func anAnchorSurvivesUnalignedAndLaterBoundariesCountFromIt() {
+        // 4096 is aligned from 0 but not from the anchor at 3000, where the
+        // next call starts; 7096 is.
+        #expect(
+            capturePositions(
+                [3_000, 4_096, 7_096], from: 0, promptCount: 20_000, chunkTokens: 4_096,
+                anchor: 3_000) == [3_000, 7_096])
+        // Without the anchor, 3000 is dropped as before.
+        #expect(
+            capturePositions([3_000, 4_096], from: 0, promptCount: 20_000, chunkTokens: 4_096)
+                == [4_096])
+    }
+
+    @Test func anAnchorAddsExactlyOneSplitToTheSpans() {
+        let (chunk, anchor, count) = (4, 7, 30)
+        var spans: [[Int]] = []
+        var position = 0
+        for boundary in capturePositions(
+            [anchor, 15], from: 0, promptCount: count, chunkTokens: chunk, anchor: anchor)
+            + [count]
+        {
+            spans += PrefillChunkPlanner.spans(
+                tokenCount: boundary - position, startPosition: position, chunkTokens: chunk)
+                .map { [$0.startPosition, $0.tokenCount] }
+            position = boundary
+        }
+        // Whole chunks to the anchor, one partial chunk, whole chunks after.
+        #expect(spans == [[0, 4], [4, 3], [7, 4], [11, 4], [15, 4], [19, 4], [23, 4], [27, 3]])
+    }
+
     struct SplitCase: Sendable, CustomTestStringConvertible {
         let start: Int
         let promptCount: Int
