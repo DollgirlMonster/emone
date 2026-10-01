@@ -503,3 +503,20 @@ token count). Arm `c32768` against the spike-10 launch configuration:
 \* one expert-I/O stall (20.5 s of `expert io await` against ~9 s in every other
 run). Prefill -7.0%, dense phase unchanged (~98 s), RSS +0.2 GiB, no swap. It is
 now Qwen3.8 4-bit's profile chunk; a context over 131,072 caps it to 16,384.
+
+## Spike 12 (2026-10-01, three rounds, 256 decoded tokens): a 128-slot cache
+
+Decode, not prefill. `--ignore-eos` (new) makes every run decode the full 256
+tokens; the default prose otherwise ends after 91. Idle machine, swap 3.53 GB
+before and 3.52 GB after.
+
+| arm | decode tok/s (r1, r2, r3) | expert io await s | peak RSS | prefill s |
+| --- | --- | --- | --- | --- |
+| base (12 GiB, 96 slots) | 4.56, 5.48, 5.15 | 22.9, 19.1, 19.8 | 17.5 GiB | 140.8-142.2 |
+| s128 (16 GiB, 128 slots) | 5.73, 5.83, 5.29 | 17.6, 17.7, 18.9 | 21.5 GiB | 140.7-142.0 |
+
++11% mean decode, s128 ahead in every pair (+26%, +6%, +3%), output identical.
+The 24 GiB M3's "a bigger cache is slower" (docs/qwen38-remaining-levers-plan.md)
+was memory pressure; at 64 GB there is none. Qwen3.8 4-bit's profile budget is
+now 16 GiB, and `affordableExpertCacheBudget` (a third of RAM) keeps smaller
+machines where they were.

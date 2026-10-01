@@ -21,7 +21,13 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 
 About **3.3x** faster than the upstream engine; 3.0x against the first
 measured baseline. Decode is unchanged by the 32K chunk (median 4.22 -> 4.26
-tok/s over three interleaved rounds). The steps that change rounding passed a paired surprisal
+tok/s over three interleaved rounds).
+
+**Decode on the same machine:** a 16 GiB expert cache (128 slots, up from 12 GiB
+/ 96) takes 256-token decode from 4.56-5.48 to 5.29-5.83 tok/s (mean **+11%**,
+5.06 -> 5.62) with identical output and no swap, for 4 GiB more resident memory
+(peak 21.5 GiB). The cache is capped at a third of RAM, so a Mac under 48 GB
+keeps the smaller cache. The steps that change rounding passed a paired surprisal
 test against the switch-free engine: +0.011 nats per token over 512
 teacher-forced tokens, t = +0.92, which is no measurable change. The full
 record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
