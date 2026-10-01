@@ -89,8 +89,11 @@ esac
 
 name="$(basename "$MODEL")"
 cache_dir="$CACHE_ROOT/${name%.gturbo}"
+# 16 retained prefixes rather than the server's 4: a snapshot is ~0.5-0.9 GB
+# on disk against a 100 GiB budget, so the count, not the bytes, was what
+# pushed a long conversation's entry out while a second one was running.
 server_args=(--model "$MODEL" --port "$PORT" --prompt-cache-disk "$cache_dir"
-  --prompt-cache-disk-mib "$((DISK_GIB * 1024))")
+  --prompt-cache-disk-mib "$((DISK_GIB * 1024))" --prompt-cache-entries 16)
 if [ "$IDLE" -gt 0 ]; then
   server_args+=(--idle-unload-seconds "$IDLE")
 fi
