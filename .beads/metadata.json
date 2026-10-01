@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "TinyTitan",
+  "project_id": "4120e4a5-234c-4dc5-8b1c-06f29de71367"
+}
