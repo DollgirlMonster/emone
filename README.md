@@ -17,17 +17,24 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 | + remaining scalar GEMMs and the shared expert on the MPP tensor ops | 246-251 | 68 | rounding |
 | + routed-expert tiles as grouped MPP GEMMs, run concurrently | 213-215 | 79 | rounding |
 | + QSA indexer and QSA attention on the simdgroup matrix units, 16,384-token chunks | 156 | 108 | rounding |
-| + 32,768-token chunks: this prompt in one chunk, no 547-token tail sweep (-7.0%) | **142-151** | **115** | identical |
+| + 32,768-token chunks: this prompt in one chunk, no 547-token tail sweep (-7.0%) | **141-151** | **115-120** | identical |
 
-About **3.3x** faster than the upstream engine; 3.0x against the first
-measured baseline. Decode is unchanged by the 32K chunk (median 4.22 -> 4.26
-tok/s over three interleaved rounds).
+**Speed against baseline so far** (same M1 Max, same 16,931-token prompt):
 
-**Decode on the same machine:** a 16 GiB expert cache (128 slots, up from 12 GiB
-/ 96) takes 256-token decode from 4.56-5.48 to 5.29-5.83 tok/s (mean **+11%**,
-5.06 -> 5.62) with identical output and no swap, for 4 GiB more resident memory
-(peak 21.5 GiB). The cache is capped at a third of RAM, so a Mac under 48 GB
-keeps the smaller cache. The steps that change rounding passed a paired surprisal
+| | baseline | now | speedup |
+| --- | ---: | ---: | ---: |
+| Prefill, against the upstream engine (estimated) | ~485 s | 141 s | **~3.4x** |
+| Prefill, against the first measured run | 419-451 s | 140.7-142.2 s | **~3.1x** |
+| Decode, 256 tokens, 12 GiB -> 16 GiB expert cache | 5.06 tok/s | 5.62 tok/s | **+11%** |
+
+The 32K chunk took prefill from 154.7-159.9 s to 140.7-151.2 s (-7.0%) with
+byte-identical output and no change to decode. The 16 GiB cache (128 slots, up
+from 96) costs 4 GiB more resident memory (peak 21.5 GiB, no swap) and does not
+change prefill or output; it is capped at a third of RAM, so a Mac under 48 GB
+keeps the smaller cache. Decode had no measured upstream baseline on this
+machine, so its gain is stated against the previous default only.
+
+The steps that change rounding passed a paired surprisal
 test against the switch-free engine: +0.011 nats per token over 512
 teacher-forced tokens, t = +0.92, which is no measurable change. The full
 record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
