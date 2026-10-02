@@ -108,10 +108,16 @@ struct ServerPromptCache: Sendable {
             kvBackedTokenIDs: result.kvBackedTokenIDs,
             uncommittedBoundaryTokenIDs: result.uncommittedBoundaryTokenIDs,
             kvPosition: result.kvPosition)
+        // An entry this one extends is the same conversation's previous turn:
+        // the new entry serves everything it could, so it goes. Keeping it
+        // cost a slot per turn, and with two conversations interleaved the
+        // short one's turns pushed the long one's only entry out (measured: a
+        // 35,620-token request that shared 34,304 tokens resumed from 5,355).
         var evicted = entries.filter {
             $0.domain == entry.domain
-                && $0.kvBackedTokenIDs == entry.kvBackedTokenIDs
                 && $0.tools == entry.tools
+                && $0.kvBackedTokenIDs.count <= entry.kvBackedTokenIDs.count
+                && entry.kvBackedTokenIDs.starts(with: $0.kvBackedTokenIDs)
         }.map(\.id)
         entries.removeAll { evicted.contains($0.id) }
         entries.append(entry)

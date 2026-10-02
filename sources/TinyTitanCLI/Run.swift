@@ -132,7 +132,7 @@ public func run(
         } else {
             familySampling = profileSampling
         }
-        let config = GenerationConfig(
+        var config = GenerationConfig(
             maxNewTokens: effectiveMaxNew,
             temperature: args.temperatureWasSet
                 ? args.temperature : familySampling.temperature,
@@ -145,6 +145,7 @@ public func run(
             seed: args.seed,
             stopStrings: args.stops,
             extraStopTokens: [])
+        config.ignoreStopTokens = args.ignoreEOS
         // Select the architecture the manifest declares rather than assuming
         // the Qwen3.5-MoE baseline; otherwise a payload of any other family
         // fails on a dimension mismatch instead of loading.

@@ -444,7 +444,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     /// layer at 4,096 tokens on Qwen3.8), so the chunk count sets how many
     /// times the corpus is read. Qwen3.8 4-bit's profile row takes 16K.
     public static let allowedPrefillChunkTokens = [
-        32, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192, 16_384,
+        32, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192, 16_384, 32_768,
     ]
 
     /// A chunk's key selection is indexed `row * visibleKeys + key` in 32 bits

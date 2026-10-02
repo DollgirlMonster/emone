@@ -46,6 +46,8 @@
 #   c8192attn    c8192fast + TINYTITAN_PREFILL_QSA_MMA=1 (QSA attention on the
 #                matrix units: rounding-level change, needs the surprisal A/B)
 #   c16384attn   c8192attn at chunk 16384
+#   c32768       base at chunk 32768: a ~17K prompt in one chunk, so the small
+#                tail chunk (547 tokens, ~18 s, mostly expert fetch) is gone
 # Chunking can change the output (the chunk boundaries move), so c8192/c16384
 # may legitimately differ from base; they are judged on speed and on staying
 # coherent, then on benchmark/quant_perplexity_ab.py before any default moves.
@@ -101,6 +103,7 @@ COOLDOWN=20
 ARMS="base c8192 c16384"
 SKIP_BUILD=0
 GPU_CLOCK=0
+IGNORE_EOS=0
 SKIP_TESTS=0
 FULL_TESTS=0
 DRY_RUN=0
@@ -115,7 +118,7 @@ Options:
   --rounds <n>         interleaved rounds per arm (default 2)
   --arms "<list>"      any of: base c8192 c16384 c8192qsa c8192wide c8192sg
                        c8192routed c8192widerouted c8192fast c16384fast
-                       c8192attn c16384attn
+                       c8192attn c16384attn c32768
                        wide16k pergqa
                        mppwide gqa wide splitwide all combo
                        coalesce qqmm hcfused qsagpu split
@@ -129,6 +132,9 @@ Options:
   --skip-tests         skip the model-free tests
   --full-tests         run the whole suite instead of the suites this branch touched
   --dry-run            print the plan and the commands, run nothing
+  --ignore-eos         generate through stop tokens, so decode always covers
+                       --max-new (the default prompt is prose the model ends
+                       after ~91 tokens)
   --gpu-clock          sample the GPU clock and residency with powermetrics
                        during every run (asks for your password once) and
                        report GPU gigacycles: busy time x clock, the kernel
@@ -155,6 +161,7 @@ while [ $# -gt 0 ]; do
     --full-tests) FULL_TESTS=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --gpu-clock) GPU_CLOCK=1; shift ;;
+    --ignore-eos) IGNORE_EOS=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
@@ -196,6 +203,7 @@ arm_spec() {
     c16384fast) echo "c16384fast|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1|--prefill-chunk 16384" ;;
     c8192attn) echo "c8192attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 8192" ;;
     c16384attn) echo "c16384attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 16384" ;;
+    c32768) echo "c32768||--prefill-chunk 32768" ;;
     coalesce) echo "coalesce|TINYTITAN_PREFILL_COALESCE=1|" ;;
     qqmm) echo "qqmm|TINYTITAN_PREFILL_Q_QMM=1|" ;;
     hcfused) echo "hcfused|TINYTITAN_HC_FUSED=1|" ;;
@@ -272,7 +280,7 @@ record_machine() {
   echo "model disk  $(diskutil info "$(df "$MODEL" 2>/dev/null | awk 'NR == 2 { print $1 }')" 2>/dev/null \
     | awk -F': *' '/Device Location|Protocol|Solid State/ { gsub(/^ +/, "", $1); printf "%s=%s  ", $1, $2 }')"
   echo "arms        ${arm_list[*]+"${arm_list[*]}"}"
-  echo "rounds      $ROUNDS, prompt ${PROMPT_CHARS} chars, max-new $MAX_NEW, cooldown ${COOLDOWN}s"
+  echo "rounds      $ROUNDS, prompt ${PROMPT_CHARS} chars, max-new $MAX_NEW$([ "$IGNORE_EOS" -eq 1 ] && echo " (ignore-eos)"), cooldown ${COOLDOWN}s"
 }
 if [ "$DRY_RUN" -eq 1 ]; then record_machine; else record_machine | tee "$OUT/machine.txt"; fi
 
@@ -367,8 +375,9 @@ run_arm() {
   local assignment
   for assignment in $env_part; do envs+=("$assignment"); done
   local extra=()
+  if [ "$IGNORE_EOS" -eq 1 ]; then extra+=(--ignore-eos); fi
   # shellcheck disable=SC2206 # arm arguments are simple words
-  if [ -n "$args_part" ]; then extra=($args_part); fi
+  if [ -n "$args_part" ]; then extra+=($args_part); fi
 
   echo
   echo "== round $round, arm $arm =="

@@ -486,3 +486,68 @@ Launch configuration (108 tok/s prefill on the ~17K prompt):
 
     TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 \
     TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1 ... --prefill-chunk 16384
+
+## Spike 11 (2026-09-30, three rounds, 16,931-token prompt): 32,768-token chunks
+
+`RuntimeConfiguration.allowedPrefillChunkTokens` and
+`PrefillRuntimeConfig.maxChunkTokens` now reach 32,768. At 16,384 this prompt
+ran as 16,384 + a 547-token tail, and the tail's routed sweep cost ~13 s for 3%
+of the tokens (the expert fetch is set by the experts a chunk touches, not its
+token count). Arm `c32768` against the spike-10 launch configuration:
+
+| arm | prefill s (r1, r2, r3) | tok/s | decode tok/s | routed phase s | output |
+| --- | --- | ---: | --- | --- | --- |
+| base (16,384) | 159.9, 155.7, 154.7 | 106-110 | 4.40, 2.75*, 4.22 | 48.9, 48.1, 47.6 | reference |
+| c32768 | 143.7, 151.2, 142.4 | 112-119 | 3.69, 4.26, 4.31 | 35.8, 39.8, 35.3 | same as base |
+
+\* one expert-I/O stall (20.5 s of `expert io await` against ~9 s in every other
+run). Prefill -7.0%, dense phase unchanged (~98 s), RSS +0.2 GiB, no swap. It is
+now Qwen3.8 4-bit's profile chunk; a context over 131,072 caps it to 16,384.
+
+## Spike 12 (2026-10-01, three rounds, 256 decoded tokens): a 128-slot cache
+
+Decode, not prefill. `--ignore-eos` (new) makes every run decode the full 256
+tokens; the default prose otherwise ends after 91. Idle machine, swap 3.53 GB
+before and 3.52 GB after.
+
+| arm | decode tok/s (r1, r2, r3) | expert io await s | peak RSS | prefill s |
+| --- | --- | --- | --- | --- |
+| base (12 GiB, 96 slots) | 4.56, 5.48, 5.15 | 22.9, 19.1, 19.8 | 17.5 GiB | 140.8-142.2 |
+| s128 (16 GiB, 128 slots) | 5.73, 5.83, 5.29 | 17.6, 17.7, 18.9 | 21.5 GiB | 140.7-142.0 |
+
++11% mean decode, s128 ahead in every pair (+26%, +6%, +3%), output identical.
+The 24 GiB M3's "a bigger cache is slower" (docs/qwen38-remaining-levers-plan.md)
+was memory pressure; at 64 GB there is none. Qwen3.8 4-bit's profile budget is
+now 16 GiB, and `affordableExpertCacheBudget` (a third of RAM) keeps smaller
+machines where they were.
+
+## Spike 13 (2026-10-01, two rounds): a chunked Gated-DeltaNet scan, scalar v1 -- slower
+
+The GDN split (`TINYTITAN_PREFILL_SPLIT=1`, one round) put the delta-rule scan
+at ~11.3 s of the ~46 s the 36 GDN layers take (input projection 13.0 s, rest
+of layer 11.3 s, output projection 4.8 s). The 2026 kernels (fla, SGLang,
+llama.cpp) replace the per-token recurrence with 64-row chunks: a parallel
+prep per (head, chunk) builds T = (I + A)^-1, W = T diag(beta Gamma) K,
+Ub = T diag(beta) V and the decayed Q.K^T, then a sequential pass per head
+applies them against the carried state. Implemented as scalar-per-thread
+Metal (`gdn_chunk_prep`, `gdn_chunk_apply`, opt-in `TINYTITAN_GDN_CHUNKED=1`);
+against the sequential kernel on random inputs it agreed to 6e-5 (y, one fp16
+step) and 2e-7 (state).
+
+| arm | prefill s (r1, r2) | `prefill_gdn_router` s | output |
+| --- | --- | --- | --- |
+| base | 146.4, 143.3 | 46.6, 45.3 | reference |
+| gdnchunk | 177.6, 157.0 | 58.7, 58.8 | differs (rounding) |
+
++15.5% prefill: GDN GPU time rose ~13 s, nothing else moved. The scalar form
+leaves the matrix units idle, its apply pass runs 192 threadgroups against the
+sequential kernel's 1,536, and the prep re-reads K once per product. The
+sequential kernel, with each thread's state slice in registers, is a stronger
+baseline than its ~260 GFLOP/s suggests. Not adopted; the code is kept as
+`benchmark/patches/gdn-chunked-scan-scalar-v1.patch` (kernels, wiring, the
+equivalence test, the spike arm), not in the tree.
+
+What would have to change for it to win: the dense steps on `simdgroup_matrix`
+(spike 10 took QSA attention 72 -> 45.5 s and the indexer 17 -> 1.3 s that way
+on this chip) and a state pass split across more threadgroups per head. The
+ceiling is the scan's ~11 s, about 6-7% of prefill.

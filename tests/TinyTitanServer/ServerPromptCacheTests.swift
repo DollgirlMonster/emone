@@ -185,6 +185,23 @@ struct ServerPromptCacheTests {
                     effectivePromptIDs: [1, 2, 3, 4],
                     cachedPromptTokens: 3))
 
+        // The longer entry extends the shorter one, so it superseded it.
+        #expect(long.evictedEntryIDs == [short.entry.id])
+        #expect(cache.entries.map(\.id) == [long.entry.id])
+
+        let otherPublication = cache.publish(
+            domain: domain,
+            request: initial,
+            content: "other",
+            calls: [],
+            result: rawResult(
+                prompt: [8],
+                kvBacked: [8],
+                boundary: tokenizer.endOfTurnID,
+                reason: .endOfTurn))
+        let other = try #require(otherPublication)
+        #expect(other.evictedEntryIDs.isEmpty)
+
         let newestPublication = cache.publish(
             domain: domain,
             request: initial,
@@ -196,8 +213,51 @@ struct ServerPromptCacheTests {
                 boundary: tokenizer.endOfTurnID,
                 reason: .endOfTurn))
         let newest = try #require(newestPublication)
-        #expect(newest.evictedEntryIDs == [short.entry.id])
-        #expect(cache.entries.map(\.id) == [long.entry.id, newest.entry.id])
+        #expect(newest.evictedEntryIDs == [long.entry.id])
+        #expect(cache.entries.map(\.id) == [other.entry.id, newest.entry.id])
+    }
+
+    /// Two conversations interleaved: each turn supersedes its own
+    /// conversation's previous entry, so the short one's turns can no longer
+    /// push the long one's only entry out of a small cache.
+    @Test func interleavedConversationsKeepOneEntryEach() async throws {
+        let tokenizer = try await GFTokenizer.load(from: TokenizerFixture.folder())
+        let initial = request(messages: [
+            GFTokenizer.Message(role: .user, content: "first")
+        ])
+        var cache = ServerPromptCache(maximumEntries: 2)
+        func publish(_ tokens: [Int32]) throws -> ServerPromptCachePublication {
+            let publication = cache.publish(
+                domain: domain,
+                request: initial,
+                content: "x",
+                calls: [],
+                result: rawResult(
+                    prompt: tokens,
+                    kvBacked: tokens,
+                    boundary: tokenizer.endOfTurnID,
+                    reason: .endOfTurn))
+            return try #require(publication)
+        }
+        let long = Array(Int32(1)...Int32(40))
+        let shortBase: [Int32] = [1, 2, 3, 500]
+        let longTurn = try publish(long)
+        var shortTurn = try publish(shortBase)
+        for extra in Int32(600)..<Int32(603) {
+            shortTurn = try publish(shortTurn.entry.kvBackedTokenIDs + [extra])
+        }
+        #expect(Set(cache.entries.map(\.id)) == [longTurn.entry.id, shortTurn.entry.id])
+        let match = cache.match(
+            domain: domain,
+            request: initial,
+            renderedPromptIDs: long + [41],
+            tokenizer: tokenizer)
+        #expect(
+            match
+                == .hit(
+                    entryID: longTurn.entry.id,
+                    effectivePromptIDs: long + [41],
+                    cachedPromptTokens: long.count))
     }
 
     /// An identical-prompt replay of a published entry reports the ENTIRE

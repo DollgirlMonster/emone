@@ -27,6 +27,8 @@ public struct Args: Equatable, Sendable {
     public var presencePenaltyWasSet: Bool = false
     public var seed: UInt64?
     public var stops: [String]
+    /// Benchmarks: generate through stop tokens (`--ignore-eos`).
+    public var ignoreEOS: Bool = false
     public var quiet: Bool
     public var concise: Bool
     public var thinkingMode: ModelThinkingMode
@@ -179,8 +181,10 @@ extension Args {
           --prefill-chunk <n|auto>  Prefill chunk tokens. Larger chunks reduce
                                     routed-expert file sweeps but use more GPU
                                     scratch. Allowed: 32, 64, 128, 256, 512,
-                                    1024, 2048, 4096, 8192, 16384; auto covers
+                                    1024, 2048, 4096, 8192, 16384, 32768; auto covers
                                     the prompt with the smallest allowed chunk.
+          --ignore-eos              Keep generating through stop tokens, so a
+                                    benchmark decode runs the full --max-new count.
           --kv-bits <4|8|16>        KV-cache storage precision (default 8).
           --score <n>               Score instead of generate: prefill all but
                                     the prompt's last n tokens, then report the
@@ -225,6 +229,7 @@ extension Args {
         var presencePenaltyWasSet = false
         var seed: UInt64?
         var stops: [String] = []
+        var ignoreEOS = false
         var quiet = false
         var concise = false
         var thinkingMode: ModelThinkingMode = .off
@@ -243,6 +248,9 @@ extension Args {
             switch flag {
             case "--help":
                 throw ArgsError.helpRequested
+            case "--ignore-eos":
+                ignoreEOS = true
+                index += 1
             case "--quiet":
                 quiet = true
                 index += 1
@@ -418,7 +426,7 @@ extension Args {
                 flag: "--reasoning-effort",
                 value: "\(effort.rawValue) requires --thinking on")
         }
-        return Args(
+        var parsed = Args(
             model: model,
             prompt: prompt,
             messagesFile: messagesFile,
@@ -446,6 +454,8 @@ extension Args {
             ropeScalingMode: ropeScalingMode,
             scoreTokens: scoreTokens,
             scoreOutput: scoreOutput)
+        parsed.ignoreEOS = ignoreEOS
+        return parsed
     }
 
     private static func takeValue(

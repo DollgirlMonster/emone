@@ -190,8 +190,22 @@ public struct ModelProfile: Sendable, Equatable {
             // 512 teacher-forced tokens: +0.011 nats, t +0.92 (no measurable
             // change). The front ends cap the chunk to what the context allows
             // (`RuntimeConfiguration.largestPrefillChunk(forContext:)`).
+            // 2026-09-30, same machine: chunk 32,768 puts that prompt in one
+            // chunk instead of 16,384 + a 547-token tail whose expert sweep
+            // cost ~13 s. Three interleaved rounds: prefill 154.7-159.9 s ->
+            // 142.4-151.2 s (-7.0%), output byte-identical, decode unchanged
+            // (median 4.22 -> 4.26 tok/s), RSS +0.2 GiB, no swap. It fits a
+            // context up to 131,072; a larger one is capped back to 16,384.
+            // 2026-10-01, same machine: 16 GiB (128 slots) against 12 GiB (96).
+            // Three interleaved rounds of 256 decoded tokens (--ignore-eos):
+            // decode 4.56 / 5.48 / 5.15 -> 5.73 / 5.83 / 5.29 tok/s (mean +11%),
+            // expert-read wait 19-23 s -> 18-19 s, output byte-identical, prefill
+            // unchanged, peak RSS 17.5 -> 21.5 GiB, no swap. The 24 GiB M3 found
+            // a bigger cache slower; that was memory pressure, and
+            // `affordableExpertCacheBudget` still caps the cache at a third of
+            // RAM, so only a machine of 48 GB or more gets the full 128 slots.
             Key("qwen3.8-flash-next", 4): (
-                12 << 30, 1, 16_384,
+                16 << 30, 1, 32_768,
                 GenerationDefaults.qwen38Thinking,
                 true, true, false, false, true, true, true
             ),

@@ -1,0 +1,587 @@
+diff --git a/sources/TinyTitan/Kernels/GDN/GDN.swift b/sources/TinyTitan/Kernels/GDN/GDN.swift
+index e887d1f..d5f9986 100644
+--- a/sources/TinyTitan/Kernels/GDN/GDN.swift
++++ b/sources/TinyTitan/Kernels/GDN/GDN.swift
+@@ -23,6 +23,22 @@ final class GDN {
+     private let qkNormPSO: MTLComputePipelineState
+     private let deltaDecodePSO: MTLComputePipelineState
+     private let deltaPrefillPSO: MTLComputePipelineState
++    private let chunkPrepPSO: MTLComputePipelineState
++    private let chunkApplyPSO: MTLComputePipelineState
++    /// Per-window scratch for the chunked scan (W, Ub, P, log-decay per
++    /// (head, chunk)), allocated on first use so a runner that never takes the
++    /// chunked path pays nothing for it.
++    private var chunkScratch: MTLBuffer?
++    private let device: MTLDevice
++    /// Chunks of `chunkRows` rows the chunked scan prepares per dispatch pair.
++    let chunkWindowChunks: Int
++    static let chunkRows = 64
++
++    /// TINYTITAN_GDN_CHUNKED=1 routes prefill through the chunked scan. Off by
++    /// default: it sums in another order, so it needs the surprisal A/B before
++    /// it can become one.
++    static let chunkedPrefillEnabled =
++        ProcessInfo.processInfo.environment["TINYTITAN_GDN_CHUNKED"] == "1"
+     private let gatedNormPSO: MTLComputePipelineState
+     private let inProjPSO: MTLComputePipelineState
+     private let inProjSpecializedPSO: MTLComputePipelineState?
+@@ -36,7 +52,8 @@ final class GDN {
+     init(
+         context: MetalContext, config: LinearAttentionConfig,
+         specializedHiddenSize: Int? = nil,
+-        abBF16: Bool = false
++        abBF16: Bool = false,
++        chunkWindowChunks: Int = 32
+     ) throws {
+         precondition(
+             config.keyHeadDim > 0 && config.keyHeadDim % 32 == 0,
+@@ -64,6 +81,10 @@ final class GDN {
+             ])
+         self.deltaDecodePSO = try context.pipeline("gdn_delta_step_decode")
+         self.deltaPrefillPSO = try context.pipeline("gdn_delta_step_prefill")
++        self.chunkPrepPSO = try context.pipeline("gdn_chunk_prep")
++        self.chunkApplyPSO = try context.pipeline("gdn_chunk_apply")
++        self.device = context.device
++        self.chunkWindowChunks = max(1, chunkWindowChunks)
+         self.gatedNormPSO = try context.pipeline(
+             "gdn_gated_norm",
+             constants: [
+@@ -346,6 +367,22 @@ final class GDN {
+         y: MTLBuffer, yOffset: Int = 0,
+         rows: Int
+     ) throws {
++        // The chunked scan has no first-row checkpoint, and below two chunks
++        // its prep costs more than the steps it replaces.
++        if Self.chunkedPrefillEnabled, checkpointState == nil,
++            rows >= 2 * Self.chunkRows, supportsChunkedScan
++        {
++            try encodeDeltaStepPrefillChunked(
++                commandBuffer: commandBuffer,
++                convOut: convOut, convOutOffset: convOutOffset,
++                aProj: aProj, aProjOffset: aProjOffset,
++                bProj: bProj, bProjOffset: bProjOffset,
++                aLog: aLog, aLogOffset: aLogOffset,
++                dtBias: dtBias, dtBiasOffset: dtBiasOffset,
++                state: state, stateOffset: stateOffset,
++                y: y, yOffset: yOffset, rows: rows)
++            return
++        }
+         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+             throw MetalError.commandEncoderFailed
+         }
+@@ -380,6 +417,92 @@ final class GDN {
+         encoder.endEncoding()
+     }
+ 
++    /// The apply kernel tiles 32 state rows and splits Dk eight ways into at
++    /// most 16 registers per thread.
++    var supportsChunkedScan: Bool {
++        config.valueHeadDim % 32 == 0 && config.keyHeadDim % 8 == 0
++            && config.keyHeadDim <= 128
++    }
++
++    /// Prefill through the chunked scan (see `gdn_chunk_prep` in gdn.metal):
++    /// for each window of up to `chunkWindowChunks` chunks, prepare every
++    /// (head, chunk) in parallel, then walk the chunks in order per head.
++    func encodeDeltaStepPrefillChunked(
++        commandBuffer: MTLCommandBuffer,
++        convOut: MTLBuffer, convOutOffset: Int = 0,
++        aProj: MTLBuffer, aProjOffset: Int = 0,
++        bProj: MTLBuffer, bProjOffset: Int = 0,
++        aLog: MTLBuffer, aLogOffset: Int,
++        dtBias: MTLBuffer, dtBiasOffset: Int,
++        state: MTLBuffer, stateOffset: Int = 0,
++        y: MTLBuffer, yOffset: Int = 0,
++        rows: Int
++    ) throws {
++        precondition(supportsChunkedScan, "chunked GDN scan: unsupported head dims")
++        let L = Self.chunkRows
++        let hv = config.numVHeads, dk = config.keyHeadDim, dv = config.valueHeadDim
++        let floatsPerHeadChunk = L * dk + L * dv + L * L + L
++        let windowFloats = hv * chunkWindowChunks * floatsPerHeadChunk
++        if chunkScratch == nil {
++            chunkScratch = device.makeBuffer(
++                length: windowFloats * 4, options: .storageModePrivate)
++        }
++        guard let scratch = chunkScratch else {
++            throw MetalError.bufferAllocationFailed("gdn.chunkScratch")
++        }
++        let wOffset = 0
++        let ubOffset = wOffset + hv * chunkWindowChunks * L * dk * 4
++        let pOffset = ubOffset + hv * chunkWindowChunks * L * dv * 4
++        let lgOffset = pOffset + hv * chunkWindowChunks * L * L * 4
++
++        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
++            throw MetalError.commandEncoderFailed
++        }
++        let windowRows = chunkWindowChunks * L
++        var start = 0
++        while start < rows {
++            var spanRows = UInt32(min(windowRows, rows - start))
++            var nChunks = UInt32((Int(spanRows) + L - 1) / L)
++            var rowStride = UInt32(config.qkvDim)
++
++            encoder.setComputePipelineState(chunkPrepPSO)
++            encoder.setBuffer(convOut, offset: convOutOffset + start * config.qkvDim * 2, index: 0)
++            encoder.setBuffer(aProj, offset: aProjOffset + start * hv * 2, index: 1)
++            encoder.setBuffer(bProj, offset: bProjOffset + start * hv * 2, index: 2)
++            encoder.setBuffer(aLog, offset: aLogOffset, index: 3)
++            encoder.setBuffer(dtBias, offset: dtBiasOffset, index: 4)
++            encoder.setBuffer(scratch, offset: wOffset, index: 5)
++            encoder.setBuffer(scratch, offset: ubOffset, index: 6)
++            encoder.setBuffer(scratch, offset: pOffset, index: 7)
++            encoder.setBuffer(scratch, offset: lgOffset, index: 8)
++            setHeadDims(encoder, startingAt: 9)
++            encoder.setBytes(&spanRows, length: 4, index: 13)
++            encoder.setBytes(&rowStride, length: 4, index: 14)
++            encoder.setBytes(&nChunks, length: 4, index: 15)
++            encoder.dispatchThreadgroups(
++                MTLSize(width: hv, height: Int(nChunks), depth: 1),
++                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
++
++            encoder.setComputePipelineState(chunkApplyPSO)
++            encoder.setBuffer(convOut, offset: convOutOffset + start * config.qkvDim * 2, index: 0)
++            encoder.setBuffer(scratch, offset: wOffset, index: 1)
++            encoder.setBuffer(scratch, offset: ubOffset, index: 2)
++            encoder.setBuffer(scratch, offset: pOffset, index: 3)
++            encoder.setBuffer(scratch, offset: lgOffset, index: 4)
++            encoder.setBuffer(state, offset: stateOffset, index: 5)
++            encoder.setBuffer(y, offset: yOffset + start * hv * dv * 2, index: 6)
++            setHeadDims(encoder, startingAt: 7)
++            encoder.setBytes(&spanRows, length: 4, index: 11)
++            encoder.setBytes(&rowStride, length: 4, index: 12)
++            encoder.setBytes(&nChunks, length: 4, index: 13)
++            encoder.dispatchThreadgroups(
++                MTLSize(width: hv, height: dv / 32, depth: 1),
++                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
++            start += Int(spanRows)
++        }
++        encoder.endEncoding()
++    }
++
+     /// out = rmsnorm(y; weight) * silu(z), per value head, `rows` rows.
+     func encodeGatedNorm(
+         commandBuffer: MTLCommandBuffer,
+diff --git a/sources/TinyTitan/Metal/GDN/gdn.metal b/sources/TinyTitan/Metal/GDN/gdn.metal
+index 65420c5..e498573 100644
+--- a/sources/TinyTitan/Metal/GDN/gdn.metal
++++ b/sources/TinyTitan/Metal/GDN/gdn.metal
+@@ -636,6 +636,248 @@ kernel void gdn_delta_step_prefill(
+     }
+ }
+ 
++// ----------------------------------------------------------------------------
++// Chunked gated delta rule (prefill, opt-in TINYTITAN_GDN_CHUNKED=1).
++//
++// The same recurrence as gdn_delta_step_prefill, reorganised the way the
++// 2026 kernels (fla / SGLang / llama.cpp) do it: split the rows into chunks of
++// L = 64 and turn most of the work into dense products. Within a chunk, with
++// S0 the state entering it and lg_i = sum_{j<=i} log g_j (so Gamma_i = exp(lg_i)):
++//
++//   u'_i = beta_i (v_i - Gamma_i S0 k_i - sum_{j<i} (Gamma_i/Gamma_j)(k_i.k_j) u'_j)
++//   y_i  = Gamma_i S0 q_i + sum_{j<=i} (Gamma_i/Gamma_j)(q_i.k_j) u'_j
++//   S_L  = Gamma_L S0 + sum_i (Gamma_L/Gamma_i) u'_i k_i^T
++//
++// The first line is (I + A) U' = diag(beta) V - diag(beta Gamma) K S0^T with
++// A_ij = beta_i (Gamma_i/Gamma_j) k_i.k_j strictly lower. With T = (I + A)^-1:
++//   U' = Ub - W S0^T,  Ub = T diag(beta) V,  W = T diag(beta Gamma) K.
++// Ub, W and P_ij = (Gamma_i/Gamma_j) q_i.k_j (j <= i) do not depend on S0, so
++// gdn_chunk_prep computes them for every (head, chunk) at once; gdn_chunk_apply
++// then walks the chunks in order, and its per-chunk work is products against
++// S0 instead of 64 dependent steps. Decay ratios are exp of log differences,
++// never a product divided by a product, so nothing underflows.
++//
++// Rows past the end of the span are padded with beta = 0 and log g = 0: they
++// add nothing to U', P or the state, and lg_63 is the last real row's.
++// ----------------------------------------------------------------------------
++constant constexpr uint kGdnChunkL = 64;
++
++kernel void gdn_chunk_prep(
++    device const half*   conv_out [[buffer(0)]],   // [T, C]
++    device const half*   a_proj   [[buffer(1)]],   // [T, Hv]
++    device const half*   b_proj   [[buffer(2)]],   // [T, Hv]
++    device const bfloat* A_log    [[buffer(3)]],   // [Hv]
++    device const bfloat* dt_bias  [[buffer(4)]],   // [Hv]
++    device float*        W        [[buffer(5)]],   // [Hv, nC, L, Dk]
++    device float*        Ub       [[buffer(6)]],   // [Hv, nC, L, Dv]
++    device float*        P        [[buffer(7)]],   // [Hv, nC, L, L]
++    device float*        LG       [[buffer(8)]],   // [Hv, nC, L]
++    constant uint&       kHeads   [[buffer(9)]],
++    constant uint&       vHeads   [[buffer(10)]],
++    constant uint&       keyDim   [[buffer(11)]],
++    constant uint&       valueDim [[buffer(12)]],
++    constant uint&       rows     [[buffer(13)]],
++    constant uint&       rowStride [[buffer(14)]],
++    constant uint&       nChunks  [[buffer(15)]],
++    uint2 tg [[threadgroup_position_in_grid]],
++    uint2 tpos [[thread_position_in_threadgroup]],
++    uint2 tsize [[threads_per_threadgroup]]
++) {
++    const uint tid = tpos.x;
++    const uint tcount = tsize.x;
++    const uint L = kGdnChunkL;
++    const uint Hk = kHeads, Hv = vHeads, Dk = keyDim, Dv = valueDim;
++    const uint C = rowStride;
++    const uint h = tg.x;
++    const uint c = tg.y;
++    if (h >= Hv || c >= nChunks) return;
++    const uint hk = h / (Hv / Hk);
++    const uint r0 = c * L;
++    const uint n = min(L, rows - r0);
++    const uint hc = h * nChunks + c;
++
++    threadgroup float lg[kGdnChunkL];
++    threadgroup float beta[kGdnChunkL];
++    threadgroup float T[kGdnChunkL * kGdnChunkL];
++
++    // Gates, then the inclusive prefix sum of log g.
++    if (tid < L) {
++        float logg = 0.0f, bt = 0.0f;
++        if (tid < n) {
++            const uint r = r0 + tid;
++            logg = -exp(float(A_log[h]))
++                * gdn_softplus(float(a_proj[r * Hv + h]) + float(dt_bias[h]));
++            bt = 1.0f / (1.0f + exp(-float(b_proj[r * Hv + h])));
++        }
++        lg[tid] = logg;
++        beta[tid] = bt;
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    if (tid == 0) {
++        float acc = 0.0f;
++        for (uint i = 0; i < L; ++i) { acc += lg[i]; lg[i] = acc; }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    if (tid < L) LG[hc * L + tid] = lg[tid];
++
++    // A (strictly lower), stored in T.
++    for (uint idx = tid; idx < L * L; idx += tcount) {
++        const uint i = idx / L, j = idx % L;
++        float a = 0.0f;
++        if (j < i && i < n) {
++            device const half* ki = conv_out + (r0 + i) * C + Hk * Dk + hk * Dk;
++            device const half* kj = conv_out + (r0 + j) * C + Hk * Dk + hk * Dk;
++            float dot = 0.0f;
++            for (uint k = 0; k < Dk; ++k) dot = fma(float(ki[k]), float(kj[k]), dot);
++            a = beta[i] * exp(lg[i] - lg[j]) * dot;
++        }
++        T[idx] = a;
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++
++    // T = (I + A)^-1 by forward substitution, in place, unit diagonal implied:
++    // T[i][c] = -A[i][c] - sum_{c<j<i} A[i][j] T[j][c].
++    for (uint i = 1; i < L; ++i) {
++        float t = 0.0f;
++        if (tid < i) {
++            t = -T[i * L + tid];
++            for (uint j = tid + 1; j < i; ++j) t = fma(-T[i * L + j], T[j * L + tid], t);
++        }
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++        if (tid < i) T[i * L + tid] = t;
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++    }
++
++    // W = T diag(beta Gamma) K and Ub = T diag(beta) V (T lower, unit diagonal).
++    for (uint idx = tid; idx < L * Dk; idx += tcount) {
++        const uint i = idx / Dk, k = idx % Dk;
++        float acc = 0.0f;
++        if (i < n) {
++            for (uint j = 0; j <= i; ++j) {
++                const float tij = (j == i) ? 1.0f : T[i * L + j];
++                const float kv = float(conv_out[(r0 + j) * C + Hk * Dk + hk * Dk + k]);
++                acc = fma(tij * beta[j] * exp(lg[j]), kv, acc);
++            }
++        }
++        W[(hc * L + i) * Dk + k] = acc;
++    }
++    for (uint idx = tid; idx < L * Dv; idx += tcount) {
++        const uint i = idx / Dv, d = idx % Dv;
++        float acc = 0.0f;
++        if (i < n) {
++            for (uint j = 0; j <= i; ++j) {
++                const float tij = (j == i) ? 1.0f : T[i * L + j];
++                const float vv = float(conv_out[(r0 + j) * C + 2u * Hk * Dk + h * Dv + d]);
++                acc = fma(tij * beta[j], vv, acc);
++            }
++        }
++        Ub[(hc * L + i) * Dv + d] = acc;
++    }
++    // P_ij = (Gamma_i/Gamma_j) q_i.k_j for j <= i.
++    for (uint idx = tid; idx < L * L; idx += tcount) {
++        const uint i = idx / L, j = idx % L;
++        float pv = 0.0f;
++        if (j <= i && i < n) {
++            device const half* qi = conv_out + (r0 + i) * C + hk * Dk;
++            device const half* kj = conv_out + (r0 + j) * C + Hk * Dk + hk * Dk;
++            float dot = 0.0f;
++            for (uint k = 0; k < Dk; ++k) dot = fma(float(qi[k]), float(kj[k]), dot);
++            pv = exp(lg[i] - lg[j]) * dot;
++        }
++        P[hc * L * L + idx] = pv;
++    }
++}
++
++// One threadgroup per (value head, 32 state rows); 256 threads, eight per
++// state row, each owning Dk/8 (<= 16) of that row's columns in registers.
++// Walks the window's chunks in order: U' = Ub - W S0^T, y, then the state.
++kernel void gdn_chunk_apply(
++    device const half*   conv_out [[buffer(0)]],   // [T, C]
++    device const float*  W        [[buffer(1)]],
++    device const float*  Ub       [[buffer(2)]],
++    device const float*  P        [[buffer(3)]],
++    device const float*  LG       [[buffer(4)]],
++    device float*        state    [[buffer(5)]],   // [Hv, Dv, Dk]
++    device half*         y        [[buffer(6)]],   // [T, Hv * Dv]
++    constant uint&       kHeads   [[buffer(7)]],
++    constant uint&       vHeads   [[buffer(8)]],
++    constant uint&       keyDim   [[buffer(9)]],
++    constant uint&       valueDim [[buffer(10)]],
++    constant uint&       rows     [[buffer(11)]],
++    constant uint&       rowStride [[buffer(12)]],
++    constant uint&       nChunks  [[buffer(13)]],
++    uint2 tg [[threadgroup_position_in_grid]],
++    uint2 tpos [[thread_position_in_threadgroup]]
++) {
++    const uint tid = tpos.x;
++    const uint L = kGdnChunkL;
++    const uint DT = 32;
++    const uint Hk = kHeads, Hv = vHeads, Dk = keyDim, Dv = valueDim;
++    const uint C = rowStride;
++    const uint h = tg.x;
++    const uint dvBase = tg.y * DT;
++    if (h >= Hv || dvBase >= Dv) return;
++    const uint hk = h / (Hv / Hk);
++    const uint dvl = tid / 8u;           // state row within the tile
++    const uint ks = tid % 8u;            // column slice
++    const uint nk = Dk / 8u;
++    const uint dv = dvBase + dvl;
++    const uint k0 = ks * nk;
++
++    threadgroup float Up[kGdnChunkL * 32];
++    threadgroup float QS[kGdnChunkL * 32];
++
++    float s[16];
++    device float* srow = state + (h * Dv + dv) * Dk + k0;
++    for (uint j = 0; j < nk; ++j) s[j] = srow[j];
++
++    for (uint c = 0; c < nChunks; ++c) {
++        const uint r0 = c * L;
++        const uint n = min(L, rows - r0);
++        const uint hc = h * nChunks + c;
++
++        // U'[i] = Ub[i] - W[i].S0[dv], QS[i] = q_i.S0[dv] (both before the update).
++        for (uint i = 0; i < L; ++i) {
++            device const float* wi = W + (hc * L + i) * Dk + k0;
++            float ws = 0.0f, qs = 0.0f;
++            for (uint j = 0; j < nk; ++j) ws = fma(wi[j], s[j], ws);
++            if (i < n) {
++                device const half* qi = conv_out + (r0 + i) * C + hk * Dk + k0;
++                for (uint j = 0; j < nk; ++j) qs = fma(float(qi[j]), s[j], qs);
++            }
++            ws += simd_shuffle_xor(ws, 1); ws += simd_shuffle_xor(ws, 2); ws += simd_shuffle_xor(ws, 4);
++            qs += simd_shuffle_xor(qs, 1); qs += simd_shuffle_xor(qs, 2); qs += simd_shuffle_xor(qs, 4);
++            if (ks == 0) {
++                Up[i * DT + dvl] = Ub[(hc * L + i) * Dv + dv] - ws;
++                QS[i * DT + dvl] = qs;
++            }
++        }
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++
++        device const float* lgc = LG + hc * L;
++        for (uint idx = tid; idx < L * DT; idx += 256u) {
++            const uint i = idx / DT, d = idx % DT;
++            if (i >= n) continue;
++            device const float* pi = P + hc * L * L + i * L;
++            float acc = exp(lgc[i]) * QS[i * DT + d];
++            for (uint j = 0; j <= i; ++j) acc = fma(pi[j], Up[j * DT + d], acc);
++            y[(r0 + i) * Hv * Dv + h * Dv + dvBase + d] = half(acc);
++        }
++
++        const float lgL = lgc[L - 1];
++        const float decayL = exp(lgL);
++        for (uint j = 0; j < nk; ++j) s[j] *= decayL;
++        for (uint i = 0; i < n; ++i) {
++            const float coef = exp(lgL - lgc[i]) * Up[i * DT + dvl];
++            device const half* ki = conv_out + (r0 + i) * C + Hk * Dk + hk * Dk + k0;
++            for (uint j = 0; j < nk; ++j) s[j] = fma(coef, float(ki[j]), s[j]);
++        }
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++    }
++
++    for (uint j = 0; j < nk; ++j) srow[j] = s[j];
++}
++
+ // ----------------------------------------------------------------------------
+ // Gated output norm: out = rmsnorm(y; weight, eps) * gate(z), per value head,
+ // where gate is silu or sigmoid (FC_GDN_SIGMOID_GATE).
+diff --git a/tools/m1_spike.sh b/tools/m1_spike.sh
+index 5c1f474..6eb0729 100755
+--- a/tools/m1_spike.sh
++++ b/tools/m1_spike.sh
+@@ -48,6 +48,9 @@
+ #   c16384attn   c8192attn at chunk 16384
+ #   c32768       base at chunk 32768: a ~17K prompt in one chunk, so the small
+ #                tail chunk (547 tokens, ~18 s, mostly expert fetch) is gone
++#   gdnchunk     TINYTITAN_GDN_CHUNKED=1: the delta-rule scan in 64-row chunks
++#                (gdn_chunk_prep/apply) instead of one step per token; sums in
++#                another order, so it may differ by rounding
+ # Chunking can change the output (the chunk boundaries move), so c8192/c16384
+ # may legitimately differ from base; they are judged on speed and on staying
+ # coherent, then on benchmark/quant_perplexity_ab.py before any default moves.
+@@ -118,7 +121,7 @@ Options:
+   --rounds <n>         interleaved rounds per arm (default 2)
+   --arms "<list>"      any of: base c8192 c16384 c8192qsa c8192wide c8192sg
+                        c8192routed c8192widerouted c8192fast c16384fast
+-                       c8192attn c16384attn c32768
++                       c8192attn c16384attn c32768 gdnchunk
+                        wide16k pergqa
+                        mppwide gqa wide splitwide all combo
+                        coalesce qqmm hcfused qsagpu split
+@@ -204,6 +207,7 @@ arm_spec() {
+     c8192attn) echo "c8192attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 8192" ;;
+     c16384attn) echo "c16384attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 16384" ;;
+     c32768) echo "c32768||--prefill-chunk 32768" ;;
++    gdnchunk) echo "gdnchunk|TINYTITAN_GDN_CHUNKED=1|" ;;
+     coalesce) echo "coalesce|TINYTITAN_PREFILL_COALESCE=1|" ;;
+     qqmm) echo "qqmm|TINYTITAN_PREFILL_Q_QMM=1|" ;;
+     hcfused) echo "hcfused|TINYTITAN_HC_FUSED=1|" ;;
+diff --git a/tests/TinyTitan/Kernels/GDN/GDNChunkedScanTests.swift b/tests/TinyTitan/Kernels/GDN/GDNChunkedScanTests.swift
+new file mode 100644
+index 0000000..eb13a7a
+--- /dev/null
++++ b/tests/TinyTitan/Kernels/GDN/GDNChunkedScanTests.swift
+@@ -0,0 +1,133 @@
++import Foundation
++import Metal
++import Testing
++import TinyTitanValidationSupport
++
++@testable import TinyTitan
++
++/// The chunked delta-rule scan (`gdn_chunk_prep` + `gdn_chunk_apply`) against
++/// the sequential prefill kernel it replaces, on the same inputs and the same
++/// non-zero starting state. It sums in another order, so outputs agree to
++/// rounding, not bit for bit.
++@Suite struct GDNChunkedScanTests {
++
++    private struct Case {
++        let cfg: LinearAttentionConfig
++        let rows: Int
++        let windowChunks: Int
++    }
++
++    private static func readHalves(_ buffer: MTLBuffer, count: Int) -> [Float] {
++        let ptr = buffer.contents().bindMemory(to: Float16.self, capacity: count)
++        return (0..<count).map { Float(ptr[$0]) }
++    }
++
++    private static func bf16Buffer(_ device: MTLDevice, _ values: [Float]) -> MTLBuffer? {
++        let bits = values.map { UInt16(truncatingIfNeeded: $0.bitPattern >> 16) }
++        return device.makeBuffer(bytes: bits, length: bits.count * 2, options: .storageModeShared)
++    }
++
++    /// Runs one scan and returns (y, final state).
++    private static func run(
++        _ c: Case, chunked: Bool, seed: UInt64
++    ) throws -> (y: [Float], state: [Float]) {
++        let cfg = c.cfg
++        let ctx = try MetalContext()
++        let gdn = try GDN(context: ctx, config: cfg, chunkWindowChunks: c.windowChunks)
++        var rng = SeedTree(seed).key("gdn-chunked-\(c.rows)-\(cfg.keyHeadDim)")
++        let hk = cfg.numKHeads, hv = cfg.numVHeads, dk = cfg.keyHeadDim, dv = cfg.valueHeadDim
++
++        // conv_out rows as the scan sees them: unit-norm k, q scaled by
++        // 1/sqrt(Dk) (what gdn_qk_norm folds in), raw v.
++        var conv: [Float] = []
++        conv.reserveCapacity(c.rows * cfg.qkvDim)
++        for _ in 0..<c.rows {
++            var row = [Float](repeating: 0, count: cfg.qkvDim)
++            for head in 0..<hk {
++                var k = (0..<dk).map { _ in rng.uniform(-1, 1) }
++                let norm = sqrt(k.reduce(0) { $0 + $1 * $1 })
++                k = k.map { $0 / norm }
++                for i in 0..<dk {
++                    row[head * dk + i] = rng.uniform(-1, 1) / Float(dk).squareRoot()
++                    row[hk * dk + head * dk + i] = k[i]
++                }
++            }
++            for i in 0..<(hv * dv) { row[2 * hk * dk + i] = rng.uniform(-1, 1) }
++            conv += row
++        }
++        let a = (0..<(c.rows * hv)).map { _ in rng.uniform(-2, 2) }
++        let b = (0..<(c.rows * hv)).map { _ in rng.uniform(-2, 2) }
++        let aLog = (0..<hv).map { _ in rng.uniform(-1, 1) }
++        let dtBias = (0..<hv).map { _ in rng.uniform(-0.5, 0.5) }
++        let state0 = (0..<(hv * dv * dk)).map { _ in rng.uniform(-0.3, 0.3) }
++
++        guard let convBuf = Fp16Buffer.make(ctx.device, values: conv),
++            let aBuf = Fp16Buffer.make(ctx.device, values: a),
++            let bBuf = Fp16Buffer.make(ctx.device, values: b),
++            let aLogBuf = bf16Buffer(ctx.device, aLog),
++            let dtBuf = bf16Buffer(ctx.device, dtBias),
++            let stateBuf = ctx.device.makeBuffer(
++                bytes: state0, length: state0.count * 4, options: .storageModeShared),
++            let yBuf = Fp16Buffer.make(ctx.device, count: c.rows * hv * dv),
++            let checkpoint = ctx.device.makeBuffer(
++                length: state0.count * 4, options: .storageModeShared),
++            let cb = ctx.queue.makeCommandBuffer()
++        else { throw MetalError.noDevice }
++
++        if chunked {
++            try gdn.encodeDeltaStepPrefillChunked(
++                commandBuffer: cb, convOut: convBuf, aProj: aBuf, bProj: bBuf,
++                aLog: aLogBuf, aLogOffset: 0, dtBias: dtBuf, dtBiasOffset: 0,
++                state: stateBuf, y: yBuf, rows: c.rows)
++        } else {
++            // A checkpoint buffer keeps this on the sequential kernel whatever
++            // TINYTITAN_GDN_CHUNKED says; the checkpoint itself is unused.
++            try gdn.encodeDeltaStepPrefill(
++                commandBuffer: cb, convOut: convBuf, aProj: aBuf, bProj: bBuf,
++                aLog: aLogBuf, aLogOffset: 0, dtBias: dtBuf, dtBiasOffset: 0,
++                state: stateBuf, checkpointState: checkpoint, y: yBuf, rows: c.rows)
++        }
++        cb.commit()
++        cb.waitUntilCompleted()
++        #expect(cb.error == nil)
++        let state = stateBuf.contents().bindMemory(to: Float.self, capacity: state0.count)
++        return (readHalves(yBuf, count: c.rows * hv * dv), (0..<state0.count).map { state[$0] })
++    }
++
++    private static func compare(_ c: Case) throws {
++        let reference = try run(c, chunked: false, seed: 0xC0FFEE)
++        let chunked = try run(c, chunked: true, seed: 0xC0FFEE)
++        var yErr: Float = 0
++        for (got, want) in zip(chunked.y, reference.y) {
++            yErr = max(yErr, abs(got - want) / max(1, abs(want)))
++        }
++        var sErr: Float = 0
++        for (got, want) in zip(chunked.state, reference.state) {
++            sErr = max(sErr, abs(got - want) / max(1, abs(want)))
++        }
++        // Measured 6e-5 (y, one fp16 step) and 2e-7 (state) on 2026-10-01.
++        #expect(yErr <= 1e-3, "y max relative error \(yErr) (rows \(c.rows))")
++        #expect(sErr <= 1e-5, "state max relative error \(sErr) (rows \(c.rows))")
++    }
++
++    @Test func smallHeadsAcrossWindowsAndAPartialChunk() throws {
++        // 300 rows = 4 full chunks + 44, over windows of 2 chunks (3 windows).
++        try Self.compare(
++            Case(
++                cfg: LinearAttentionConfig(
++                    numKHeads: 2, numVHeads: 4, keyHeadDim: 32, valueHeadDim: 32,
++                    convKernelSize: 4),
++                rows: 300, windowChunks: 2))
++    }
++
++    @Test func fullWidthHeadsMatchTheSequentialScan() throws {
++        // The real head geometry (Dk = Dv = 128, three value heads per key
++        // head), one window, a partial last chunk.
++        try Self.compare(
++            Case(
++                cfg: LinearAttentionConfig(
++                    numKHeads: 1, numVHeads: 3, keyHeadDim: 128, valueHeadDim: 128,
++                    convKernelSize: 4),
++                rows: 200, windowChunks: 32))
++    }
++}

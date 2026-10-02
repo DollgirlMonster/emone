@@ -1051,6 +1051,13 @@ if [[ "$MEMORY" == "1" ]]; then
   export TINYTITAN_MEMORY=1
 fi
 
+# Prefix-reuse measurement: hashes only, one line per request, read by
+# benchmark/prefix_log_report.py. Set TINYTITAN_PREFIX_LOG= (empty) to turn it off.
+export TINYTITAN_PREFIX_LOG="${TINYTITAN_PREFIX_LOG-$BASE_DIR/.prompt-cache/prefix-log/${MODEL_NAME}.jsonl}"
+if [[ -n "$TINYTITAN_PREFIX_LOG" ]]; then
+  mkdir -p "$(dirname "$TINYTITAN_PREFIX_LOG")"
+fi
+
 # ============================================================
 # 8) The server command
 # ============================================================

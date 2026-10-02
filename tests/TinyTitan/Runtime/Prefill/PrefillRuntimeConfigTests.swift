@@ -47,7 +47,7 @@ import Testing
         // Nothing above the ceiling: a larger request is cut at it.
         #expect(
             PrefillChunkPlanner.spans(tokenCount: 40_000, startPosition: 0, chunkTokens: 65_536)
-                .map(\.tokenCount) == [16_384, 16_384, 7_232])
+                .map(\.tokenCount) == [32_768, 7_232])
     }
 
     @Test func diagnosticsPreserveUnknownValues() {

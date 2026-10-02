@@ -89,8 +89,11 @@ esac
 
 name="$(basename "$MODEL")"
 cache_dir="$CACHE_ROOT/${name%.gturbo}"
+# 16 retained prefixes rather than the server's 4: a snapshot is ~0.5-0.9 GB
+# on disk against a 100 GiB budget, so the count, not the bytes, was what
+# pushed a long conversation's entry out while a second one was running.
 server_args=(--model "$MODEL" --port "$PORT" --prompt-cache-disk "$cache_dir"
-  --prompt-cache-disk-mib "$((DISK_GIB * 1024))")
+  --prompt-cache-disk-mib "$((DISK_GIB * 1024))" --prompt-cache-entries 16)
 if [ "$IDLE" -gt 0 ]; then
   server_args+=(--idle-unload-seconds "$IDLE")
 fi
@@ -121,6 +124,13 @@ $busy"
 swift build -c release --product TinyTitanServer >&2
 BIN_DIR="$(swift build -c release --show-bin-path)"
 mkdir -p "$cache_dir"
+# Prefix-reuse measurement: hashes only, one line per request, read by
+# benchmark/prefix_log_report.py. Set TINYTITAN_PREFIX_LOG= (empty) to turn it off.
+export TINYTITAN_PREFIX_LOG="${TINYTITAN_PREFIX_LOG-$CACHE_ROOT/prefix-log/${name%.gturbo}.jsonl}"
+if [ -n "$TINYTITAN_PREFIX_LOG" ]; then
+  mkdir -p "$(dirname "$TINYTITAN_PREFIX_LOG")"
+  echo "serve: prefix log $TINYTITAN_PREFIX_LOG" >&2
+fi
 
 echo "serve: $name on http://127.0.0.1:$PORT (idle unload: ${IDLE}s, prompt cache: $cache_dir)" >&2
 exec "$BIN_DIR/TinyTitanServer" ${server_args[@]+"${server_args[@]}"} ${EXTRA[@]+"${EXTRA[@]}"}

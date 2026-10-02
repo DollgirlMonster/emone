@@ -51,7 +51,10 @@ import Testing
                 == 8_192)
         #expect(
             PrefillChunkScratchLayout(config: .qwen36_35B_A3B, chunkTokens: 32_768).chunkTokens
-                == 16_384)
+                == 32_768)
+        #expect(
+            PrefillChunkScratchLayout(config: .qwen36_35B_A3B, chunkTokens: 65_536).chunkTokens
+                == 32_768)
     }
 
     /// Scratch is linear in the chunk: on Qwen3.8 about 0.81 GiB at 4K and

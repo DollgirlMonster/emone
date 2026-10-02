@@ -959,7 +959,8 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     ) throws -> (
         promptIDs: [Int32],
         cacheRequest: ValidatedChatRequest,
-        needsToolTemplate: Bool
+        needsToolTemplate: Bool,
+        renderedMessages: [GFTokenizer.Message]
     ) {
         let filteredMessages: [GFTokenizer.Message]
         let filteredTools: [GFTokenizer.FunctionDefinition]
@@ -1001,7 +1002,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                 param: "messages",
                 code: "context_length_exceeded")
         }
-        return (promptIDs, cacheRequest, needsToolTemplate)
+        return (promptIDs, cacheRequest, needsToolTemplate, effectiveMessages)
     }
 
     /// Decide where this request's prefill starts: from scratch, or resumed on
@@ -1035,14 +1036,24 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     private func resolveCacheStart(
         cacheRequest: ValidatedChatRequest,
         promptIDs: [Int32],
-        requestedReasoning: RequestReasoning?
+        requestedReasoning: RequestReasoning?,
+        guidanceAnchor: () -> Int? = { nil }
     ) async throws -> (
-        effectivePromptIDs: [Int32], start: RawCompletionStart, captureBoundaries: [Int]
+        effectivePromptIDs: [Int32], start: RawCompletionStart, captureBoundaries: [Int],
+        captureAnchor: Int?
     ) {
         if reasoningForbidsCacheReuse(requestedReasoning) {
-            promptCache.invalidate()
+            // Bypass, don't clear. The switched request prefills from scratch
+            // and publishes nothing, but the entries it cannot use still belong
+            // to the conversations at the loaded level: clearing them made one
+            // side call with thinking off (a command classifier, a title) cost
+            // the main conversation a full re-prefill on its next turn. The
+            // live KV is about to be overwritten, so nothing may resume on it;
+            // multi-prefix entries restore from their snapshots instead.
+            // Single-prefix has no snapshots, only the live KV, so it clears.
+            if promptCacheMode != .multiPrefix { promptCache.invalidate() }
             activePromptCacheEntryID = nil
-            return (promptIDs, .reset, [])
+            return (promptIDs, .reset, [], nil)
         }
         let frontierOn = frontierCacheActive
         if frontierOn { frontier.observe(promptIDs) }
@@ -1081,14 +1092,22 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         // A split prefill indexes the render by position, so it is only safe
         // when the runner prefills the render verbatim -- not the spliced
         // (KV-backed + bridge) array a message-shaped continuation hands it.
+        let prefillsVerbatim = frontierOn && effectivePromptIDs == promptIDs
+        var anchor: Int?
+        if prefillsVerbatim {
+            anchor = FrontierTracker.anchor(
+                proven: frontier.provenSharedPrefix(promptIDs), systemBlockEnd: guidanceAnchor())
+            frontier.rememberVerbatimRender(promptIDs)
+        }
         let captureBoundaries =
-            frontierOn && effectivePromptIDs == promptIDs
+            prefillsVerbatim
             ? frontier.captureTargets(
                 render: promptIDs,
                 resumeFrom: Self.resumePosition(completionStart),
-                held: heldFrontierPositions(for: promptIDs))
+                held: heldFrontierPositions(for: promptIDs),
+                anchor: anchor)
             : []
-        return (effectivePromptIDs, completionStart, captureBoundaries)
+        return (effectivePromptIDs, completionStart, captureBoundaries, anchor)
     }
 
     /// The message-shaped cache's decision: match on whole-message equality
@@ -1251,6 +1270,29 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     }
 
     /// Positions whose checkpoint for exactly this render's prefix exists.
+    /// Where the render's leading system block ends, as a token position: the
+    /// prefix a new conversation from the same client shares with this one.
+    /// Found by rendering the leading system/developer messages (with the same
+    /// tools) followed by a stand-in user query, and taking what that shares
+    /// with the full render -- which stops inside the next message, whatever the
+    /// template. The stand-in is needed because Qwen's bundled template raises
+    /// "No user query found" on a system-only chat. `nil` when there is no
+    /// leading system block, nothing after it, or the render fails; a
+    /// checkpoint is an optimisation, so any failure only means none is taken.
+    static func guidanceAnchor(
+        promptIDs: [Int32], messages: [GFTokenizer.Message],
+        render: ([GFTokenizer.Message]) throws -> [Int32]
+    ) -> Int? {
+        let lead = messages.prefix { $0.role == .system || $0.role == .developer }
+        guard !lead.isEmpty, lead.count < messages.count,
+            let head = try? render(Array(lead) + [Self.anchorStandInQuery])
+        else { return nil }
+        let shared = zip(head, promptIDs).prefix { $0 == $1 }.count
+        return shared > 0 ? shared : nil
+    }
+
+    private static let anchorStandInQuery = GFTokenizer.Message(role: .user, content: "?")
+
     private func heldFrontierPositions(for promptIDs: [Int32]) -> Set<Int> {
         Set(
             frontierEntries.lazy
@@ -1439,7 +1481,14 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         let resolved = try await resolveCacheStart(
             cacheRequest: cacheRequest,
             promptIDs: promptIDs,
-            requestedReasoning: request.reasoning)
+            requestedReasoning: request.reasoning,
+            guidanceAnchor: {
+                Self.guidanceAnchor(promptIDs: promptIDs, messages: prepared.renderedMessages) {
+                    try Self.encodePrompt(
+                        tokenizer: renderTokenizer, messages: $0, tools: cacheRequest.tools,
+                        usesToolTemplate: needsToolTemplate)
+                }
+            })
         let effectivePromptIDs = resolved.effectivePromptIDs
         let completionStart = resolved.start
 
@@ -1531,6 +1580,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             start: activeStart,
             slot: slot,
             captureBoundaries: captureBoundaries,
+            captureAnchor: resolved.captureAnchor,
             captureMaxBytes: min(
                 Self.frontierCheckpointMaxBytes,
                 promptStateStore?.maximumSnapshotBytes ?? 0),
@@ -1646,12 +1696,20 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             reason = outcome.finishReason
             onEvent(.content(note))
         }
-        publishCacheEntry(
-            cacheRequest: cacheRequest,
-            content: generated,
-            calls: calls,
-            result: result,
-            stopStringFiltered: state.output.isStopped)
+        // A reasoning-switched request bypassed the cache (see
+        // `resolveCacheStart`) and must not seed it either: an entry rendered
+        // at another level would be continued with the session's template.
+        if !reasoningForbidsCacheReuse(request.reasoning) {
+            publishCacheEntry(
+                cacheRequest: cacheRequest,
+                content: generated,
+                calls: calls,
+                result: result,
+                stopStringFiltered: state.output.isStopped)
+        }
+        PrefixHashLog.record(
+            promptIDs: promptIDs, cachedTokens: result.cachedPromptTokens,
+            chunkTokens: prefillChunkTokens)
         completed = true
         return ServerCompletion(
             content: content,
