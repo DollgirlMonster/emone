@@ -206,6 +206,14 @@ extension RealForwardRunner {
             }
         }
 
+        // Live trace view (`--live-trace`): one load per token. Building with
+        // `-Xswiftc -DTINYTITAN_NO_EXPERT_TRACE` removes the hook entirely, so
+        // an A/B against it needs no second checkout.
+        #if TINYTITAN_NO_EXPERT_TRACE
+            let routeTrace: ExpertTraceRing? = nil
+        #else
+            let routeTrace = expertTrace
+        #endif
         for L in 0..<cfg.numLayers {
             // Dumping drains the previous layer's routed command first. The
             // residual is only settled once that has landed, and a dump taken
@@ -520,7 +528,8 @@ extension RealForwardRunner {
                     waitMark: tWait, waitNanos: waitNanos,
                     previousRoutedMicros: prevRoutedUs,
                     predictedNextLayer: predictedNextLayer,
-                    predictedNextLayerWeights: predictedNextLayerWeights)
+                    predictedNextLayerWeights: predictedNextLayerWeights,
+                    routeTrace: routeTrace)
             }
         }
         if let pending = pendingRoutedCommand {
@@ -1185,7 +1194,8 @@ extension RealForwardRunner {
         waitNanos: UInt64,
         previousRoutedMicros prevRoutedUs: Double,
         predictedNextLayer: [Int],
-        predictedNextLayerWeights: [Float] = []
+        predictedNextLayerWeights: [Float] = [],
+        routeTrace: ExpertTraceRing? = nil
     ) async throws {
         let D = UInt32(cfg.hiddenSize)
         let FmoE = UInt32(cfg.moeIntermediateSize)
@@ -1216,6 +1226,17 @@ extension RealForwardRunner {
                 layer: L, experts: experts, prefetched: readyPrefetches)
             : nil
         totalCachePlanNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - cachePlanStarted
+        #if !TINYTITAN_NO_EXPERT_TRACE
+            // Live trace view: the ids and the plan's miss positions are already
+            // on the CPU in every execution mode, so recording them reads no new
+            // GPU state. No plan (more picks than streamable slots) means every
+            // pick was read from storage, which `missCount` below also assumes.
+            if let routeTrace {
+                routeTrace.record(
+                    layer: L, position: position, experts: experts,
+                    missIndices: plannedFetch?.misses)
+            }
+        #endif
         if !readyPrefetches.isEmpty {
             predictivePrefetch?.consume(layer: L, experts: Set(readyPrefetches.keys))
             totalPrefetchAdopted &+= UInt64(readyPrefetches.count)

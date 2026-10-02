@@ -47,6 +47,9 @@ public struct Args: Equatable, Sendable {
     public var scoreTokens: Int?
     /// One negative log-likelihood per scored token, one per line.
     public var scoreOutput: String?
+    /// `--live-trace`: draw the live expert-grid view while decoding, when
+    /// stdout is a terminal. Off by default; changes no output byte or number.
+    public var liveTrace: Bool = false
 
     public init(
         model: String,
@@ -191,6 +194,17 @@ extension Args {
                                     mean surprisal (NLL) of those n by teacher
                                     forcing. Compares prefill paths on one text.
           --score-out <file>        One NLL per scored token (needs --score).
+          --live-trace              Draw a live view of decode on the terminal: the
+                                    expert grid of the layer in flight (router
+                                    picks green = cache hit, red = SSD read), a
+                                    layer ribbon, the last two lines of output and
+                                    a stderr tail. Only when stdout is a terminal
+                                    at least 78x31 (smaller: output and log only);
+                                    otherwise ignored with a note. The full text
+                                    and stderr are printed when the run ends.
+                                    Off by default; changes nothing the model
+                                    computes. Colour depth follows COLORTERM and
+                                    TERM; NO_COLOR drops colour.
           --concise                 Inject the per-quantization concise-mode
                                     system prompt (answers without preamble,
                                     filler, or closing codas).
@@ -230,6 +244,7 @@ extension Args {
         var seed: UInt64?
         var stops: [String] = []
         var ignoreEOS = false
+        var liveTrace = false
         var quiet = false
         var concise = false
         var thinkingMode: ModelThinkingMode = .off
@@ -253,6 +268,9 @@ extension Args {
                 index += 1
             case "--quiet":
                 quiet = true
+                index += 1
+            case "--live-trace":
+                liveTrace = true
                 index += 1
             case "--concise":
                 concise = true
@@ -404,6 +422,9 @@ extension Args {
         if scoreOutput != nil && scoreTokens == nil {
             throw ArgsError.requiredMissing("--score")
         }
+        if liveTrace && scoreTokens != nil {
+            throw ArgsError.mutuallyExclusive("--live-trace", "--score")
+        }
         if temperature > 0, topK == nil, let topP, topP < 1 {
             throw ArgsError.invalidValue(
                 flag: "--top-p",
@@ -455,6 +476,7 @@ extension Args {
             scoreTokens: scoreTokens,
             scoreOutput: scoreOutput)
         parsed.ignoreEOS = ignoreEOS
+        parsed.liveTrace = liveTrace
         return parsed
     }
 

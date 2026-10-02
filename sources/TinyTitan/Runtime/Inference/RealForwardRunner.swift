@@ -408,6 +408,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     var routeIDScratch: [UInt32] = []
     var routeWeightScratch: [Float16] = []
     var decodeExpertsScratch: [Int] = []
+    /// Live trace view hook (`--live-trace`): nil unless enabled. Read once per
+    /// decoded token, not per layer. See `ExpertTraceRing`.
+    var expertTrace: ExpertTraceRing?
     var decodeHitSlotsScratch: [UInt32] = []
     var decodeMissSlotsScratch: [UInt32] = []
     var decodeHitSplitRoutedBufsScratch: [MTLBuffer] = []

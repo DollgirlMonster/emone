@@ -61,6 +61,43 @@ record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
   interleaved A/B prefill arms, reporting GPU work in gigacycles.
   `TinyTitanCLI --score` and `tools/prefill_surprisal_ab.sh` run the paired
   surprisal test for any prefill numerics change.
+- **`TinyTitanCLI --live-trace`: a live view of decode, off by default.** On a
+  terminal (stdout is a TTY, `TERM` is not `dumb`, at least 78 columns and
+  about 31 rows) it draws, in place and below your scrollback, the expert grid
+  of the layer being computed, the router's picks, a one-line ribbon of the
+  token's layers coloured by misses, the last two lines of generated text, and a
+  four-line tail of stderr where error, warn and fail lines print red. When the
+  run ends the last frame stays on screen and the full text and the held stderr
+  are printed after it. Anywhere else the flag is ignored with a one-line note
+  and nothing is drawn. The terminal size is read once, at the start.
+
+  Each grid cell has two layers. The background is heat: how often the expert
+  was picked recently (a decaying count, half-life 24 tokens, on a log scale),
+  dim to warm. The foreground is the current token's pick: a green block in the
+  middle of the cell for a cache hit, a solid red block for an SSD read. Colour
+  depth follows `COLORTERM` and `TERM` (24-bit, 256 or 16 colours); `NO_COLOR`
+  keeps the view, draws heat as block heights and picks as plain glyphs. A pick
+  adopted from the predictive prefetch ring counts as a hit, as in the engine's
+  own hit statistics.
+
+  The grid follows the model: up to 256 experts is 16 columns of two-character
+  cells (256 is 16 x 16), 257 to 512 is 32 columns of one-character cells
+  (Qwen3.8's 512 is 32 x 16), and more than 512 bins consecutive experts into
+  the same 32 x 16 cells. The pick list follows the model's top-k. A dense
+  model has no routed experts, so it gets the output and log only, as does a
+  terminal too short for the grid.
+
+  It changes nothing the model computes. The decode hook copies the layer's
+  top-k ids and the cache plan's miss positions, which decode has already read
+  back, into a lock-free ring, and a separate thread draws about 20 frames a
+  second from it, so the view is a sampled picture of the latest token. A full
+  ring drops new events rather than slowing decode. Heat and the shading of
+  experts believed cached (a mirror inferred from those events, least recently
+  picked leaving first, not the engine's slot table) exist only in the renderer
+  and are never read by routing, caching, prefetch or anything else in the
+  engine; treat them as estimates. Build with
+  `-Xswiftc -DTINYTITAN_NO_EXPERT_TRACE` to remove the hook entirely, for an A/B
+  against a build without it.
 
 ---
 

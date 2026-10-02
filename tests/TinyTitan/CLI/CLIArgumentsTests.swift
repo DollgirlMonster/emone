@@ -223,7 +223,7 @@ import TinyTitan
             "--seed", "--stop", "--quiet", "--help", "--ignore-eos",
             "--rdadvise", "--expert-cache-slots", "--prefill-chunk", "--concise",
             "--kv-bits", "--rope-scaling", "--thinking", "--reasoning-effort",
-            "--score", "--score-out",
+            "--score", "--score-out", "--live-trace",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
         let options = Set(words.map(String.init).filter { $0.hasPrefix("--") })
