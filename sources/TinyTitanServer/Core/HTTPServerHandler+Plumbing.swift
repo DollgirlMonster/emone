@@ -217,7 +217,7 @@ extension ServerHTTPHandler {
         if !completion.toolCalls.isEmpty {
             message["tool_calls"] = completion.toolCalls.map(toolCallObject)
         }
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "id": id,
             "object": "chat.completion",
             "created": created,
@@ -231,6 +231,10 @@ extension ServerHTTPHandler {
             ],
             "usage": usageObject(completion.usage),
         ]
+        // Only an `x_hidden_states` request carries one.
+        if let hiddenStates = completion.hiddenStates {
+            object["hidden_states"] = hiddenStates.jsonObject()
+        }
         writeJSON(context, status: .ok, object: object)
     }
 
@@ -304,23 +308,29 @@ extension ServerHTTPHandler {
         includeUsage: Bool,
         outbox: SSEOutbox
     ) {
-        if let frame = streamFrame(
-            chunk(
-                id: id, created: created,
-                delta: [:],
-                finishReason: completion.finishReason))
-        {
+        // `hidden_states` (an `x_hidden_states` capture) rides the last data
+        // chunk before [DONE]: the usage chunk when one is sent, otherwise the
+        // finish chunk. Standard fields are untouched, so clients ignore it.
+        let hidden = completion.hiddenStates?.jsonObject()
+        var finish = chunk(
+            id: id, created: created,
+            delta: [:],
+            finishReason: completion.finishReason)
+        if let hidden, !includeUsage { finish["hidden_states"] = hidden }
+        if let frame = streamFrame(finish) {
             _ = outbox.enqueue(frame)
         }
+        var usageChunk: [String: Any] = [
+            "id": id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": responseModelID,
+            "choices": [],
+            "usage": usageObject(completion.usage),
+        ]
+        if let hidden { usageChunk["hidden_states"] = hidden }
         if includeUsage,
-            let frame = streamFrame([
-                "id": id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": responseModelID,
-                "choices": [],
-                "usage": usageObject(completion.usage),
-            ])
+            let frame = streamFrame(usageChunk)
         {
             _ = outbox.enqueue(frame)
         }

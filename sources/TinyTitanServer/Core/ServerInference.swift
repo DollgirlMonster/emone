@@ -75,6 +75,9 @@ public struct ServerCompletion: Equatable, Sendable {
     /// folds this into finish_reason "stop"; the Anthropic Messages API
     /// distinguishes it as stop_reason "stop_sequence" and names the string.
     public let stopSequence: String?
+    /// The hidden-state readout a `x_hidden_states` request asked for; nil for
+    /// every other request.
+    public let hiddenStates: HiddenStatesPayload?
 
     public init(
         content: String,
@@ -84,7 +87,8 @@ public struct ServerCompletion: Equatable, Sendable {
         watchdogTrips: [WatchdogSet.Trip] = [],
         stopSequence: String? = nil,
         reasoning: String = "",
-        unrequestedReasoning: Int = 0
+        unrequestedReasoning: Int = 0,
+        hiddenStates: HiddenStatesPayload? = nil
     ) {
         self.content = content
         self.reasoning = reasoning
@@ -94,6 +98,7 @@ public struct ServerCompletion: Equatable, Sendable {
         self.usage = usage
         self.watchdogTrips = watchdogTrips
         self.stopSequence = stopSequence
+        self.hiddenStates = hiddenStates
     }
 }
 
@@ -376,7 +381,11 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     private nonisolated let modelFamily: ModelFamily
 
     private let context: MetalContext
-    private let model: Model
+    // `model`, `runner`, `mtpDecoder`, `prefillConfig`, `activePromptCacheEntryID`,
+    // `acquireSlot`, `releaseSlot`, `resolvedTokenizer` and `preparePrompt` are
+    // module-internal (not private) so the hidden-state readout can live in
+    // `ServerInference+HiddenReadout.swift` instead of growing this file.
+    let model: Model
     private let tokenizer: GFTokenizer
     /// The tokenizer's vocabulary as byte strings, built the first time a
     /// request asks for structured output and kept for the life of the model.
@@ -391,8 +400,8 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     /// the model was loaded with. `nil` reasoning means the session's own.
     private let tokenizerFolder: URL
     private nonisolated let loadedReasoning: RequestReasoning
-    private let runner: RealForwardRunner
-    private let mtpDecoder: StreamingMTPDecoder?
+    let runner: RealForwardRunner
+    let mtpDecoder: StreamingMTPDecoder?
     /// One raw-completion scratch per slot: its own logits/probs/token buffers
     /// and its own sampler, so concurrent slots cannot sample from each other's
     /// logits.
@@ -401,7 +410,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     /// width; the waiter queue is a safety net if width ever exceeds slots.
     private var freeSlots: [Int]
     private var slotWaiters: [SlotWaiter] = []
-    private let prefillConfig: PrefillRuntimeConfig
+    let prefillConfig: PrefillRuntimeConfig
     // Long prompts are prefilled chunk by chunk — small enough to keep expert
     // reads tight.
     public nonisolated let prefillChunkTokens: Int
@@ -415,7 +424,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     private let promptCacheDomain: ServerPromptCacheDomain
     private var promptCache: ServerPromptCache
     private let promptStateStore: ServerPromptStateStore?
-    private var activePromptCacheEntryID: UUID?
+    var activePromptCacheEntryID: UUID?
     /// Where the token-prefix frontier checkpoints go (see FrontierTracker),
     /// and the ones that exist. Each `frontierEntries` row is a chunk-aligned
     /// KV+GDN snapshot in `promptStateStore` whose `tokens` is the exact
@@ -895,7 +904,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     /// waiter queue never race; the coordinator's width normally keeps a slot
     /// free, and the wait exists only so a wider coordinator degrades to
     /// queueing instead of failing.
-    private func acquireSlot() async throws -> Int {
+    func acquireSlot() async throws -> Int {
         if let slot = freeSlots.popLast() { return slot }
         let id = UUID()
         try await withTaskCancellationHandler {
@@ -917,7 +926,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         slotWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 
-    private func releaseSlot(_ slot: Int) {
+    func releaseSlot(_ slot: Int) {
         freeSlots.append(slot)
         if !slotWaiters.isEmpty {
             slotWaiters.removeFirst().continuation.resume()
@@ -953,7 +962,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     /// `renderTokenizer` is the one this request's reasoning resolves to, so a
     /// mid-session switch renders through the right template instead of the
     /// one the model happened to load with.
-    private func preparePrompt(
+    func preparePrompt(
         _ request: ValidatedChatRequest,
         renderTokenizer: GFTokenizer
     ) throws -> (
@@ -1387,6 +1396,15 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         _ request: ValidatedChatRequest,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
+        // A prefill-only hidden-state readout is its own pipeline: no sampling,
+        // no cache publication (`ServerInference+HiddenReadout.swift`). A
+        // capture during a generation falls through and rides the ordinary one.
+        if let plan = request.hiddenStates {
+            try refuseHiddenCaptureIfUnavailable(plan)
+            if plan.prefillOnly {
+                return try await generateHiddenReadout(request, plan: plan)
+            }
+        }
         // One slot per in-flight generation. The coordinator bounds concurrency
         // to this session's width, so a slot is normally free immediately; the
         // wait is a safety net if the two ever disagree.
@@ -1530,9 +1548,13 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         // MTP drafts several tokens ahead of the sampler and never consults a
         // grammar, so a constrained request takes the ordinary decode path
         // (`runRawCompletion` refuses the MTP producer outright).
+        //
+        // A capture request also takes the plain runner: the hook lives in the
+        // runner's chunked prefill, and the MTP decoder drives its own.
         let activeProducer: any LogitProducer =
             if config.isPureGreedy,
                 config.constraint == nil,
+                request.hiddenStates == nil,
                 let mtpDecoder,
                 promptIDs.count + config.maxNewTokens
                     <= mtpDecoder.draftMaxContext
@@ -1554,6 +1576,14 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             total: activePromptIDs.count,
             cached: Self.resumePosition(activeStart))
         defer { PrefillProgressMonitor.end(generation: progressGeneration) }
+        // Arm the capture for this request's prefill: it ends at the effective
+        // prompt's last position (a resume prefills only the tail, but the last
+        // prompt token is always in it, since a resume needs cached < count).
+        if let plan = request.hiddenStates {
+            try runner.armHiddenCapture(
+                plan: plan, promptEnd: activePromptIDs.count, prefillConfig: prefillConfig)
+        }
+        defer { if request.hiddenStates != nil { runner.disarmHiddenCapture() } }
         // `@Sendable`: `runRawCompletion` is @concurrent, so a progress closure
         // that is still actor-isolated cannot be sent into it (Swift 6.4).
         // Everything these touch lives in the Sendable box above.
@@ -1616,6 +1646,11 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                     state.shouldStop = true
                 }
             })
+        // Collected before anything else can touch the runner: the rows are
+        // those of the forward pass that produced this reply.
+        let hiddenStates: HiddenStatesPayload? =
+            request.hiddenStates == nil
+            ? nil : HiddenStatesPayload(try runner.finishHiddenCapture())
         // Bank the checkpoints captured mid-prefill. Each is a pure prefix
         // state, so it stands however the rest of this turn goes.
         let captures = state.frontierCaptures
@@ -1732,7 +1767,8 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             // switched thinking off per request is the one whose thought is
             // unrequested.
             unrequestedReasoning: renderTokenizer.thinkingMode.isEnabled
-                ? 0 : state.output.reasoning.count)
+                ? 0 : state.output.reasoning.count,
+            hiddenStates: hiddenStates)
     }
 
     /// Publish this turn's KV range to the prompt cache, and persist a snapshot
@@ -1929,7 +1965,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     /// The returned tokenizer carries the think-block and stop token IDs for
     /// its own mode, so decode and the assistant decoder follow the switch
     /// rather than only the prompt text.
-    private func resolvedTokenizer(
+    func resolvedTokenizer(
         for reasoning: RequestReasoning?
     ) async throws -> GFTokenizer {
         guard let reasoning, !reasoning.matches(loadedReasoning) else {

@@ -400,6 +400,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// largest chunk seen so far and grown on demand, so the prefill hot path
     /// never allocates an MTLBuffer per chunk.
     var prefillTokenBuffer: MTLBuffer?
+    /// Hidden-state readout buffers and the plan of the readout in flight
+    /// (`RealForwardRunner+HiddenCapture.swift`). Nil until the first readout;
+    /// its plan is nil outside one, so every ordinary prefill is unchanged.
+    var hiddenReadout: HiddenReadoutCapture?
 
     /// Host scratch reused across prefill chunks (R38) and decode layers (R16).
     /// The runner is single-flight per generation (guarded by
