@@ -208,7 +208,8 @@ public func run(
                 RuntimeConfiguration.allowedPrefillChunkTokens
                 .first(where: {
                     $0 >= promptIds.count
-                        && RuntimeConfiguration.prefillChunkFits(chunk: $0, maxContext: args.maxContext)
+                        && RuntimeConfiguration.prefillChunkFits(
+                            chunk: $0, maxContext: args.maxContext)
                 })
                 ?? RuntimeConfiguration.largestPrefillChunk(forContext: args.maxContext)
         case nil:
@@ -285,6 +286,15 @@ public func run(
                 scratch: scratch, prefillConfig: runtime.prefillConfig,
                 softcap: Float(model.config.finalLogitSoftcap), stdout: stdout, stderr: stderr)
         }
+        // `--live-trace`: nil unless asked for and the terminal can show it. Its
+        // `finish` runs when this scope exits, after the footer below, so the
+        // expert I/O summary and the timing footer reach the log region and are
+        // then printed for real; a thrown error or Ctrl-C closes the view
+        // before the catch clauses write to the terminal.
+        let live = LiveTraceSession.begin(
+            requested: args.liveTrace, runner: runner, maxNew: effectiveMaxNew,
+            slotsPerLayer: runtime.expertCacheSlots, stdout: stdout, stderr: stderr)
+        defer { live?.finish() }
         let stats = try await runRawCompletion(
             producer: runner,
             tokenizer: tokenizer,
@@ -294,6 +304,10 @@ public func run(
             scratch: scratch,
             prefillConfig: runtime.prefillConfig
         ) { progress in
+            if let live {
+                live.handle(progress)
+                return
+            }
             switch progress {
             case .prefill:
                 break
