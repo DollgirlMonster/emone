@@ -121,7 +121,8 @@ extension ServerHTTPHandler {
             activeTask = childChannels.startTask {
                 defer { streamState.stop() }
                 let started = ContinuousClock.now
-                ServerLog.accepted(id: messageID, streaming: request.stream)
+                ServerLog.accepted(id: messageID, streaming: request.stream, clientModel: decoded.model)
+                defer { ServerLog.closed(id: messageID) }
                 let outbox: SSEOutbox? =
                     request.stream
                     ? SSEOutbox(capacity: Self.maximumPendingStreamChunks)

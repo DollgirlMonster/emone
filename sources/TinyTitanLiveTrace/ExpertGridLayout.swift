@@ -111,14 +111,19 @@ enum LiveTraceViewPlan: Equatable, Sendable {
 
     /// Choose a view for this model and terminal. One row below the view is
     /// kept free: the in-place redraw parks the cursor under it.
-    static func plan(shape: ExpertTraceShape, cols: Int, rows: Int) -> LiveTraceViewPlan {
+    ///
+    /// `allowGrid: false` asks for the compact view whatever the model, for a
+    /// server that cannot feed a grid (see `LiveTraceModelInfo.gridUnavailable`).
+    static func plan(
+        shape: ExpertTraceShape, cols: Int, rows: Int, allowGrid: Bool = true
+    ) -> LiveTraceViewPlan {
         guard cols >= minimumWidth else {
             return .unavailable(
                 reason:
                     "the terminal is \(cols) columns wide; the view needs at least \(minimumWidth)")
         }
         let width = min(cols, fullWidth)
-        if cols >= fullWidth, let full = fullHeight(shape: shape), rows >= full + 1 {
+        if allowGrid, cols >= fullWidth, let full = fullHeight(shape: shape), rows >= full + 1 {
             return .full(width: width, height: full)
         }
         guard rows >= compactHeight + 1 else {

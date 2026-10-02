@@ -1,12 +1,23 @@
 import Foundation
+import TinyTitanLiveTrace
 
 enum ServerLog {
     /// S32: requests log from concurrent tasks; serialize stderr writes so
     /// lines never interleave.
     private static let writeLock = NSLock()
 
-    static func accepted(id: String, streaming: Bool) {
+    /// `clientModel` is the model id the client sent, for the live view's
+    /// header; the log line itself is unchanged.
+    static func accepted(id: String, streaming: Bool, clientModel: String? = nil) {
         write("request \(id) accepted streaming=\(streaming)")
+        ServerLiveTrace.current?.requestAccepted(id: id, client: clientModel)
+    }
+
+    /// The request's task is over, whether it completed, failed or was
+    /// cancelled. Writes nothing; the live view uses it to drop the request from
+    /// its queue count, which no other event could do for a cancelled one.
+    static func closed(id: String) {
+        ServerLiveTrace.current?.requestClosed(id: id)
     }
 
     static func queued(id: String) {
@@ -28,6 +39,7 @@ enum ServerLog {
 
     static func generating(id: String) {
         write("request \(id) generating")
+        ServerLiveTrace.current?.requestGenerating(id: id)
     }
 
     static func completed(

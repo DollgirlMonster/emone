@@ -3,6 +3,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanCLICore
+@testable import TinyTitanLiveTrace
 
 /// Opens a pseudo-terminal of a given size, so the TTY paths are exercised
 /// against a real one rather than a stub.

@@ -58,6 +58,40 @@ struct LiveTraceFeedSnapshot: Sendable, Equatable {
     var tokensPerSecond: Double?
 }
 
+/// What a server adds to a frame: which model is resident, which client the
+/// request on screen came from, how many are waiting, and what the last one did.
+/// nil in a CLI run, whose frame is exactly one request in one model.
+struct LiveTraceServerStatus: Sendable, Equatable {
+    /// What the last finished request did, for the idle frame.
+    struct Last: Sendable, Equatable {
+        var tokensPerSecond: Double?
+        var newTokens = 0
+        var promptTokens = 0
+        var cachedTokens = 0
+
+        /// Share of the prompt that came from the prompt cache, 0...1.
+        var cacheHit: Double? {
+            promptTokens > 0 ? min(1, Double(cachedTokens) / Double(promptTokens)) : nil
+        }
+    }
+
+    enum Residency: Sendable, Equatable { case none, loading, loaded }
+
+    var residency = Residency.none
+    /// The header's model text: the resident model and its width, `loading X`
+    /// while a switch is in progress, or that nothing is loaded.
+    var title = "no model loaded"
+    /// The model id the client asked for, for the request on screen.
+    var client: String?
+    /// Requests admitted and not yet generating: the queue as a client sees it.
+    var waiting = 0
+    /// Generations in flight. More than one only with batched serving.
+    var running = 0
+    var last: Last?
+
+    var isIdle: Bool { running == 0 }
+}
+
 struct LiveTraceFrameInput {
     let shape: ExpertTraceShape
     let model: LiveTraceModel?
@@ -67,6 +101,8 @@ struct LiveTraceFrameInput {
     let plan: LiveTraceViewPlan
     let spinner: Int
     let depth: LiveTraceColorDepth
+    /// Set by a server's view; nil keeps the CLI's frame.
+    var server: LiveTraceServerStatus?
 }
 
 /// Composes one frame of the live trace view as a fixed number of ANSI lines.
@@ -96,7 +132,10 @@ enum LiveTraceFrame {
             lines.append(blank(input))
             lines.append(ribbon(input, model: model, width: width))
         }
-        lines.append(rule("output", width: width, depth: input.depth))
+        lines.append(
+            rule(
+                input.server?.isIdle == true ? "output · last reply" : "output", width: width,
+                depth: input.depth))
         lines.append(contentsOf: outputLines(input, width: width))
         lines.append(rule("log", width: width, depth: input.depth))
         lines.append(contentsOf: logLines(input, width: width))
@@ -123,6 +162,7 @@ enum LiveTraceFrame {
     // MARK: header
 
     static func header(_ input: LiveTraceFrameInput, width: Int) -> LiveTraceLine {
+        if let server = input.server { return serverHeader(input, server: server, width: width) }
         let feed = input.feed
         var right = LiveTraceLine(depth: input.depth)
         switch feed.phase {
@@ -153,6 +193,80 @@ enum LiveTraceFrame {
         left.pad(to: width - right.width)
         left.add(right)
         return left
+    }
+
+    /// The server's header: the resident model, the client's model id for the
+    /// request on screen, and on the right the queue and what the engine is
+    /// doing. The right side is kept whole; the left gives way to it, the
+    /// client's id first.
+    static func serverHeader(
+        _ input: LiveTraceFrameInput, server: LiveTraceServerStatus, width: Int
+    ) -> LiveTraceLine {
+        let feed = input.feed
+        var right = LiveTraceLine(depth: input.depth)
+        if server.waiting > 0 { right.add("queue \(server.waiting)  ", .accent) }
+        if server.running > 1 { right.add("\(server.running) running  ", .accent) }
+        if server.isIdle {
+            right.add("idle", .dim)
+            if let rate = server.last?.tokensPerSecond {
+                right.add("  last " + format1(rate) + " tok/s", .hit)
+            }
+            if let hit = server.last?.cacheHit {
+                right.add("  cache \(Int((hit * 100).rounded()))%", .hit)
+            }
+        } else {
+            switch feed.phase {
+            case .starting, .prefill:
+                right.add("prefill ", .plain)
+                if feed.prefillTotal > 0 {
+                    right.add("\(feed.prefillDone)/\(feed.prefillTotal) tok", .hit)
+                } else {
+                    right.add("starting", .hit)
+                }
+            case .decode, .done:
+                right.add(spinnerGlyphs[input.spinner % spinnerGlyphs.count] + " ", .hit)
+                right.add("\(feed.tokens) tok  ")
+                let rate =
+                    input.model.flatMap { LiveTraceModel.recent($0.tokensPerSecond) }
+                    ?? feed.tokensPerSecond
+                right.add(rate.map { format1($0) + " tok/s" } ?? "-- tok/s", .hit)
+            }
+        }
+        var left = LiveTraceLine(depth: input.depth)
+        left.add("emone", .accent)
+        let room = max(0, width - left.width - right.width - 1)
+        let title = "  " + server.title
+        let titleWidth = LiveTraceText.width(of: title)
+        var clientText = ""
+        if !server.isIdle, let client = server.client, !client.isEmpty {
+            clientText = " ← " + client
+        }
+        let clientWidth = LiveTraceText.width(of: clientText)
+        if titleWidth + clientWidth <= room {
+            left.add(title, .dim)
+            left.add(clientText, .plain)
+        } else if titleWidth <= room {
+            // The model stays whole; the client gets what is left, or nothing
+            // when that is too little to be legible.
+            left.add(title, .dim)
+            let clientRoom = room - titleWidth
+            if clientWidth > 0, clientRoom >= 8 {
+                left.add(truncated(clientText, width: clientRoom), .plain)
+            }
+        } else {
+            left.add(truncated(title, width: room), .dim)
+        }
+        left.pad(to: max(left.width, width - right.width))
+        left.add(right)
+        return left
+    }
+
+    /// `text` cut to `width` cells with an ellipsis when it did not fit.
+    private static func truncated(_ text: String, width: Int) -> String {
+        guard LiveTraceText.width(of: text) > width, width > 1 else {
+            return LiveTraceText.truncate(text, width: width)
+        }
+        return LiveTraceText.truncate(text, width: width - 1) + "…"
     }
 
     // MARK: grid and router panel
@@ -251,7 +365,7 @@ enum LiveTraceFrame {
             layerLine.add("L\(model.layer + 1) / \(model.shape.layers)  ")
             layerLine.add(kindName(model.shape, layer: model.layer, long: true) + " + MoE", .dim)
         } else {
-            layerLine.add("waiting for decode", .dim)
+            layerLine.add(input.server?.isIdle == true ? "idle" : "waiting for decode", .dim)
         }
         out.append(layerLine)
         out.append(blank(input))
@@ -260,9 +374,12 @@ enum LiveTraceFrame {
         out.append(picksTitle)
         out.append(contentsOf: pickRows(input, model: model, panelWidth: panelWidth))
         out.append(blank(input))
+        // Between requests the bar and the figure keep the last request's.
+        let idle = input.server?.isIdle == true
+        let recentHit = model.hitRate ?? (idle ? model.lastHitRate : nil)
         var cache = labelled("cache", depth: depth)
-        cache.add(bar(model.layerHitFraction ?? 0, width: 14, depth: depth))
-        cache.add(" " + (model.hitRate.map { "\(Int(($0 * 100).rounded()))% hit" } ?? "-- hit"))
+        cache.add(bar(model.layerHitFraction ?? recentHit ?? 0, width: 14, depth: depth))
+        cache.add(" " + (recentHit.map { "\(Int(($0 * 100).rounded()))% hit" } ?? "-- hit"))
         out.append(cache)
         var tps = labelled("tok/s", depth: depth)
         tps.add(sparkline(model.tokensPerSecond, width: 20, depth: depth))
@@ -376,6 +493,9 @@ enum LiveTraceFrame {
         let feed = input.feed
         let depth = input.depth
         var out: [LiveTraceLine] = []
+        if let server = input.server, server.isIdle {
+            return idleOutputLines(input, server: server, width: width)
+        }
         if feed.phase == .starting || feed.phase == .prefill {
             var line = LiveTraceLine(depth: depth)
             line.add("prefilling ")
@@ -396,6 +516,30 @@ enum LiveTraceFrame {
             }
         }
         return out
+    }
+
+    /// The output area between requests: the tail of the last reply, dimmed, or
+    /// a line saying what the server is waiting for.
+    private static func idleOutputLines(
+        _ input: LiveTraceFrameInput, server: LiveTraceServerStatus, width: Int
+    ) -> [LiveTraceLine] {
+        let depth = input.depth
+        let wrapped = LiveTraceText.wrap(input.feed.textTail, width: width - 1)
+        var tail = Array(wrapped.suffix(LiveTraceViewPlan.outputLines))
+        if input.feed.textTail.isEmpty {
+            switch server.residency {
+            case .loading: tail = ["loading the model for the next request"]
+            case .none: tail = ["no model resident: the next request loads one"]
+            case .loaded:
+                tail = [server.waiting > 0 ? "request waiting for the model" : "waiting for a request"]
+            }
+        }
+        while tail.count < LiveTraceViewPlan.outputLines { tail.append("") }
+        return tail.map { text in
+            var line = LiveTraceLine(depth: depth)
+            line.add(text, .dim)
+            return line
+        }
     }
 
     /// Alert colouring for the log: a line mentioning error, warn or fail.

@@ -39,3 +39,16 @@ extension RealForwardRunner {
         expertTrace = nil
     }
 }
+
+/// What a live trace view needs from the thing that runs the model: its shape,
+/// a ring to record into, and a way to stop. `RealForwardRunner` is the only
+/// conformer in the engine; the protocol exists so a view that follows a
+/// catalog's model switches can be exercised without loading one.
+public protocol ExpertTraceHosting: AnyObject {
+    func expertTraceShape() -> ExpertTraceShape
+    @discardableResult
+    func enableExpertTrace(capacity: Int) -> ExpertTraceRing?
+    func disableExpertTrace()
+}
+
+extension RealForwardRunner: ExpertTraceHosting {}

@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanLiveTrace
 
 /// Serving a small model from the CPU, through the same HTTP surface as the
 /// big ones.
@@ -41,6 +42,8 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     private let defaults: GenerationDefaults.Sampling
 
     public nonisolated let residentBytes: Int
+    /// Names this load to the `--live-trace` view; see `ServerModelSession`.
+    nonisolated let liveTraceToken = UUID()
     /// The thread width in force, so the startup banner can report what the
     /// engine will actually use without importing the kernel.
     public nonisolated let threads: Int
@@ -131,6 +134,11 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         // The family's own, which is what the catalog advertises for it, so
         // a launcher showing the defaults shows what a request will get.
         defaults = family.samplingDefaults
+        reportLiveTraceLoad(name: snapshotDirectory.lastPathComponent)
+    }
+
+    deinit {
+        ServerLiveTrace.current?.modelUnloaded(token: liveTraceToken)
     }
 
     public enum CPUBackendError: Error, CustomStringConvertible {
@@ -199,10 +207,15 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
             seed: configuration.temperature > 0 ? nil : 0)
         let generator = sampler.makeGenerator()
 
+        // `--live-trace`: no runner to record routing from, so the view gets
+        // prefill and token progress and shows its compact layout.
+        let liveGeneration = ServerLiveTrace.current?.beginGeneration()
+        defer { liveGeneration?.close() }
         model.reset()
         var logits: [Float] = []
         for (index, token) in prompt.enumerated() {
             logits = try model.step(token: token, needsLogits: index == prompt.count - 1)
+            liveGeneration?.handle(.prefill(done: index + 1, total: prompt.count))
         }
 
         // The same decoder the GPU path runs, so a thought is split the same
@@ -212,7 +225,20 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         let decoder = StructuredAssistantDecoder.forGeneration(
             tokenizer: renderTokenizer, promptIDs: promptIDs, allowedTools: nil)
         var detokenizer = GFDetokenizer(tokenizer: renderTokenizer)
-        var output = AssistantOutput(stops: configuration.stopStrings, onEvent: onEvent)
+        // The view shows the reply as it is written, thought and answer alike.
+        let deliver: @Sendable (ServerInferenceEvent) -> Void =
+            liveGeneration.map { generation in
+                { @Sendable event in
+                    switch event {
+                    case .content(let text), .reasoning(let text):
+                        generation.handle(.tail(text))
+                    case .toolCall:
+                        break
+                    }
+                    onEvent(event)
+                }
+            } ?? onEvent
+        var output = AssistantOutput(stops: configuration.stopStrings, onEvent: deliver)
         var produced = 0
         var reason = "length"
         while produced < budget {
@@ -233,6 +259,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
                 break
             }
             produced += 1
+            liveGeneration?.handle(.token(index: produced - 1, id: Int32(next), delta: ""))
             output.publish(
                 try events(
                     for: Int32(next), decoder: decoder,
@@ -247,6 +274,8 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         output.publish(try decoder.consumeTail(detokenizer.flush()), isToken: false)
         try decoder.finish()
         output.finish()
+        liveGeneration?.complete(
+            promptTokens: prompt.count, cachedTokens: 0, newTokens: produced)
         return ServerCompletion(
             content: output.content,
             toolCalls: [],

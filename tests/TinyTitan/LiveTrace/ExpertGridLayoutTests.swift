@@ -1,7 +1,7 @@
 import Testing
 import TinyTitan
 
-@testable import TinyTitanCLICore
+@testable import TinyTitanLiveTrace
 
 @Suite struct ExpertGridLayoutTests {
     static func shape(experts: Int, topK: Int, layers: Int = 48) -> ExpertTraceShape {

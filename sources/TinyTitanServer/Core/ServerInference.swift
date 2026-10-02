@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanLiveTrace
 
 /// A model the server was asked to load but this build cannot run.
 enum ServerInferenceError: Error, CustomStringConvertible {
@@ -441,6 +442,9 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     /// Concise-mode system prompt injected into every completion, or nil when
     /// concise mode is off. Selected per quantization (see ConcisePrompt).
     private nonisolated let concisePrompt: String?
+    /// Names this load to the `--live-trace` view, so an unload (or a switch to
+    /// another model) cannot clear a newer model's entry.
+    nonisolated let liveTraceToken = UUID()
 
     private struct SlotWaiter {
         let id: UUID
@@ -898,6 +902,11 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         }
         self.frontierClock = frontierPrefixEntries.count
         self.concisePrompt = concisePrompt
+        reportLiveTraceLoad()
+    }
+
+    deinit {
+        ServerLiveTrace.current?.modelUnloaded(token: liveTraceToken)
     }
 
     /// Take a slot for one generation. Actor-isolated, so the free list and the
@@ -1410,6 +1419,14 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         // wait is a safety net if the two ever disagree.
         let slot = try await acquireSlot()
         defer { releaseSlot(slot) }
+        // `--live-trace`: nil, and free, unless the operator asked for the view.
+        // The generation is the view's handle on this request; `attach` makes
+        // this session's runner record routing for it, once per loaded model.
+        let liveGeneration = ServerLiveTrace.current.map { live in
+            live.attach(token: liveTraceToken, runner: runner)
+            return live.beginGeneration()
+        }
+        defer { liveGeneration?.close() }
         // Stage-split measurement (TINYTITAN_RUNNER_STATS): snapshot the runner's
         // lifetime counters so the footer can report this request's delta.
         let runnerSnapshot = RunnerCounterSnapshot(
@@ -1625,6 +1642,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             // stop-string matcher's own flag.
             shouldStop: { @Sendable in state.shouldStop || watchdogs.wantsStop },
             onProgress: { @Sendable progress in
+                liveGeneration?.handle(progress)
                 if case .prefill(let done, let total) = progress {
                     PrefillProgressMonitor.prefill(
                         done: done, total: total, generation: progressGeneration)
@@ -1646,6 +1664,9 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                     state.shouldStop = true
                 }
             })
+        liveGeneration?.complete(
+            promptTokens: result.prefillTokens, cachedTokens: result.cachedPromptTokens,
+            newTokens: result.newTokens)
         // Collected before anything else can touch the runner: the rows are
         // those of the forward pass that produced this reply.
         let hiddenStates: HiddenStatesPayload? =

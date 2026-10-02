@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanLiveTrace
 
 private struct MessageJSON: Decodable {
     let role: String
