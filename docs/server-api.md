@@ -163,6 +163,156 @@ reasoning request — so no client switch is needed any more. The Responses
 surface still merges `developer` items into the leading system message, which is
 the same turn by a different road.
 
+### Hidden-state readout (`x_hidden_states`)
+
+An opt-in request extension on `POST /v1/chat/completions` that returns the
+residual stream of the **last prompt token** after chosen layers, for fitting
+linear probes on the model's activations. A request without the field is
+untouched, and so is every other surface (Responses, Messages).
+
+```json
+{"model": "...", "messages": [...],
+ "x_hidden_states": {"layers": [12, 24, 36, 47], "stream_mode": "residual",
+                     "prefill_only": true, "cache": "bypass",
+                     "encoding": "base64_f32"}}
+```
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `layers` | required; 1 to 16 distinct 0-based block indices | `0 ... numLayers-1` (48 blocks for `qwen38flash`, so 0 to 47). Duplicates are folded. Out of range is a 400 naming the model's layer count. |
+| `stream_mode` | `residual` (default), `mean_streams` | `residual` returns every residual stream widened to float32: on the hyper-connection family that is 4 streams x 2560 = 10,240 values, stream-major (`[stream0 d0..d2559, stream1 d0..., ...]`). `mean_streams` returns the unweighted mean over the streams (2,560 values). A pre-norm family has one stream, so the two agree. |
+| `prefill_only` | `true` (default), `false` | `true`: a **probe** (below): stop after the deepest requested layer; no head, no sampling, no output. `false`: **capture during an ordinary generation** (below). |
+| `cache` | `bypass` (default with `prefill_only: true`), `reuse` (default with `prefill_only: false`) | Must match `prefill_only`: a probe always bypasses, a capture always reuses. The other pairing is a 400. |
+| `encoding` | `base64_f32` (default) | Little-endian float32 bytes, base64. |
+| `positions` | `last` (default) | Only the last prompt token is read. |
+
+For a probe, `max_tokens` / `max_completion_tokens` is ignored (it may be omitted or 0); for a capture it means what it always does.
+
+**What the vector is.** Layer `L` is the residual after block `L`'s *full*
+update: the attention branch and the MoE (or dense FFN) tail have both been
+added, which is the state the next block reads. It is the raw residual, not a
+normalised or mixed read: this family has no per-layer norm on it, and the
+model-level stream mixer and final norm that feed the head are not applied.
+"Last prompt token" is the last token of the rendered chat prompt *including*
+the generation prompt (whatever the chat template ends the prompt with to open
+the assistant turn), exactly the token the model would have conditioned its
+answer on. `usage.prompt_tokens` and `position` let a client
+check that against its own render.
+
+**Response.** A top-level `hidden_states` object beside `choices`, keyed by the
+layer index as a string, plus the absolute index of the token read:
+
+```json
+{"object": "chat.completion",
+ "choices": [{"index": 0, "message": {"role": "assistant", "content": ""},
+              "finish_reason": "hidden_states"}],
+ "usage": {"prompt_tokens": 42, "completion_tokens": 0, "total_tokens": 42, ...},
+ "hidden_states": {
+   "12": {"dim": 10240, "dtype": "float32", "shape": [1, 10240], "data": "<base64>"},
+   "24": {"dim": 10240, "dtype": "float32", "shape": [1, 10240], "data": "<base64>"},
+   "position": 41,
+   "capture_path": {"runner": "plain", "prefill": "gpu", "early_stop": true},
+   "capture_ms": 0.4}}
+```
+
+`position` is the absolute index in the sequence of the token read (the last
+prompt token). `capture_path` says what produced the rows (see below) and
+`capture_ms` is the host time the capture itself cost, in milliseconds: encoding
+and committing one 20 KB blit per layer during the last prefill chunk, the one
+wait for them, and the float32 widening. It does not include the prefill.
+
+Decode with `np.frombuffer(base64.b64decode(data), dtype="<f4")`.
+
+**Numerics.** A probe runs the ordinary GPU prefill, chunk by chunk, so the
+rows are those of the reference prefill path of this build (fp16 activations,
+widened on the way out). Where the Neural Engine would take a chunk of an
+ordinary prefill, a probe stays on the GPU (an early stop cannot use it). Rows from the same prompt are
+reproducible run to run on one machine and build; they are not promised to be
+bit-identical across builds or machines.
+
+**Cache behaviour of a probe: a bypass.** A probe always prefills from an empty sequence.
+It does not resume a cached prefix or restore a snapshot, and it publishes
+nothing: no prompt-cache entry, no frontier observation or checkpoint, no
+prefix-hash record. It stops after the deepest requested layer, so the layers
+above it hold stale KV and recurrent state, and the runner is **reset** when it
+finishes. The consequence is that the **live sequence is gone afterwards**: the
+next ordinary request does not resume from it, it restores from its entry's
+snapshot (multi-prefix) or re-prefills. Every other cache entry and its
+snapshot survives. A client that replays labelled prompts one at a time, with
+no conversation in between, loses nothing.
+
+**Capture during an ordinary generation** (`prefill_only: false`). The same hook
+fires in the last prefill chunk of a normal request, with **no early stop**: all
+layers run, the head and sampling run as usual, the reply is generated, and the
+rows are those of the forward pass that produced it. The row is the last prompt
+token's (the one whose output the first reply token is sampled from), read once
+that layer finishes in the last chunk; `capture_ms` is its whole cost. The
+response is the normal one plus `hidden_states`; `finish_reason`, `content`,
+`usage` and every other standard field are untouched, so a client that does not
+look for it sees an ordinary reply.
+
+- **Streaming works.** `stream: true` is accepted. `hidden_states` is added to
+  the **last data chunk before `[DONE]`**: the usage chunk when
+  `stream_options.include_usage` is set, otherwise the chunk carrying
+  `finish_reason`. No other chunk carries it. A client finds it by looking for the
+  key on the chunks it already parses; the standard fields of every chunk are
+  unchanged.
+- **Cache: exactly an ordinary request.** The prompt cache is resolved, resumed
+  and published, and frontier observation and checkpoints run, as for any request
+  (so `cache` is `reuse`; `bypass` with `prefill_only: false` is a 400). A
+  follow-up turn hits the cache as usual. When the prompt resumes from a cached
+  prefix only the tail is prefilled, but the last prompt token is always in that
+  tail (a resume requires fewer cached tokens than the prompt, and an identical
+  replay is prefilled in full), so the capture is always taken; the vector then
+  attends to the cached prefix's stored KV, so it can differ in the last fp16
+  bits from the vector a full prefill of the same prompt gives (chunk boundaries
+  differ). A request whose capture did not complete fails with a 500 rather than
+  returning a reply without the rows.
+- **Paths.** The capture does not change the path an ordinary request takes,
+  with two exceptions it reports. (1) **MTP:** a capture request is served by the
+  plain runner, not the MTP draft decoder (`capture_path.runner` is always
+  `"plain"`), because the hook lives in the runner's chunked prefill; on an MTP
+  server the request therefore decodes without drafting. (2) **Memory:** a
+  capture request bypasses the memory decorator exactly as a probe does (no
+  memory instructions or tools, no tool rounds, nothing journalled), so that the
+  rows belong to the one forward pass that produced the reply. **ANE:** where an
+  ANE prefill sidecar is installed and a chunk is eligible, a capture keeps the
+  ANE path (the residual after each layer is in the same GPU buffer either way)
+  and `capture_path.prefill` is `"ane"`; otherwise `"gpu"`. Because a probe always
+  uses the GPU, rows from the two modes can differ in the last bits on a prompt
+  that took the ANE (none does on qwen38flash, which has no sidecar). Rows from a
+  probe and a capture of the same prompt on the GPU path are identical.
+- **Overhead** is one blit per requested layer queued during the last chunk and
+  one wait; on the toy fixture it measured about 0.1 ms of host time for four
+  layers against a 34 ms prefill, inside the noise of the prefill itself.
+
+**Refused with a 400**, naming the field:
+
+- `stream: true` with `prefill_only: true` (a probe is one JSON object, not a
+  stream; use `prefill_only: false` to capture while streaming);
+- `n` above 1 (as everywhere);
+- an unsupported `stream_mode`, `prefill_only`, `cache`, `encoding` or
+  `positions` value, or a missing / empty / out-of-range / over-long `layers`;
+- a probe under `--prompt-cache-mode single-prefix`: it would discard the live
+  conversation, and that mode keeps no snapshot to restore it from. Use
+  `multi-prefix` (the default) or `off`, or capture with `prefill_only: false`,
+  which leaves the cache alone;
+- a server running more than one sequence (`--max-concurrent-sequences` above 1),
+  in either mode: a probe resets the runner, which would take other in-flight
+  sequences with it, and the capture hook is per runner, not per sequence;
+- chunked prefill switched off (the hook lives in it);
+- `TINYTITAN_SEQUENTIAL_HC_PREFILL=1`, which prefills one token at a time and
+  has no layer-by-layer chunk to read;
+- a model served on the CPU engine.
+
+**Interactions (both modes).** A readout or capture bypasses the
+persistent-memory decorator: no memory instructions or tools are added to the
+prompt, no turn is journalled, no consolidation is scheduled, so what is read is
+the prompt as the client sent it. Both take the plain runner, never the MTP draft
+path (a probe resets the draft state with the runner). Both take the same queue
+and single-generation admission as any request, so a readout waits for a running
+generation and the other way round.
+
 ## Responses
 
 `input` is a string or a list of items. Item kinds: `message` (roles
@@ -305,7 +455,7 @@ without a tokenizer (a test double) answers 501.
 ## Testing
 
 ```bash
-swift test --filter "ResponsesAPI|AnthropicMapper|AnthropicMessages|HTTPServerTests|OpenAIValidation"
+swift test --filter "ResponsesAPI|AnthropicMapper|AnthropicMessages|HTTPServerTests|OpenAIValidation|HiddenReadout"
 swift test --filter ClientCLITests     # the installed codex and claude binaries, end to end
 ```
 

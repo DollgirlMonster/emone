@@ -200,6 +200,9 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// for JSON and gets unconstrained text is worse off than one told no.
     /// `{"type": "text"}`, the API's own default, is accepted.
     public let responseFormat: JSONValue?
+    /// Opt-in hidden-state readout (`HiddenStateReadout.swift`): the last
+    /// prompt token's residual after chosen layers. Nil is an ordinary request.
+    public let hiddenStates: OpenAIHiddenStatesRequest?
 
     /// Explicit, with the two thinking-control extras defaulted, so the protocol
     /// mappers that build a chat request from their own shapes keep compiling
@@ -228,7 +231,8 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         reasoningEffort: String? = nil,
         chatTemplateKwargs: OpenAIChatTemplateKwargs? = nil,
         reasoningBudgetTokens: Int? = nil,
-        responseFormat: JSONValue? = nil
+        responseFormat: JSONValue? = nil,
+        hiddenStates: OpenAIHiddenStatesRequest? = nil
     ) {
         self.model = model
         self.messages = messages
@@ -253,6 +257,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         self.chatTemplateKwargs = chatTemplateKwargs
         self.reasoningBudgetTokens = reasoningBudgetTokens
         self.responseFormat = responseFormat
+        self.hiddenStates = hiddenStates
     }
 
     enum CodingKeys: String, CodingKey {
@@ -271,6 +276,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case chatTemplateKwargs = "chat_template_kwargs"
         case reasoningBudgetTokens = "reasoning_budget_tokens"
         case responseFormat = "response_format"
+        case hiddenStates = "x_hidden_states"
     }
 }
 
@@ -492,6 +498,11 @@ public struct ValidatedChatRequest: Sendable {
     /// keyword is a 400 before a model is touched rather than a failure in the
     /// middle of a generation.
     public let jsonSchema: JSONSchemaNode?
+    /// The validated hidden-state readout this request asked for, or nil for an
+    /// ordinary generation. With `prefillOnly` the request is answered by
+    /// prefilling the prompt alone: no sampling, and nothing published to any
+    /// cache. Otherwise the capture rides the ordinary generation.
+    public let hiddenStates: HiddenReadoutPlan?
 
     public init(
         messages: [GFTokenizer.Message],
@@ -506,7 +517,8 @@ public struct ValidatedChatRequest: Sendable {
         model: String? = nil,
         reasoningNotes: [String] = [],
         reasoning: RequestReasoning? = nil,
-        jsonSchema: JSONSchemaNode? = nil
+        jsonSchema: JSONSchemaNode? = nil,
+        hiddenStates: HiddenReadoutPlan? = nil
     ) {
         self.messages = messages
         self.tools = tools
@@ -521,6 +533,7 @@ public struct ValidatedChatRequest: Sendable {
         self.reasoningNotes = reasoningNotes
         self.reasoning = reasoning
         self.jsonSchema = jsonSchema
+        self.hiddenStates = hiddenStates
     }
 
     /// Every derived request is built through here.
@@ -551,7 +564,8 @@ public struct ValidatedChatRequest: Sendable {
             model: model ?? self.model,
             reasoningNotes: reasoningNotes,
             reasoning: reasoning,
-            jsonSchema: jsonSchema)
+            jsonSchema: jsonSchema,
+            hiddenStates: hiddenStates)
     }
 
     /// The post-strip view of this request: the same request carrying the
@@ -610,6 +624,13 @@ public enum OpenAIRequestValidator {
         }
         guard request.logprobs != true else {
             throw invalid("logprobs are not supported", "logprobs", "unsupported_value")
+        }
+        // A prefill-only readout is answered by a prefill alone, so max_tokens
+        // means nothing to it and is ignored below; a capture during a
+        // generation keeps its normal meaning. Everything else about the
+        // field's shape is checked here, before a model is touched.
+        let hiddenStates = try request.hiddenStates.map {
+            try validateHiddenStates($0, stream: request.stream == true, family: reasoningProfile.family)
         }
         // A non-zero presence penalty is supported now: the sampler subtracts it
         // once per distinct id already in the history. This guard used to reject
@@ -754,7 +775,9 @@ public enum OpenAIRequestValidator {
         // max_completion_tokens, generation is bounded only by the session's
         // configured context window (further clamped to the available context
         // at inference time), so the model replies until it is done.
-        let maximum = request.maxCompletionTokens ?? request.maxTokens ?? maxContext
+        let maximum =
+            hiddenStates?.prefillOnly == true
+            ? 1 : request.maxCompletionTokens ?? request.maxTokens ?? maxContext
         guard maximum > 0 else {
             throw invalid(
                 "maximum completion tokens must be positive",
@@ -838,7 +861,8 @@ public enum OpenAIRequestValidator {
             stripCLIPrompt: stripCLIPrompt,
             reasoningNotes: reasoningNotes,
             reasoning: reasoning,
-            jsonSchema: jsonSchema)
+            jsonSchema: jsonSchema,
+            hiddenStates: hiddenStates)
     }
 
     /// The compiled schema a `response_format` asks for, or nil for plain text.

@@ -407,8 +407,15 @@ extension RealForwardRunner {
         // the sidecar's history variants all stay on the GPU; continuity is
         // enforced inside eligibleChunk so a fallback mid-prompt sticks for
         // the rest of the request.
+        let readout = hiddenReadoutChunkPlan(
+            startPosition: startPosition, tokenCount: tokens.count)
         let aneChunk: ANEPrefillAttention? = {
+            // A hidden-state readout that stops after a chosen layer cannot use
+            // the ANE: its chunk bookkeeping (`finishChunk`) cannot represent a
+            // stop, so that readout reads the GPU path's residual. A capture
+            // riding an ordinary prefill keeps the path it would have taken.
             guard let ane = anePrefill,
+                readout?.earlyStop != true,
                 slot == 0,
                 !snapshotGDNAfterFirstToken,
                 !useTwoRowProjection,
@@ -428,7 +435,10 @@ extension RealForwardRunner {
         var prefillTailNanos: UInt64 = 0
         var prefillActiveExperts: UInt64 = 0
 
-        for L in 0..<cfg.numLayers {
+        if readout != nil, aneChunk != nil { noteHiddenReadoutUsedANE() }
+        // A hidden-state readout reads the last row of the final chunk as each
+        // requested layer completes, and (prefill-only) stops after the deepest.
+        for L in 0..<(readout?.layerLimit ?? cfg.numLayers) {
             try await runPrefillLayer(
                 L, cb: &cb, scratch: scratch, layerViews: layerViews,
                 tokens: tokens, startPosition: startPosition, t: t, D: D,
@@ -440,6 +450,9 @@ extension RealForwardRunner {
                 prefillTailNanos: &prefillTailNanos,
                 prefillActiveExperts: &prefillActiveExperts,
                 slot: slot)
+            if let readout, readout.captureLayers.contains(L) {
+                try captureHiddenReadoutRow(layer: L, hidden: scratch.hidden, tokenCount: t)
+            }
         }
 
         if prefillProfile {
@@ -458,7 +471,7 @@ extension RealForwardRunner {
             FileHandle.standardError.write(Data(lines.utf8))
         }
 
-        if writeFinalHead, runEpilogue {
+        if writeFinalHead, runEpilogue, readout?.earlyStop != true {
             try encodeFinalHead(
                 logits: logits, scratch: scratch,
                 tokenCount: t, hiddenSize: D, rmsEps: eps,

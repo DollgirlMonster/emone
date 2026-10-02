@@ -157,6 +157,11 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         _ request: ValidatedChatRequest,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
+        guard request.hiddenStates == nil else {
+            throw ServerRequestError.invalid(
+                message: "x_hidden_states needs the Metal engine; this model is served on the CPU",
+                param: "x_hidden_states", code: "unsupported_value")
+        }
         // A mid-session switch resolves a tokenizer for the requested
         // thinking mode; nil (the common case) reuses the loaded one. The
         // tokenizer carries the think-block and stop token IDs for its own

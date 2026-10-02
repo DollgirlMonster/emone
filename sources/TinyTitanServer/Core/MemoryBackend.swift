@@ -475,6 +475,11 @@ public actor MemoryBackend: ServerInferenceBackend, PromptTokenCounting, Residen
     private func sessionContext(for request: ValidatedChatRequest) async
         -> MemorySessionContext?
     {
+        // A hidden-state readout or capture is of the prompt as sent: no memory
+        // instructions or tools are added and no tool rounds run, so the rows
+        // are those of the one forward pass that produced the reply. It takes
+        // the no-memory path (still through the inner gate).
+        guard request.hiddenStates == nil else { return nil }
         let placement = resolvePlacement(for: request)
         let id = ServerMemory.sessionIdentifier(
             messages: request.messages,
