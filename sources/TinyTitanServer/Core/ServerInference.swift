@@ -1686,7 +1686,8 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             snapshot: runnerSnapshot)
         func structuredFailure(
             kind: StructuredOutputFailureKind,
-            cause: StructuredOutputFailureCause
+            cause: StructuredOutputFailureCause,
+            error: Error? = nil
         ) -> StructuredOutputFailure {
             StructuredOutputFailure(
                 kind: kind,
@@ -1702,19 +1703,22 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                     toolStartID: tokenizer.toolCallStartID,
                     toolEndID: tokenizer.toolCallEndID,
                     toolResponseID: tokenizer.toolResponseID,
-                    toolResponseEndID: tokenizer.toolResponseEndID))
+                    toolResponseEndID: tokenizer.toolResponseEndID),
+                toolName: error.flatMap(StructuredOutputFailure.toolName(of:)))
         }
         if let decodingError = state.decodingError {
             throw structuredFailure(
                 kind: .decoderConsume,
-                cause: .classify(decodingError))
+                cause: .classify(decodingError),
+                error: decodingError)
         }
         do {
             try decoder.finish()
         } catch {
             throw structuredFailure(
                 kind: .decoderFinish,
-                cause: .classify(error))
+                cause: .classify(error),
+                error: error)
         }
         if needsToolTemplate, result.reason == .toolCalls, state.output.calls.isEmpty {
             throw structuredFailure(kind: .orphanToolResponse, cause: .none)

@@ -243,7 +243,8 @@ public final class LiveTraceServerView: @unchecked Sendable {
         }
         return (
             LiveTraceScene(
-                shape: shape, plan: resolved, ring: nil, slotsPerLayer: info.slotsPerLayer),
+                shape: shape, plan: resolved, ring: nil, slotsPerLayer: info.slotsPerLayer,
+                terminalRows: probe.rows),
             note
         )
     }

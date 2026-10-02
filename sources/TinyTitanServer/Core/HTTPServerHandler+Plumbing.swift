@@ -104,6 +104,12 @@ extension ServerHTTPHandler {
         if let requestError = error as? ServerRequestError {
             status = HTTPResponseStatus(statusCode: requestError.httpStatus)
             envelope = requestError.envelope
+        } else if let failure = error as? StructuredOutputFailure {
+            status = .internalServerError
+            envelope = OpenAIErrorEnvelope(
+                message: failure.clientMessage,
+                code: "structured_output_failure",
+                type: "server_error")
         } else {
             status = .internalServerError
             envelope = OpenAIErrorEnvelope(

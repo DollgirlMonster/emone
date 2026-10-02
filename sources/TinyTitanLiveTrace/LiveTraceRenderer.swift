@@ -135,6 +135,9 @@ struct LiveTraceScene: Sendable {
     /// nil in the compact view, and before the runner has been asked to record.
     var ring: ExpertTraceRing?
     var slotsPerLayer: Int?
+    /// The terminal's height, when the log may grow into the rows below the
+    /// plan (the server's view); nil keeps the frame at the plan's height.
+    var terminalRows: Int?
 }
 
 /// What the render thread reads once a frame.
@@ -295,7 +298,11 @@ final class LiveTraceRenderer: @unchecked Sendable {
         return LiveTraceFrame.compose(
             LiveTraceFrameInput(
                 shape: scene.shape, model: model, feed: snapshot.feed, log: log.recent(),
-                plan: scene.plan, spinner: frame / 2, depth: depth, server: snapshot.server))
+                plan: scene.plan, spinner: frame / 2, depth: depth, server: snapshot.server,
+                extraLogRows: scene.terminalRows.map { rows in
+                    // One row stays free below the view, as the plan keeps it.
+                    max(0, rows - 1 - (scene.plan.height ?? rows))
+                } ?? 0))
     }
 
     func drawFrame() {
@@ -303,6 +310,8 @@ final class LiveTraceRenderer: @unchecked Sendable {
         // A server can sit idle for days; repeating an identical frame 20 times a
         // second would be 100 KB/s of nothing down a tty or an ssh session.
         if lastWasServer, lines == lastDrawn { return }
+        // The log grew or shrank to fit its newest line.
+        if !lines.isEmpty, lines.count != region.height { region.relayout(to: lines.count) }
         lastDrawn = lines
         region.draw(lines)
     }

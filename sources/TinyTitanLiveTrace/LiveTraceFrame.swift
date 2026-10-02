@@ -103,6 +103,11 @@ struct LiveTraceFrameInput {
     let depth: LiveTraceColorDepth
     /// Set by a server's view; nil keeps the CLI's frame.
     var server: LiveTraceServerStatus?
+    /// Rows the log may grow by, beyond `LiveTraceViewPlan.logLines`, so the
+    /// newest line shows whole (an error's cause is at its start, its hashes at
+    /// its end). The log is the bottom item, so growing moves nothing else. 0
+    /// keeps the frame exactly `plan.height`.
+    var extraLogRows = 0
 }
 
 /// Composes one frame of the live trace view as a fixed number of ANSI lines.
@@ -122,9 +127,12 @@ enum LiveTraceFrame {
     static let gridColumnWidth = ExpertGridLayout.maxGridChars + 2
     static let gap = 4
 
-    /// The frame, exactly `plan.height` lines, each at most `plan.width` cells.
+    /// The frame, `plan.height` lines plus however many of `extraLogRows` the
+    /// newest log line needs, each at most `plan.width` cells.
     static func compose(_ input: LiveTraceFrameInput) -> [String] {
-        guard let width = input.plan.width, let height = input.plan.height else { return [] }
+        guard let width = input.plan.width, let planHeight = input.plan.height else { return [] }
+        let log = logLines(input, width: width)
+        let height = planHeight + max(0, log.count - LiveTraceViewPlan.logLines)
         var lines: [LiveTraceLine] = [header(input, width: width)]
         if case .full = input.plan, let model = input.model {
             lines.append(blank(input))
@@ -138,7 +146,7 @@ enum LiveTraceFrame {
                 depth: input.depth))
         lines.append(contentsOf: outputLines(input, width: width))
         lines.append(rule("log", width: width, depth: input.depth))
-        lines.append(contentsOf: logLines(input, width: width))
+        lines.append(contentsOf: log)
         // The plan's height is derived from the same pieces, and a test pins that
         // they agree; if they ever did not, a frame that is the wrong height
         // would tear the in-place redraw, so make it the right one.
@@ -548,20 +556,32 @@ enum LiveTraceFrame {
         return lower.contains("error") || lower.contains("warn") || lower.contains("fail")
     }
 
+    /// The tail of the log, `LiveTraceViewPlan.logLines` rows or, when the
+    /// newest line wraps to more, as many as it takes (up to `extraLogRows`
+    /// more). A newest line longer even than that shows its start.
     static func logLines(_ input: LiveTraceFrameInput, width: Int) -> [LiveTraceLine] {
         var rows: [(String, Bool)] = []
+        var newestRows = 0
         for raw in input.log {
             let line = LiveTraceText.sanitize(raw)
             let alert = isAlert(line)
-            for row in LiveTraceText.hardWrap(line, width: width) { rows.append((row, alert)) }
+            let wrapped = LiveTraceText.hardWrap(line, width: width)
+            newestRows = wrapped.count
+            for row in wrapped { rows.append((row, alert)) }
         }
+        let shown = max(
+            LiveTraceViewPlan.logLines,
+            min(newestRows, LiveTraceViewPlan.logLines + max(0, input.extraLogRows)))
+        let visible =
+            newestRows > shown
+            ? Array(rows.suffix(newestRows).prefix(shown)) : Array(rows.suffix(shown))
         var out: [LiveTraceLine] = []
         if rows.isEmpty {
             var line = LiveTraceLine(depth: input.depth)
             line.add("(nothing logged)", .veryDim)
             out.append(line)
         }
-        for (text, alert) in rows.suffix(LiveTraceViewPlan.logLines) {
+        for (text, alert) in visible {
             var line = LiveTraceLine(depth: input.depth)
             line.add(text, alert ? .miss : .plain)
             out.append(line)
