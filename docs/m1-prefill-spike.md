@@ -734,3 +734,28 @@ upstream engine's 474.4 s).
 
 The expert phase (21.3 s) now equals its GPU work (routed 14.4 s + shared
 expert 7.0 s, which runs in that phase): no drive wait is left on this prompt.
+
+## Spike 19 (2026-10-03): the same kernels on Qwen 3.6 / Ornith 1.5
+
+Qwen 3.6 35B-A3B (and Ornith 1.5, same geometry) has no QSA indexer, so the
+masked attention and GPU key selection do not apply; its 10 full-attention
+layers ran plain causal attention on `attention_prefill_causal_tiled`, ~0.08
+TFLOPS. The flash kernel gained a causal mode (no mask, no tile flags: every
+key up to the row's position), `ModelProfile.prefillDenseFlash`.
+
+Qwen 3.6 4-bit, 8,529-token prompt (the first 30,000 characters of the spike
+prompt), chunk 4096:
+
+| | defaults before | + GDN chunk, routed + dense QMM | + causal flash |
+|---|---:|---:|---:|
+| prefill s | 111.3 | 89.7 | **15.6** |
+| attention GPU s | 78.1 | 77.6 | 3.2 |
+| routed GEMM GPU s | 14.4 | 4.0 | 4.1 |
+| GDN layers GPU s | 8.8 | 4.4 | 4.4 |
+| shared expert GPU s | 8.7 | 2.4 | 2.5 |
+
+Surprisal, all five switches against the old defaults, 512 tokens after 19,087
+of context: Qwen 3.6 +0.003 nats (t +0.85), Ornith 1.5 -0.010 (t -1.40), no
+measurable change; the A/B's own runs went from 506 s to 82-85 s. Shipped on
+both 4-bit rows. The causal mode also serves Qwen3.8-Flash's chunks inside its
+2,048-key dense window (the masked path with every key kept).

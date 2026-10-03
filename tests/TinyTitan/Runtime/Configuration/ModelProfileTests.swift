@@ -88,24 +88,33 @@ import Testing
         #expect(!q36.prefillQSAFlash)
     }
 
-    /// The prefill switches ship on one row only; every other row, and every
-    /// family fallback, keeps the default kernels.
-    @Test func prefillSwitchesShipOnlyOnTheQwen38FourBitRow() {
+    /// The prefill switches ship where they were measured: all of them on
+    /// Qwen3.8 4-bit, the non-QSA ones on the Qwen 3.6 and Ornith 1.5 4-bit
+    /// rows; every other row, and every family fallback, keeps the default
+    /// kernels.
+    @Test func prefillSwitchesShipOnlyWhereMeasured() {
+        let q38 = ModelProfile.Key("qwen3.8-flash-next", 4)
+        let hybrids: Set<ModelProfile.Key> = [
+            ModelProfile.Key("qwen3.6-35b-a3b", 4), ModelProfile.Key("ornith-1.5-35b-a3b", 4),
+        ]
         for (key, row) in ModelProfile.table {
-            let expected = key == ModelProfile.Key("qwen3.8-flash-next", 4)
-            #expect(row.wideMPP == expected, Comment(rawValue: key.modelID))
-            #expect(row.routedMPP == expected, Comment(rawValue: key.modelID))
-            #expect(row.gdnChunked == expected, Comment(rawValue: key.modelID))
-            #expect(row.qsaFlash == expected, Comment(rawValue: key.modelID))
-            #expect(row.routedQMM == expected, Comment(rawValue: key.modelID))
-            #expect(row.denseQMM == expected, Comment(rawValue: key.modelID))
+            let isQ38 = key == q38
+            let measured = isQ38 || hybrids.contains(key)
+            let name = Comment(rawValue: "\(key.modelID) \(key.weightBits)")
+            #expect(row.wideMPP == isQ38, name)
+            #expect(row.qsaFlash == isQ38, name)
+            #expect(row.routedMPP == measured, name)
+            #expect(row.gdnChunked == measured, name)
+            #expect(row.routedQMM == measured, name)
+            #expect(row.denseQMM == measured, name)
+            #expect(row.denseFlash == measured, name)
         }
         let fallback = ModelProfile.resolve(
             modelID: "unknown", family: .qwen36, weightBits: 4, environment: [:])
         #expect(!fallback.prefillWideMPP && !fallback.prefillRoutedMPP)
         #expect(!fallback.prefillGDNChunked)
         #expect(!fallback.prefillQSAFlash && !fallback.prefillRoutedQMM)
-        #expect(!fallback.prefillDenseQMM)
+        #expect(!fallback.prefillDenseQMM && !fallback.prefillDenseFlash)
     }
 
     @Test func samplingRowsFollowTheirSeries() {

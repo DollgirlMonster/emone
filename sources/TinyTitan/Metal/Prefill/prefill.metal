@@ -1876,12 +1876,16 @@ kernel void attention_prefill_qsa_masked_flash(
     constant uint& keepStride [[buffer(6)]],
     device const uchar* flags [[buffer(7)]],
     constant uint& keyTiles [[buffer(8)]],
+    constant uint& causalOnly [[buffer(9)]],
     uint3 tg [[threadgroup_position_in_grid]],
     uint lid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]],
     uint simdgroups [[simdgroups_per_threadgroup]]
 ) {
+    // causalOnly: no selection -- plain causal attention, every key up to the
+    // row's own position kept; `keep` and `flags` are not read, and
+    // `keepStride` is the visible key count.
     const uint HD = kQSAFlashHD;
     const uint threads = simdgroups * 32u;
     const uint rt = tg.x;
@@ -1940,7 +1944,7 @@ kernel void attention_prefill_qsa_masked_flash(
     device const uchar* tileFlags = flags + ulong(rt) * keyTiles;
 
     for (uint kt = 0u; kt < tileEnd; ++kt) {
-        if (tileFlags[kt] == 0) continue;
+        if (causalOnly == 0u && tileFlags[kt] == 0) continue;
         const uint k0 = kt * kQSAFlashKeys;
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint task = lid; task < 2u * kQSAFlashKeys * HD / 8u; task += threads) {
@@ -1958,7 +1962,9 @@ kernel void attention_prefill_qsa_masked_flash(
             const uint r = q0 + lid / kQSAFlashKeys;
             const uint key = k0 + lid % kQSAFlashKeys;
             maskTile[lid] = (r < p.queryCount && key < keepStride)
-                ? keep[ulong(r) * keepStride + key] : uchar(0);
+                ? (causalOnly != 0u ? uchar(key <= p.startPosition + r)
+                                    : keep[ulong(r) * keepStride + key])
+                : uchar(0);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (sg >= G) continue;

@@ -186,6 +186,54 @@ import Testing
             "kv\(kvBits) block-sparse")
     }
 
+    /// Causal mode, no selection: against `attention_prefill_causal_tiled`,
+    /// Qwen 3.6's shape (16 query heads over 2 KV heads) and Qwen3.8's, a
+    /// partial last row tile, and a chunk that starts partway into the cache.
+    @Test(arguments: [(16, 8), (24, 8), (16, 16)])
+    func denseCausalTracksTheTiledKernel(qHeads: Int, kvBits: Int) throws {
+        let ctx = try MetalContext()
+        let attention = try PrefillAttention(context: ctx)
+        let (kvHeads, headDim) = (2, 256)
+        let (startPosition, queries) = (300, 77)
+        let valid = startPosition + queries
+        let groupSize = KVCacheManager.quantizationGroupSize
+        var rng = LCG(state: UInt64(qHeads * 100 + kvBits))
+        let kCache = try Self.kvCache(
+            ctx, bits: kvBits, rows: valid, elementsPerRow: kvHeads * headDim,
+            groupSize: groupSize, rng: &rng)
+        let vCache = try Self.kvCache(
+            ctx, bits: kvBits, rows: valid, elementsPerRow: kvHeads * headDim,
+            groupSize: groupSize, rng: &rng)
+        let q = try Self.buffer(
+            ctx, (0..<(queries * qHeads * headDim)).map { _ in Float16(rng.unit() * 0.5) })
+        let params = PrefillAttentionParams(
+            startPosition: UInt32(startPosition), queryCount: UInt32(queries),
+            headDim: UInt32(headDim), numQHeads: UInt32(qHeads), numKVHeads: UInt32(kvHeads),
+            kvValidCount: UInt32(valid), slidingWindow: UInt32(valid),
+            kvTokenStrideElements: UInt32(kvHeads * headDim),
+            qTokenStrideElements: UInt32(qHeads * headDim),
+            oTokenStrideElements: UInt32(qHeads * headDim),
+            scale: 0.0625, kvBits: UInt32(kvBits),
+            kvTokenStrideBytes: UInt32(kCache.strideBytes),
+            kvValueBytes: UInt32(kCache.valueBytes), kvGroupSize: UInt32(groupSize))
+        let count = queries * qHeads * headDim
+        func once(flash: Bool) throws -> [Float16] {
+            attention.denseFlash = flash
+            guard let out = ctx.device.makeBuffer(length: count * 2, options: .storageModeShared),
+                let cb = ctx.queue.makeCommandBuffer()
+            else { throw MetalError.commandEncoderFailed }
+            memset(out.contents(), 0xAB, count * 2)
+            try attention.encodeCausal(
+                commandBuffer: cb, q: q, k: kCache.buffer, v: vCache.buffer, out: out, params: params)
+            cb.commit()
+            cb.waitUntilCompleted()
+            #expect(cb.error == nil)
+            return Array(UnsafeBufferPointer(
+                start: out.contents().bindMemory(to: Float16.self, capacity: count), count: count))
+        }
+        Self.check((try once(flash: false), try once(flash: true)), "dense q\(qHeads) kv\(kvBits)")
+    }
+
     @Test func scatteredSelection() throws {
         Self.check(
             try Self.run(kvBits: 8, queries: 45, startPosition: 130, rowTile: nil, blockSparse: false),

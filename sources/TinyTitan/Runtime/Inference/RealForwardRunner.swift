@@ -717,6 +717,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             yarn: yarnParameters)
         self.prefillAttention = try PrefillAttention(context: context)
         self.prefillAttention.maskedFlash = profile.prefillQSAFlash
+        self.prefillAttention.denseFlash = profile.prefillDenseFlash
         self.prefillRouter = try PrefillRouter(
             context: context,
             weightBits: model.effectiveRouterWeightBits)

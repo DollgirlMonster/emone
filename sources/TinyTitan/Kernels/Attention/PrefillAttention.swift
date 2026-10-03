@@ -90,6 +90,10 @@ final class PrefillAttention {
     /// Run a selection through the masked flash kernel instead of the
     /// gathered grouped kernels. Set from `ModelProfile.prefillQSAFlash`.
     var maskedFlash = false
+    /// Run causal attention with no selection through the same flash kernel
+    /// (every key up to the row's position kept, no tile skipped) instead of
+    /// `attention_prefill_causal_tiled`. Set from `ModelProfile.prefillDenseFlash`.
+    var denseFlash = false
 
     /// Whether the matrix-unit QSA kernel compiled on this device.
     var hasQSAMatrixUnitKernel: Bool { psoCausalQSAGQAMMA != nil }
@@ -190,7 +194,10 @@ final class PrefillAttention {
     ) throws {
         validate(params)
 
-        if maskedFlash, let keepMask, kvRingCapacity == 0, params.headDim == 256,
+        // The flash kernel serves a selection (masked) and, with `denseFlash`,
+        // plain causal attention (no selection) too.
+        if maskedFlash && keepMask != nil || denseFlash && keepMask == nil,
+            kvRingCapacity == 0, params.headDim == 256,
             // Full-attention layers pass the whole visible range as their
             // window, which limits nothing; a real window would.
             params.slidingWindow == 0 || params.slidingWindow >= params.kvValidCount,
@@ -298,13 +305,17 @@ final class PrefillAttention {
         v: MTLBuffer, vOffset: Int,
         out: MTLBuffer, outOffset: Int,
         params: PrefillAttentionParams,
-        keepMask: MTLBuffer, keepStride: Int, keepRowOffset: Int
+        keepMask: MTLBuffer?, keepStride: Int, keepRowOffset: Int
     ) throws {
         let rows = Int(params.queryCount)
         let rowTiles = (rows + Self.flashRows - 1) / Self.flashRows
+        // Without a selection the kernel masks by position: keys up to the
+        // visible count, no flags pass.
+        let keepStride = keepMask == nil ? Int(params.kvValidCount) : keepStride
         let keyTiles = (keepStride + Self.flashKeys - 1) / Self.flashKeys
-        let flagOffset = keepRowOffset / Self.flashRows * keyTiles
-        let needed = flagOffset + rowTiles * keyTiles
+        var causalOnly = UInt32(keepMask == nil ? 1 : 0)
+        let flagOffset = keepMask == nil ? 0 : keepRowOffset / Self.flashRows * keyTiles
+        let needed = keepMask == nil ? 1 : flagOffset + rowTiles * keyTiles
         if (flashTileFlags?.length ?? 0) < needed {
             guard
                 let made = context.device.makeBuffer(
@@ -313,23 +324,26 @@ final class PrefillAttention {
             made.label = "prefillAttention.qsaFlash.tileFlags"
             flashTileFlags = made
         }
-        guard let flags = flashTileFlags,
-            let flagEnc = commandBuffer.makeComputeCommandEncoder()
-        else { throw PrefillAttentionError.commandEncoderFailed }
+        guard let flags = flashTileFlags else { throw PrefillAttentionError.commandEncoderFailed }
         var stride = UInt32(keepStride)
         var rowCount = UInt32(rows)
         var tiles = UInt32(keyTiles)
-        let maskOffset = keepRowOffset * keepStride
-        flagEnc.setComputePipelineState(flagsPipeline)
-        flagEnc.setBuffer(keepMask, offset: maskOffset, index: 0)
-        flagEnc.setBytes(&stride, length: 4, index: 1)
-        flagEnc.setBytes(&rowCount, length: 4, index: 2)
-        flagEnc.setBuffer(flags, offset: flagOffset, index: 3)
-        flagEnc.setBytes(&tiles, length: 4, index: 4)
-        flagEnc.dispatchThreads(
-            MTLSize(width: keyTiles, height: rowTiles, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
-        flagEnc.endEncoding()
+        let maskOffset = keepMask == nil ? 0 : keepRowOffset * keepStride
+        if let keepMask {
+            guard let flagEnc = commandBuffer.makeComputeCommandEncoder() else {
+                throw PrefillAttentionError.commandEncoderFailed
+            }
+            flagEnc.setComputePipelineState(flagsPipeline)
+            flagEnc.setBuffer(keepMask, offset: maskOffset, index: 0)
+            flagEnc.setBytes(&stride, length: 4, index: 1)
+            flagEnc.setBytes(&rowCount, length: 4, index: 2)
+            flagEnc.setBuffer(flags, offset: flagOffset, index: 3)
+            flagEnc.setBytes(&tiles, length: 4, index: 4)
+            flagEnc.dispatchThreads(
+                MTLSize(width: keyTiles, height: rowTiles, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
+            flagEnc.endEncoding()
+        }
 
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
             throw PrefillAttentionError.commandEncoderFailed
@@ -341,10 +355,11 @@ final class PrefillAttention {
         enc.setBuffer(out, offset: outOffset, index: 3)
         var p = params
         enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 4)
-        enc.setBuffer(keepMask, offset: maskOffset, index: 5)
+        enc.setBuffer(keepMask ?? emptyKeepMask, offset: maskOffset, index: 5)
         enc.setBytes(&stride, length: 4, index: 6)
         enc.setBuffer(flags, offset: flagOffset, index: 7)
         enc.setBytes(&tiles, length: 4, index: 8)
+        enc.setBytes(&causalOnly, length: 4, index: 9)
         let group = Int(params.numQHeads / params.numKVHeads)
         enc.dispatchThreadgroups(
             MTLSize(width: rowTiles, height: Int(params.numKVHeads), depth: 1),
