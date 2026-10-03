@@ -826,6 +826,8 @@ kernel void prefill_routed_qmm_##BM_##x##BN_(                                   
 }
 PREFILL_ROUTED_QMM(32, 32)
 PREFILL_ROUTED_QMM(64, 64)
+PREFILL_ROUTED_QMM(64, 32)
+PREFILL_ROUTED_QMM(32, 64)
 #undef PREFILL_ROUTED_QMM
 
 /// The same tile for a dense projection: y[M, N] = x[M, K] . w[N, K]^T, with

@@ -212,6 +212,49 @@ import Testing
 
     /// Qwen3.8's routed shape: 16 experts x 352 rows, D 2560, F 640, 4-bit.
     /// Prints GPU time and TFLOP/s. TINYTITAN_ROUTED_QMM_BENCH=1 to run.
+    /// The fused gate+up at every tile shape (rows x columns), alone.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_ROUTED_QMM_BENCH"] == "1"))
+    func gateUpTileShapes() throws {
+        let (d, f) = (2_560, 640)
+        for (bm, bn) in [(32, 32), (64, 32), (32, 64), (64, 64)] {
+            let fx = try Self.fixture(
+                bits: 4, d: d, f: f, rowsPerExpert: Array(repeating: 352, count: 16),
+                reference: false, edge: bm)
+            let pso = try fx.ctx.pipeline(
+                "prefill_routed_qmm_gate_up_\(bm)x\(bn)",
+                constants: [
+                    MetalFunctionConstant(index: 77, value: .bool(true)),
+                    MetalFunctionConstant(index: 78, value: .uint32(4)),
+                ])
+            guard let x = fx.ctx.device.makeBuffer(length: fx.rows * d * 2, options: .storageModePrivate),
+                let act = fx.ctx.device.makeBuffer(length: fx.rows * f * 2, options: .storageModePrivate)
+            else { throw MetalError.commandEncoderFailed }
+            var best = Double.infinity
+            for _ in 0..<3 {
+                guard let cb = fx.ctx.queue.makeCommandBuffer(),
+                    let enc = cb.makeComputeCommandEncoder()
+                else { throw MetalError.commandEncoderFailed }
+                enc.setComputePipelineState(pso)
+                enc.setBuffer(x, offset: 0, index: 0)
+                enc.setBuffer(act, offset: 0, index: 1)
+                enc.setBuffer(fx.args, offset: 0, index: 2)
+                enc.setBuffer(fx.work, offset: 0, index: 3)
+                var p = Self.params(fx, down: false)
+                enc.setBytes(&p, length: p.count * 4, index: 4)
+                enc.useResource(fx.blob, usage: .read)
+                enc.dispatchThreadgroups(
+                    MTLSize(width: f / bn, height: fx.workCount, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
+                enc.endEncoding()
+                cb.commit()
+                cb.waitUntilCompleted()
+                best = min(best, cb.gpuEndTime - cb.gpuStartTime)
+            }
+            let flops = Double(fx.rows * d * f * 4)
+            print(String(format: "[gate-up-bench] %dx%d %.2f ms %.2f TFLOP/s", bm, bn, best * 1000, flops / best / 1e12))
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_ROUTED_QMM_BENCH"] == "1"))
     func benchmark() throws {
         let (d, f) = (2_560, 640)

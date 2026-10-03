@@ -22,7 +22,8 @@ final class PrefillRoutedExpertGEMM {
     /// expert and projection. Nil keeps the MPP GEMMs.
     private let tiledGateUp: MTLComputePipelineState?
     private let tiledDown: MTLComputePipelineState?
-    static let gateUpEdge = 32
+    static let gateUpRows = 64
+    static let gateUpColumns = 32
     static let downEdge = 64
     private let gather: MTLComputePipelineState
     private let scatter: MTLComputePipelineState
@@ -48,11 +49,11 @@ final class PrefillRoutedExpertGEMM {
                 MetalFunctionConstant(index: 77, value: .bool(siluActivation)),
                 MetalFunctionConstant(index: 78, value: .uint32(UInt32(weightBits))),
             ]
-            // Fused gate+up holds two accumulator sets, so it keeps the 32 x 32
-            // tile (6.3 TFLOPS; 64 x 64: 5.9); down takes 64 x 64 (6.5; 32 x 32:
-            // 5.6). Microbenchmark at Qwen3.8's routed shape, M1 Max.
+            // Fused gate+up holds two accumulator sets: 64 rows x 32 columns
+            // (6.6 TFLOPS; 32 x 32: 6.2, 64 x 64: 5.9). Down takes 64 x 64 (6.5;
+            // 32 x 32: 5.6). Microbenchmarks at Qwen3.8's routed shape, M1 Max.
             self.tiledGateUp = try context.pipeline(
-                "prefill_routed_qmm_gate_up_\(Self.gateUpEdge)x\(Self.gateUpEdge)",
+                "prefill_routed_qmm_gate_up_\(Self.gateUpRows)x\(Self.gateUpColumns)",
                 constants: constants)
             self.tiledDown = try context.pipeline(
                 "prefill_routed_qmm_\(Self.downEdge)x\(Self.downEdge)", constants: constants)
@@ -222,7 +223,7 @@ final class PrefillRoutedExpertGEMM {
     }
 
     /// The tile's rows as work items of at most one tile edge, each inside one
-    /// expert (32 rows for gate+up, 64 for down); then
+    /// expert (64 rows for both launches); then
     /// gate+up+activation in one launch and down in another, every expert of
     /// the tile at once. The experts are reached through a table of device
     /// addresses (`PrefillStreamedRoutedBlobsMSL`'s layout), indexed by the
@@ -260,8 +261,9 @@ final class PrefillRoutedExpertGEMM {
             else { throw MetalError.bufferAllocationFailed("prefill.routedQMM.work") }
             return (buffer, work.count / 4)
         }
-        let gateUpWork = try workItems(edge: Self.gateUpEdge)
-        let downWork = try workItems(edge: Self.downEdge)
+        let gateUpWork = try workItems(edge: Self.gateUpRows)
+        let downWork =
+            Self.downEdge == Self.gateUpRows ? gateUpWork : try workItems(edge: Self.downEdge)
         let gateUpParams: [UInt32] = [
             UInt32(f), UInt32(d),
             offsets.gateWOff, offsets.gateSOff, offsets.gateBOff,
@@ -272,7 +274,7 @@ final class PrefillRoutedExpertGEMM {
             offsets.downWOff, offsets.downSOff, offsets.downBOff, 0, 0, 0, 64,
         ]
         for (pso, x, y, params, n, work, edge) in [
-            (gateUp, rowsIn, activated, gateUpParams, f, gateUpWork, Self.gateUpEdge),
+            (gateUp, rowsIn, activated, gateUpParams, f, gateUpWork, Self.gateUpColumns),
             (down, activated, rowsOut, downParams, d, downWork, Self.downEdge),
         ] {
             guard let enc = cb.makeComputeCommandEncoder() else {
