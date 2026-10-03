@@ -20,13 +20,14 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 | + 32,768-token chunks: this prompt in one chunk, no 547-token tail sweep (-7.0%) | 141-151 | 115-120 | identical |
 | + Gated-DeltaNet recurrence in 8-token WY chunks on the matrix units | 141-149 | 117 | rounding |
 | + QSA attention as masked dense flash tiles, key selection on the GPU | 104 | 163 | rounding |
-| + routed experts and dense projections on tiled QMMs, expert readahead | **82.5** | **205** | rounding |
+| + routed experts and dense projections on tiled QMMs, expert readahead | 82.5 | 205 | rounding |
+| + 64 x 64 QMM tiles | **76.1** | **222** | identical |
 
 **Speed against baseline so far** (same M1 Max, same 16,931-token prompt):
 
 | | baseline | now | speedup |
 | --- | ---: | ---: | ---: |
-| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 82.5 s | **5.75x** |
+| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 76.1 s | **6.2x** |
 | Decode, 256 tokens, 12 GiB -> 16 GiB expert cache | 5.06 tok/s | 5.62 tok/s | **+11%** |
 
 The 32K chunk took prefill from 154.7-159.9 s to 140.7-151.2 s (-7.0%) with

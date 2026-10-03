@@ -22,6 +22,8 @@ final class PrefillRoutedExpertGEMM {
     /// expert and projection. Nil keeps the MPP GEMMs.
     private let tiledGateUp: MTLComputePipelineState?
     private let tiledDown: MTLComputePipelineState?
+    static let gateUpEdge = 32
+    static let downEdge = 64
     private let gather: MTLComputePipelineState
     private let scatter: MTLComputePipelineState
     private let activation: MTLComputePipelineState
@@ -46,9 +48,14 @@ final class PrefillRoutedExpertGEMM {
                 MetalFunctionConstant(index: 77, value: .bool(siluActivation)),
                 MetalFunctionConstant(index: 78, value: .uint32(UInt32(weightBits))),
             ]
+            // Fused gate+up holds two accumulator sets, so it keeps the 32 x 32
+            // tile (6.3 TFLOPS; 64 x 64: 5.9); down takes 64 x 64 (6.5; 32 x 32:
+            // 5.6). Microbenchmark at Qwen3.8's routed shape, M1 Max.
             self.tiledGateUp = try context.pipeline(
-                "prefill_routed_qmm_gate_up", constants: constants)
-            self.tiledDown = try context.pipeline("prefill_routed_qmm", constants: constants)
+                "prefill_routed_qmm_gate_up_\(Self.gateUpEdge)x\(Self.gateUpEdge)",
+                constants: constants)
+            self.tiledDown = try context.pipeline(
+                "prefill_routed_qmm_\(Self.downEdge)x\(Self.downEdge)", constants: constants)
         } else {
             self.tiledGateUp = nil
             self.tiledDown = nil
@@ -214,7 +221,8 @@ final class PrefillRoutedExpertGEMM {
         }
     }
 
-    /// The tile's rows as 32-row work items, each inside one expert; then
+    /// The tile's rows as work items of at most one tile edge, each inside one
+    /// expert (32 rows for gate+up, 64 for down); then
     /// gate+up+activation in one launch and down in another, every expert of
     /// the tile at once. The experts are reached through a table of device
     /// addresses (`PrefillStreamedRoutedBlobsMSL`'s layout), indexed by the
@@ -231,23 +239,29 @@ final class PrefillRoutedExpertGEMM {
         for (slot, view) in binding.views.enumerated() {
             addresses[slot] = view.buffer.gpuAddress + UInt64(view.offset)
         }
-        var work: [UInt32] = []
-        for group in groups where group.pairCount > 0 {
-            guard let slot = binding.expertIDs.firstIndex(of: Int(group.expert)) else {
-                throw PrefillGroupedRoutedMoEError.invalidStreamedTileBinding(
-                    "expert \(group.expert) of the tile has no binding")
+        func workItems(edge: Int) throws -> (buffer: MTLBuffer, count: Int) {
+            var work: [UInt32] = []
+            for group in groups where group.pairCount > 0 {
+                guard let slot = binding.expertIDs.firstIndex(of: Int(group.expert)) else {
+                    throw PrefillGroupedRoutedMoEError.invalidStreamedTileBinding(
+                        "expert \(group.expert) of the tile has no binding")
+                }
+                let first = Int(group.pairStart - tile.pairStart)
+                let count = Int(group.pairCount)
+                for start in stride(from: 0, to: count, by: edge) {
+                    work += [
+                        UInt32(slot), UInt32(first + start), UInt32(min(edge, count - start)), 0,
+                    ]
+                }
             }
-            let first = Int(group.pairStart - tile.pairStart)
-            let count = Int(group.pairCount)
-            for start in stride(from: 0, to: count, by: 32) {
-                work += [UInt32(slot), UInt32(first + start), UInt32(min(32, count - start)), 0]
-            }
+            guard !work.isEmpty,
+                let buffer = device.makeBuffer(
+                    bytes: work, length: work.count * 4, options: .storageModeShared)
+            else { throw MetalError.bufferAllocationFailed("prefill.routedQMM.work") }
+            return (buffer, work.count / 4)
         }
-        guard !work.isEmpty,
-            let workBuffer = device.makeBuffer(
-                bytes: work, length: work.count * 4, options: .storageModeShared)
-        else { throw MetalError.bufferAllocationFailed("prefill.routedQMM.work") }
-        let items = work.count / 4
+        let gateUpWork = try workItems(edge: Self.gateUpEdge)
+        let downWork = try workItems(edge: Self.downEdge)
         let gateUpParams: [UInt32] = [
             UInt32(f), UInt32(d),
             offsets.gateWOff, offsets.gateSOff, offsets.gateBOff,
@@ -257,9 +271,9 @@ final class PrefillRoutedExpertGEMM {
             UInt32(d), UInt32(f),
             offsets.downWOff, offsets.downSOff, offsets.downBOff, 0, 0, 0, 64,
         ]
-        for (pso, x, y, params, n) in [
-            (gateUp, rowsIn, activated, gateUpParams, f),
-            (down, activated, rowsOut, downParams, d),
+        for (pso, x, y, params, n, work, edge) in [
+            (gateUp, rowsIn, activated, gateUpParams, f, gateUpWork, Self.gateUpEdge),
+            (down, activated, rowsOut, downParams, d, downWork, Self.downEdge),
         ] {
             guard let enc = cb.makeComputeCommandEncoder() else {
                 throw MetalError.commandEncoderFailed
@@ -268,12 +282,12 @@ final class PrefillRoutedExpertGEMM {
             enc.setBuffer(x, offset: 0, index: 0)
             enc.setBuffer(y, offset: 0, index: 1)
             enc.setBytes(&addresses, length: addresses.count * 8, index: 2)
-            enc.setBuffer(workBuffer, offset: 0, index: 3)
+            enc.setBuffer(work.buffer, offset: 0, index: 3)
             var p = params
             enc.setBytes(&p, length: p.count * 4, index: 4)
             for view in binding.views { enc.useResource(view.buffer, usage: .read) }
             enc.dispatchThreadgroups(
-                MTLSize(width: n / 32, height: items, depth: 1),
+                MTLSize(width: n / edge, height: work.count, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
             enc.endEncoding()
         }

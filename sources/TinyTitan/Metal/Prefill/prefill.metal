@@ -650,7 +650,10 @@ static inline PrefillQMMWeights prefill_qmm_weights(
         reinterpret_cast<device const bfloat*>(base + b_off)};
 }
 
-template <bool kFused>
+/// One BM x BN output tile: rows `item.row ..` (`item.rows` <= BM of them) of
+/// x against `w1` (and `w2` when fused), columns from tg.x * BN. Four
+/// simdgroups in a 2 x 2 grid, each (BM / 2) x (BN / 2) as 8 x 8 fragments.
+template <bool kFused, short BM, short BN>
 static inline void prefill_routed_qmm_body(
     device const half* x,
     device half* y,
@@ -661,40 +664,48 @@ static inline void prefill_routed_qmm_body(
     uint2 tg, ushort lid, ushort sg, ushort lane,
     threadgroup half* xs, threadgroup half* ws, threadgroup half* ws2
 ) {
-    const uint n0 = tg.x * kRoutedQMMBN;
+    constexpr short TM = BM / 16;   // 8-row fragments per simdgroup
+    constexpr short TN = BN / 16;   // 8-column fragments per simdgroup
+    const uint n0 = tg.x * BN;
     if (n0 >= p.N) return;
     const uint bits = prefill_affine_bits();
 
-    // Loader mapping: 128 threads, each 8 halves of one row of a 32 x 32 tile.
-    const uint lr = lid / 4u;
-    const uint lk = (lid % 4u) * 8u;
-    const bool xLive = lr < item.rows;
-    device const half* xRow = x + ulong(item.row + (xLive ? lr : 0u)) * p.K + lk;
-
     const ushort wm = sg / 2;
     const ushort wn = sg % 2;
-    simdgroup_float8x8 acc[2][2];
-    simdgroup_float8x8 acc2[2][2];
-    for (short i = 0; i < 2; ++i) {
-        for (short j = 0; j < 2; ++j) {
+    simdgroup_float8x8 acc[TM][TN];
+    simdgroup_float8x8 acc2[kFused ? TM : 1][kFused ? TN : 1];
+    _Pragma("clang loop unroll(full)")
+    for (short i = 0; i < TM; ++i) {
+        _Pragma("clang loop unroll(full)")
+        for (short j = 0; j < TN; ++j) {
             acc[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
-            acc2[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+            if (kFused) acc2[i][j] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
         }
     }
 
     for (uint k0 = 0u; k0 < p.K; k0 += kRoutedQMMBK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        {
+        // Each task: 8 halves of one row of the step (4 tasks per row).
+        _Pragma("clang loop unroll(full)")
+        for (short t = 0; t < BM / 32; ++t) {
+            const uint task = lid + t * 128u;
+            const uint lr = task / 4u;
+            const uint lk = (task % 4u) * 8u;
             threadgroup half* dx = xs + lr * kRoutedQMMLd + lk;
-            if (xLive) {
-                const half4 a = *reinterpret_cast<device const half4*>(xRow + k0);
-                const half4 b = *reinterpret_cast<device const half4*>(xRow + k0 + 4u);
-                *reinterpret_cast<threadgroup half4*>(dx) = a;
-                *reinterpret_cast<threadgroup half4*>(dx + 4) = b;
+            if (lr < item.rows) {
+                device const half* src = x + ulong(item.row + lr) * p.K + k0 + lk;
+                *reinterpret_cast<threadgroup half4*>(dx) = *reinterpret_cast<device const half4*>(src);
+                *reinterpret_cast<threadgroup half4*>(dx + 4) = *reinterpret_cast<device const half4*>(src + 4);
             } else {
                 *reinterpret_cast<threadgroup half4*>(dx) = half4(0);
                 *reinterpret_cast<threadgroup half4*>(dx + 4) = half4(0);
             }
+        }
+        _Pragma("clang loop unroll(full)")
+        for (short t = 0; t < BN / 32; ++t) {
+            const uint task = lid + t * 128u;
+            const uint lr = task / 4u;
+            const uint lk = (task % 4u) * 8u;
             prefill_routed_qmm_load_w(
                 w1.w, w1.s, w1.b, p.K, p.group_size, bits,
                 n0 + lr, k0, lk, ws + lr * kRoutedQMMLd + lk);
@@ -707,32 +718,35 @@ static inline void prefill_routed_qmm_body(
         threadgroup_barrier(mem_flags::mem_threadgroup);
         _Pragma("clang loop unroll(full)")
         for (short kk = 0; kk < kRoutedQMMBK; kk += 8) {
-            simdgroup_half8x8 a[2];
-            simdgroup_half8x8 b[2];
+            simdgroup_half8x8 a[TM];
+            simdgroup_half8x8 b[TN];
             _Pragma("clang loop unroll(full)")
-            for (short i = 0; i < 2; ++i) {
-                simdgroup_load(a[i], xs + (wm * 16 + i * 8) * kRoutedQMMLd + kk, kRoutedQMMLd);
+            for (short i = 0; i < TM; ++i) {
+                simdgroup_load(a[i], xs + (wm * (BM / 2) + i * 8) * kRoutedQMMLd + kk, kRoutedQMMLd);
+            }
+            _Pragma("clang loop unroll(full)")
+            for (short j = 0; j < TN; ++j) {
                 // ws is [n][k]: the k x n operand, loaded transposed.
-                simdgroup_load(b[i], ws + (wn * 16 + i * 8) * kRoutedQMMLd + kk, kRoutedQMMLd,
+                simdgroup_load(b[j], ws + (wn * (BN / 2) + j * 8) * kRoutedQMMLd + kk, kRoutedQMMLd,
                                ulong2(0, 0), true);
             }
             _Pragma("clang loop unroll(full)")
-            for (short i = 0; i < 2; ++i) {
+            for (short i = 0; i < TM; ++i) {
                 _Pragma("clang loop unroll(full)")
-                for (short j = 0; j < 2; ++j) {
+                for (short j = 0; j < TN; ++j) {
                     simdgroup_multiply_accumulate(acc[i][j], a[i], b[j], acc[i][j]);
                 }
             }
             if (kFused) {
                 _Pragma("clang loop unroll(full)")
-                for (short i = 0; i < 2; ++i) {
-                    simdgroup_load(b[i], ws2 + (wn * 16 + i * 8) * kRoutedQMMLd + kk,
+                for (short j = 0; j < TN; ++j) {
+                    simdgroup_load(b[j], ws2 + (wn * (BN / 2) + j * 8) * kRoutedQMMLd + kk,
                                    kRoutedQMMLd, ulong2(0, 0), true);
                 }
                 _Pragma("clang loop unroll(full)")
-                for (short i = 0; i < 2; ++i) {
+                for (short i = 0; i < TM; ++i) {
                     _Pragma("clang loop unroll(full)")
-                    for (short j = 0; j < 2; ++j) {
+                    for (short j = 0; j < TN; ++j) {
                         simdgroup_multiply_accumulate(acc2[i][j], a[i], b[j], acc2[i][j]);
                     }
                 }
@@ -745,11 +759,13 @@ static inline void prefill_routed_qmm_body(
     const uint qid = lane / 4u;
     const uint fm = (qid & 4u) + (lane / 2u) % 4u;
     const uint fn = (qid & 2u) * 2u + (lane % 2u) * 2u;
-    for (short i = 0; i < 2; ++i) {
-        const uint r = wm * 16 + i * 8 + fm;
+    _Pragma("clang loop unroll(full)")
+    for (short i = 0; i < TM; ++i) {
+        const uint r = wm * (BM / 2) + i * 8 + fm;
         if (r >= item.rows) continue;
-        device half* out = y + ulong(item.row + r) * p.N + n0 + wn * 16 + fn;
-        for (short j = 0; j < 2; ++j) {
+        device half* out = y + ulong(item.row + r) * p.N + n0 + wn * (BN / 2) + fn;
+        _Pragma("clang loop unroll(full)")
+        for (short j = 0; j < TN; ++j) {
             float v0 = acc[i][j].thread_elements()[0];
             float v1 = acc[i][j].thread_elements()[1];
             if (kFused) {
@@ -761,74 +777,89 @@ static inline void prefill_routed_qmm_body(
     }
 }
 
-/// act[row, f] = act(x . gate[f]) * (x . up[f]) for every work item's rows.
-[[kernel, max_total_threads_per_threadgroup(128)]]
-kernel void prefill_routed_qmm_gate_up(
-    device const half* x [[buffer(0)]],
-    device half* y [[buffer(1)]],
-    constant PrefillStreamedRoutedBlobsMSL& routed [[buffer(2)]],
-    device const PrefillRoutedQMMWork* work [[buffer(3)]],
-    constant PrefillRoutedQMMParams& p [[buffer(4)]],
-    uint2 tg [[threadgroup_position_in_grid]],
-    ushort lid [[thread_index_in_threadgroup]],
-    ushort sg [[simdgroup_index_in_threadgroup]],
-    ushort lane [[thread_index_in_simdgroup]]
-) {
-    threadgroup half xs[kRoutedQMMBM * kRoutedQMMLd];
-    threadgroup half ws[kRoutedQMMBN * kRoutedQMMLd];
-    threadgroup half ws2[kRoutedQMMBN * kRoutedQMMLd];
-    const PrefillRoutedQMMWork item = work[tg.y];
-    device const uint8_t* expert = routed.blob[item.slot];
-    prefill_routed_qmm_body<true>(
-        x, y, prefill_qmm_weights(expert, p.w_off, p.s_off, p.b_off),
-        prefill_qmm_weights(expert, p.w2_off, p.s2_off, p.b2_off),
-        item, p, tg, lid, sg, lane, xs, ws, ws2);
+/// act[row, f] = act(x . gate[f]) * (x . up[f]) for every work item's rows,
+/// and y[row, n] = x[row] . w[n] (the down projection): one kernel per output
+/// tile shape, `prefill_routed_qmm_gate_up_<BM>x<BN>` and
+/// `prefill_routed_qmm_<BM>x<BN>`. A work item holds at most BM rows.
+#define PREFILL_ROUTED_QMM(BM_, BN_)                                             \
+[[kernel, max_total_threads_per_threadgroup(128)]]                               \
+kernel void prefill_routed_qmm_gate_up_##BM_##x##BN_(                            \
+    device const half* x [[buffer(0)]],                                          \
+    device half* y [[buffer(1)]],                                                \
+    constant PrefillStreamedRoutedBlobsMSL& routed [[buffer(2)]],                \
+    device const PrefillRoutedQMMWork* work [[buffer(3)]],                       \
+    constant PrefillRoutedQMMParams& p [[buffer(4)]],                            \
+    uint2 tg [[threadgroup_position_in_grid]],                                   \
+    ushort lid [[thread_index_in_threadgroup]],                                  \
+    ushort sg [[simdgroup_index_in_threadgroup]],                                \
+    ushort lane [[thread_index_in_simdgroup]]                                    \
+) {                                                                              \
+    threadgroup half xs[BM_ * kRoutedQMMLd];                                     \
+    threadgroup half ws[BN_ * kRoutedQMMLd];                                     \
+    threadgroup half ws2[BN_ * kRoutedQMMLd];                                    \
+    const PrefillRoutedQMMWork item = work[tg.y];                                \
+    device const uint8_t* expert = routed.blob[item.slot];                       \
+    prefill_routed_qmm_body<true, BM_, BN_>(                                     \
+        x, y, prefill_qmm_weights(expert, p.w_off, p.s_off, p.b_off),            \
+        prefill_qmm_weights(expert, p.w2_off, p.s2_off, p.b2_off),               \
+        item, p, tg, lid, sg, lane, xs, ws, ws2);                                \
+}                                                                                \
+[[kernel, max_total_threads_per_threadgroup(128)]]                               \
+kernel void prefill_routed_qmm_##BM_##x##BN_(                                    \
+    device const half* x [[buffer(0)]],                                          \
+    device half* y [[buffer(1)]],                                                \
+    constant PrefillStreamedRoutedBlobsMSL& routed [[buffer(2)]],                \
+    device const PrefillRoutedQMMWork* work [[buffer(3)]],                       \
+    constant PrefillRoutedQMMParams& p [[buffer(4)]],                            \
+    uint2 tg [[threadgroup_position_in_grid]],                                   \
+    ushort lid [[thread_index_in_threadgroup]],                                  \
+    ushort sg [[simdgroup_index_in_threadgroup]],                                \
+    ushort lane [[thread_index_in_simdgroup]]                                    \
+) {                                                                              \
+    threadgroup half xs[BM_ * kRoutedQMMLd];                                     \
+    threadgroup half ws[BN_ * kRoutedQMMLd];                                     \
+    const PrefillRoutedQMMWork item = work[tg.y];                                \
+    const PrefillQMMWeights w =                                                  \
+        prefill_qmm_weights(routed.blob[item.slot], p.w_off, p.s_off, p.b_off);  \
+    prefill_routed_qmm_body<false, BM_, BN_>(                                    \
+        x, y, w, w, item, p, tg, lid, sg, lane, xs, ws, ws);                     \
 }
-
-/// y[row, n] = x[row] . w[n]: the down projection.
-[[kernel, max_total_threads_per_threadgroup(128)]]
-kernel void prefill_routed_qmm(
-    device const half* x [[buffer(0)]],
-    device half* y [[buffer(1)]],
-    constant PrefillStreamedRoutedBlobsMSL& routed [[buffer(2)]],
-    device const PrefillRoutedQMMWork* work [[buffer(3)]],
-    constant PrefillRoutedQMMParams& p [[buffer(4)]],
-    uint2 tg [[threadgroup_position_in_grid]],
-    ushort lid [[thread_index_in_threadgroup]],
-    ushort sg [[simdgroup_index_in_threadgroup]],
-    ushort lane [[thread_index_in_simdgroup]]
-) {
-    threadgroup half xs[kRoutedQMMBM * kRoutedQMMLd];
-    threadgroup half ws[kRoutedQMMBN * kRoutedQMMLd];
-    const PrefillRoutedQMMWork item = work[tg.y];
-    const PrefillQMMWeights w = prefill_qmm_weights(routed.blob[item.slot], p.w_off, p.s_off, p.b_off);
-    prefill_routed_qmm_body<false>(x, y, w, w, item, p, tg, lid, sg, lane, xs, ws, ws);
-}
+PREFILL_ROUTED_QMM(32, 32)
+PREFILL_ROUTED_QMM(64, 64)
+#undef PREFILL_ROUTED_QMM
 
 /// The same tile for a dense projection: y[M, N] = x[M, K] . w[N, K]^T, with
-/// the scales and biases in their own bindings (`p`'s offsets unused).
-[[kernel, max_total_threads_per_threadgroup(128)]]
-kernel void prefill_dense_qmm(
-    device const half* x [[buffer(0)]],
-    device half* y [[buffer(1)]],
-    device const uint8_t* weights [[buffer(2)]],
-    constant uint& M [[buffer(3)]],
-    constant PrefillRoutedQMMParams& p [[buffer(4)]],
-    device const bfloat* scales [[buffer(5)]],
-    device const bfloat* biases [[buffer(6)]],
-    uint2 tg [[threadgroup_position_in_grid]],
-    ushort lid [[thread_index_in_threadgroup]],
-    ushort sg [[simdgroup_index_in_threadgroup]],
-    ushort lane [[thread_index_in_simdgroup]]
-) {
-    threadgroup half xs[kRoutedQMMBM * kRoutedQMMLd];
-    threadgroup half ws[kRoutedQMMBN * kRoutedQMMLd];
-    const uint row = tg.y * uint(kRoutedQMMBM);
-    if (row >= M) return;
-    const PrefillRoutedQMMWork item = {0u, row, min(uint(kRoutedQMMBM), M - row), 0u};
-    const PrefillQMMWeights w = {weights, scales, biases};
-    prefill_routed_qmm_body<false>(x, y, w, w, item, p, tg, lid, sg, lane, xs, ws, ws);
+/// the scales and biases in their own bindings (`p`'s offsets unused). One
+/// kernel per output tile shape, `prefill_dense_qmm_<BM>x<BN>`.
+#define PREFILL_DENSE_QMM(BM_, BN_)                                              \
+[[kernel, max_total_threads_per_threadgroup(128)]]                               \
+kernel void prefill_dense_qmm_##BM_##x##BN_(                                     \
+    device const half* x [[buffer(0)]],                                          \
+    device half* y [[buffer(1)]],                                                \
+    device const uint8_t* weights [[buffer(2)]],                                 \
+    constant uint& M [[buffer(3)]],                                              \
+    constant PrefillRoutedQMMParams& p [[buffer(4)]],                            \
+    device const bfloat* scales [[buffer(5)]],                                   \
+    device const bfloat* biases [[buffer(6)]],                                   \
+    uint2 tg [[threadgroup_position_in_grid]],                                   \
+    ushort lid [[thread_index_in_threadgroup]],                                  \
+    ushort sg [[simdgroup_index_in_threadgroup]],                                \
+    ushort lane [[thread_index_in_simdgroup]]                                    \
+) {                                                                              \
+    threadgroup half xs[BM_ * kRoutedQMMLd];                                     \
+    threadgroup half ws[BN_ * kRoutedQMMLd];                                     \
+    const uint row = tg.y * uint(BM_);                                           \
+    if (row >= M) return;                                                        \
+    const PrefillRoutedQMMWork item = {0u, row, min(uint(BM_), M - row), 0u};    \
+    const PrefillQMMWeights w = {weights, scales, biases};                       \
+    prefill_routed_qmm_body<false, BM_, BN_>(                                    \
+        x, y, w, w, item, p, tg, lid, sg, lane, xs, ws, ws);                     \
 }
+PREFILL_DENSE_QMM(32, 32)
+PREFILL_DENSE_QMM(64, 32)
+PREFILL_DENSE_QMM(32, 64)
+PREFILL_DENSE_QMM(64, 64)
+#undef PREFILL_DENSE_QMM
 
 kernel void prefill_routed_gather_rows(
     device const half*                      hidden         [[buffer(0)]],

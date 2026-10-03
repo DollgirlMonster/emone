@@ -92,23 +92,26 @@ final class PrefillRMSNorm {
 }
 
 /// A batched prefill projection on the simdgroup matrix units
-/// (`prefill_dense_qmm`): 32 x 32 output tiles, K in steps of 32 dequantized
-/// to half in threadgroup memory, fp32 accumulation; the routed experts' QMM
-/// (`prefill_routed_qmm`) with one weight matrix. ~5.5 TFLOPS on an M1 Max at
-/// Qwen3.8's GDN projection shapes, where the MPP QMM runs ~4. One pipeline per
-/// weight width, so one instance serves the 4-bit and 8-bit tensors of a
-/// mixed install.
+/// (`prefill_dense_qmm_<BM>x<BN>`): K in steps of 32 dequantized to half in
+/// threadgroup memory, fp32 accumulation, four simdgroups per output tile; the
+/// routed experts' QMM with one weight matrix. 64 x 64 tiles where N allows
+/// (~7.3 TFLOPS on an M1 Max at Qwen3.8's GDN shapes, where the MPP QMM runs
+/// ~4.1), 32 x 32 otherwise (~5.5). One pipeline per tile and weight width,
+/// so one instance serves the 4-bit and 8-bit tensors of a mixed install.
 final class PrefillAffineSimdgroupQMM {
-    static let tile = 32
     static let threads = 128
-    private let pipelines: [Int: MTLComputePipelineState]
+    /// Output tile edge for a width: 64 when N is whole 64-column tiles.
+    static func tile(n: Int) -> Int { n % 64 == 0 ? 64 : 32 }
+    private let pipelines: [Int: [Int: MTLComputePipelineState]]
 
     init(context: MetalContext) throws {
-        var made: [Int: MTLComputePipelineState] = [:]
+        var made: [Int: [Int: MTLComputePipelineState]] = [:]
         for bits in [4, 8] {
-            made[bits] = try context.pipeline(
-                "prefill_dense_qmm",
-                constants: [MetalFunctionConstant(index: 78, value: .uint32(UInt32(bits)))])
+            for edge in [32, 64] {
+                made[edge, default: [:]][bits] = try context.pipeline(
+                    "prefill_dense_qmm_\(edge)x\(edge)",
+                    constants: [MetalFunctionConstant(index: 78, value: .uint32(UInt32(bits)))])
+            }
         }
         self.pipelines = made
     }
@@ -117,7 +120,7 @@ final class PrefillAffineSimdgroupQMM {
     /// whole number of quantization groups along K, and a width it was built
     /// for.
     func accepts(bits: Int, n: Int, k: Int) -> Bool {
-        pipelines[bits] != nil && n > 0 && n % Self.tile == 0
+        pipelines[32]?[bits] != nil && n > 0 && n % 32 == 0
             && k > 0 && k % Quantization.groupSize == 0
     }
 
@@ -130,7 +133,8 @@ final class PrefillAffineSimdgroupQMM {
         y: MTLBuffer, yOffset: Int = 0,
         t: Int, n: Int, k: Int, bits: Int
     ) throws {
-        guard let pipeline = pipelines[bits], accepts(bits: bits, n: n, k: k), t > 0
+        let edge = Self.tile(n: n)
+        guard accepts(bits: bits, n: n, k: k), t > 0, let pipeline = pipelines[edge]?[bits]
         else {
             throw MetalError.commandEncoderFailed
         }
@@ -148,9 +152,7 @@ final class PrefillAffineSimdgroupQMM {
         enc.setBuffer(scales, offset: scalesOffset, index: 5)
         enc.setBuffer(biases, offset: biasesOffset, index: 6)
         enc.dispatchThreadgroups(
-            MTLSize(
-                width: n / Self.tile,
-                height: (t + Self.tile - 1) / Self.tile, depth: 1),
+            MTLSize(width: n / edge, height: (t + edge - 1) / edge, depth: 1),
             threadsPerThreadgroup: MTLSize(width: Self.threads, height: 1, depth: 1))
         enc.endEncoding()
     }

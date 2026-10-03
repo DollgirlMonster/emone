@@ -712,3 +712,25 @@ row is the previous row plus one change; output starts identically on all.
 built from a worktree, same prompt and flags, run back to back with the
 current build): 474.4 s against 82.5 s, **5.75x**, output identical at the
 start.
+
+## Spike 18 (2026-10-03): 64 x 64 QMM tiles
+
+The tiled QMM's tile is now a template parameter. Microbenchmarks at
+Qwen3.8's shapes, M1 Max, each kernel alone (MPP QMM: 4.06 TFLOPS):
+
+| kernel | 32x32 | 64x32 | 32x64 | 64x64 |
+|---|---:|---:|---:|---:|
+| dense, N 16,384 K 2,560 | 5.51 | 6.47 | 6.19 | **7.33** |
+| dense, N 2,560 K 6,144 | 5.51 | 6.41 | 6.18 | **7.29** |
+| routed gate+up (fused) | **6.28** | | | 5.90 |
+| routed down | 5.59 | | | **6.54** |
+
+Dense projections take 64 x 64 when N is whole 64-column tiles, the routed
+down projection 64 x 64, the fused gate+up (two accumulator sets) stays at
+32 x 32. Each output still sums its K steps in the same order, so the output
+is bit-identical to spike 17's. 16,931-token prompt: GDN layers 29.2 ->
+25.1 s, routed GEMM 15.3 -> 14.4 s, prefill 82.5 -> **76.1 s** (6.2x the
+upstream engine's 474.4 s).
+
+The expert phase (21.3 s) now equals its GPU work (routed 14.4 s + shared
+expert 7.0 s, which runs in that phase): no drive wait is left on this prompt.
