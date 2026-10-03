@@ -245,20 +245,17 @@ static inline ulong qsa_select_key(device const float* scores, uint i) {
     return (ulong(qsa_orderable(scores[i])) << 32) | ulong(0xFFFFFFFFu - i);
 }
 
-[[kernel, max_total_threads_per_threadgroup(1024)]]
-void qsa_select_decode(
-    device const float* scores  [[buffer(0)]],   // [>= blocks]
-    device uint8_t*     keep    [[buffer(1)]],   // [visible] out
-    constant uint&      visible [[buffer(2)]],
-    constant uint&      ratio   [[buffer(3)]],
-    constant uint&      width   [[buffer(4)]],   // selectionWidth
-    uint lid   [[thread_position_in_threadgroup]],
-    uint lsize [[threads_per_threadgroup]]
+// One query row's selection into `keep[0, visible)`; every thread of the
+// threadgroup calls it, with the threadgroup scratch passed in.
+static inline void qsa_select_row(
+    device const float* scores,
+    device uint8_t* keep,
+    uint visible, uint ratio, uint width,
+    uint lid, uint lsize,
+    threadgroup atomic_uint* hist,
+    threadgroup ulong& prefix_tg,
+    threadgroup uint& rank_tg
 ) {
-    threadgroup atomic_uint hist[256];
-    threadgroup ulong prefix_tg;
-    threadgroup uint rank_tg;
-
     const uint complete = (visible / ratio) * ratio;
     const uint tail = visible - complete;
     for (uint c = complete + lid; c < visible; c += lsize) keep[c] = 1u;
@@ -317,3 +314,48 @@ void qsa_select_decode(
         }
     }
 }
+
+[[kernel, max_total_threads_per_threadgroup(1024)]]
+void qsa_select_decode(
+    device const float* scores  [[buffer(0)]],   // [>= blocks]
+    device uint8_t*     keep    [[buffer(1)]],   // [visible] out
+    constant uint&      visible [[buffer(2)]],
+    constant uint&      ratio   [[buffer(3)]],
+    constant uint&      width   [[buffer(4)]],   // selectionWidth
+    uint lid   [[thread_position_in_threadgroup]],
+    uint lsize [[threads_per_threadgroup]]
+) {
+    threadgroup atomic_uint hist[256];
+    threadgroup ulong prefix_tg;
+    threadgroup uint rank_tg;
+    qsa_select_row(scores, keep, visible, ratio, width, lid, lsize, hist, prefix_tg, rank_tg);
+}
+
+// The prefill chunk's selection, one threadgroup per query row: the same
+// selection as `QSAIndexer.selectPrefillRows` (row r sees startPosition + r + 1
+// keys; inside the dense window it keeps all of them), written as the mask
+// the attention reads, bytes past the row's visible keys zeroed. It rides the
+// layer's command buffer, so the GPU no longer waits on a host round trip.
+[[kernel, max_total_threads_per_threadgroup(1024)]]
+void qsa_select_prefill(
+    device const float* scores        [[buffer(0)]],   // [rows, scoredBlocks]
+    device uint8_t*     keep          [[buffer(1)]],   // [rows, keepStride] out
+    constant uint&      startPosition [[buffer(2)]],
+    constant uint&      ratio         [[buffer(3)]],
+    constant uint&      width         [[buffer(4)]],
+    constant uint&      scoredBlocks  [[buffer(5)]],
+    constant uint&      keepStride    [[buffer(6)]],
+    uint row   [[threadgroup_position_in_grid]],
+    uint lid   [[thread_position_in_threadgroup]],
+    uint lsize [[threads_per_threadgroup]]
+) {
+    threadgroup atomic_uint hist[256];
+    threadgroup ulong prefix_tg;
+    threadgroup uint rank_tg;
+    const uint visible = startPosition + row + 1u;
+    device uint8_t* out = keep + ulong(row) * keepStride;
+    for (uint c = visible + lid; c < keepStride; c += lsize) out[c] = 0u;
+    qsa_select_row(scores + ulong(row) * scoredBlocks, out, visible, ratio, width,
+                   lid, lsize, hist, prefix_tg, rank_tg);
+}
+

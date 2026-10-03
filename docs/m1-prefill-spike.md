@@ -551,3 +551,164 @@ What would have to change for it to win: the dense steps on `simdgroup_matrix`
 (spike 10 took QSA attention 72 -> 45.5 s and the indexer 17 -> 1.3 s that way
 on this chip) and a state pass split across more threadgroups per head. The
 ceiling is the scan's ~11 s, about 6-7% of prefill.
+
+## Spike 14 (2026-10-03, two rounds, 16,931-token prompt): a chunked GDN scan on the matrix units
+
+Spike 13's chunked scan lost because it was scalar. MLX's
+`gated_delta_fused_chunk` (mlx 0.32, MIT) runs the same WY form on 8x8
+simdgroup matrices: one simdgroup per 8 value columns of a head, the state
+slice in registers, 8-token chunks in sequence. Benchmarked through MLX on this
+machine at Qwen3.8's geometry it ran the 36 layers' recurrence in ~0.9 s at
+16,384 tokens and matched a naive recurrence to 4e-7.
+
+Ported as `gdn_delta_chunk_prefill_dk{32,64,128}` in `gdn.metal`, reading
+`conv_out` rows and computing g and beta from the a/b projections as the
+sequential kernel does (log g directly, not the log of g). The wrapper takes
+the sequential kernel when a first-row checkpoint is requested.
+`GDNChunkedPrefillTests` compares the two on 1-203 rows, cold and warm state,
+the small and the Qwen3.8 shapes: state within 5e-7, y within 3e-5.
+
+Kernel alone, Qwen3.8 shape (`gpuEndTime - gpuStartTime`, best of 3):
+
+| rows | sequential | chunked |
+| ---: | ---: | ---: |
+| 16,384 | 342.3 ms | **24.8 ms** (13.8x) |
+
+(The sequential kernel also measured 137.1 ms at 8,192 rows and 561.4 ms at
+32,768; the unrolled chunked kernel was timed at 16,384 only.)
+
+The first version ran at 74.5 ms: without `clang loop unroll(full)` on the
+Dk loops the `S[kk / 8]` tile array is indexed dynamically and lives in
+memory. MLX's `MLX_MTL_PRAGMA_UNROLL` is what keeps it in registers.
+
+End to end (`--arms "base gdnchunk"`, benchmark/m1-spike/20261003-023028):
+
+| arm | prefill s (r1, r2) | `prefill_gdn_router` s | GPU busy / span | output |
+| --- | --- | --- | --- | --- |
+| base | 153.48, 151.92 | 49.9, 49.4 | 101.5 / 159.3 s (64%) | reference |
+| gdnchunk | 148.60, 141.26 | 39.6, 38.9 | 88.7 / 144.7 s (61%) | differs (rounding) |
+
+The GDN layers lost the predicted ~10.6 s of GPU time; the wall lost ~7.8 s,
+because the GPU is idle ~40% of this prefill: "route readback + GPU" is 93.8 s
+against ~58 s of dense-phase GPU roles, and "expert fetch + tiles" 38.1 s
+against 27.4 s of routed GEMMs. That host time is now the largest prefill item.
+
+Surprisal (benchmark/surprisal/20261003-024508, the pinned 2026-09-26 text,
+19,087 tokens of context, 512 scored): B - A mean dNLL +0.00715, se 0.01383,
+t +0.52 (perplexity +0.72%): no measurable change. Qwen3.8 4-bit's profile row
+now ships it (`ModelProfile.prefillGDNChunked`, `TINYTITAN_PREFILL_GDN_CHUNK`
+overrides either way); the other GDN families keep the sequential kernel until
+their own check.
+
+## Spike 15 (2026-10-03): where the "idle" GPU went
+
+Spike 14 reported the GPU busy 61% of the span, which read as ~35 s of host
+time in the dense phase. A per-layer trace (`TINYTITAN_PREFILL_LAYER_TRACE=1`:
+host encode, queue, GPU, wake-up and route planning per layer) found every
+full-attention layer's router buffer waiting ~3.1 s *in the queue* before the
+GPU started it. That wait was GPU work: `PrefillAttention.encodeCausalTiled`
+commits each row tile but the last in its own command buffer, and none of
+those buffers was ever timed. They are now (role `prefill_attn_tiles`).
+
+16,931-token prompt, chunk 32768, gdn_chunk on:
+
+| role | GPU s |
+|---|---|
+| prefill_attn_tiles (QSA attention, 12 layers) | 37.4 |
+| prefill_gdn_router (36 layers) | 34.9 |
+| prefill_routed_gemm | 25.0 |
+| prefill_shared_expert | 8.3 |
+| prefill_attn_router (12 layers, last tile + tail) | 7.3 |
+| busy / span | 114.0 / 125.7 (91%) |
+
+So the GPU is nearly full, and QSA attention is the largest single role at
+3.1 s per layer, against ~0.48 s for MLX's dense causal SDPA at the same
+shape. The true host stalls are small: QSA key selection ~400 ms + ~100 ms
+encode per full-attention layer (~6 s), route planning ~21 ms per layer
+(~1 s). Output unchanged by the timing fix.
+
+## Spike 16 (2026-10-03): QSA attention as masked dense flash tiles
+
+Spike 15 left QSA attention as the largest prefill role: 37.4 s of GPU for 12
+layers at 16,931 tokens (plus 7.3 s in the router buffer), 3.1 s per layer.
+The gathered grouped kernel reads and dequantizes every selected key once per
+token and multiplies 16 keys at a time, ~0.36 TFLOP/s effective.
+
+`attention_prefill_qsa_masked_flash` instead walks the keys in 16-key tiles
+as a dense flash attention does, with each token's selection as a mask. A
+threadgroup takes 8 tokens and all 12 query heads of one KV head (one
+simdgroup per head), so each K/V tile is dequantized once for 96 rows, and a
+pre-pass (`qsa_flash_tile_flags`) marks key tiles no token of the 8 kept,
+which are skipped.
+
+Selection density decides the tile size. QSA keeps 2,048 keys per row in
+4-key blocks, scattered: on this prompt a single row touches ~42% of the
+causal triangle's 16-key tiles, 8 rows ~66%, 32 rows ~84%. A first version
+with 32 rows of one head per threadgroup ran *slower* than the gathered kernel
+(51.1 s).
+
+What made it fast, on a 4,096-row tile at 16.9K context with a near-dense
+random mask (microbenchmark `PrefillAttentionQSAFlashTests/benchmark`,
+gathered kernel 750 ms):
+
+| version | ms |
+|---|---|
+| 8 tokens x 12 heads, scalar K/V loads | 897 |
+| + scores in 4 partial sums (2 or 8: 579 / 549) | 778 |
+| + K/V dequantized 8 elements at a time | 514 |
+| K stored transposed in threadgroup memory | 508 (kept out: noise) |
+| skip the O rescale when no row max moved | 533 (kept out) |
+
+The score product was latency-bound: one 32-deep chain of dependent matrix
+products per 8-key block. Without K/V loads at all the kernel took 602 ms,
+and removing P.V changed nothing.
+
+End to end, 16,931-token prompt, chunk 32768: attention 44.7 -> 20.5 s of GPU
+(tiles 13.8 s + router 6.7 s), prefill 132.0 -> 108.4 s; spike 14's baseline
+was 152.7 s. Surprisal A/B (benchmark/surprisal/20261003-114755, pinned
+text, 19,087 context, 512 scored, chunk 8192): dNLL -0.0073, se 0.0132,
+t -0.55, no measurable change. Shipped on the Qwen3.8 4-bit row
+(`prefillQSAFlash`); `TINYTITAN_PREFILL_QSA_FLASH=0` restores the gathered
+kernel.
+
+## Spike 17 (2026-10-03): GPU key selection, tiled QMMs, layer readahead
+
+16,931-token prompt, chunk 32768, M1 Max, model on the external NVMe. Each
+row is the previous row plus one change; output starts identically on all.
+
+| change | prefill s | what moved |
+|---|---:|---|
+| spike 16 (QSA masked flash attention) | 108.4 | |
+| + QSA key selection on the GPU (`qsa_select_prefill`) | 103.7 | host wait per full-attention layer ~500 -> 3.6 ms |
+| + routed experts as two tiled QMM launches | 99.6 | routed GEMM 25.2 -> 15.5 s GPU |
+| + whole-layer expert readahead at layer start | 91.2 | expert phase 31.2 -> 22.8 s |
+| + dense projections on the tiled QMM | **82.5** | GDN layers 35.5 -> 29.2 s GPU |
+
+- **GPU key selection.** One threadgroup per query row runs the decode
+  kernel's radix select (now shared, `qsa_select_row`) and writes the mask in
+  place, so the selection rides the layer's command buffer. Byte-identical to
+  the host selection (`QSAPrefillGPUSelectionTests`, ties included). Used
+  whenever the masked flash attention runs; the ANE and the activation dump
+  keep the host path, which they need for the index list.
+- **Tiled QMM** (`prefill_routed_qmm_gate_up`, `prefill_routed_qmm`,
+  `prefill_dense_qmm`): MLX's steel QMM tiling in TinyTitan's weight layout.
+  32 x 32 output tiles, four simdgroups of 16 x 16, K in steps of 32
+  dequantized to half in threadgroup memory, fp32 accumulation. The routed
+  form takes a whole streamed tile in one launch per phase (32-row work items,
+  each inside one expert, experts through a device-address table), with gate
+  and up sharing the activation tile and the activation applied before the
+  store. Microbenchmarks: routed gate+up 6.3, down 5.6 TFLOPS; dense 5.55
+  TFLOPS against the MPP QMM's 4.0 at the GDN shapes. Surprisal: routed
+  +0.005 nats (t +0.42), dense -0.029 (t -2.03, if anything less surprised).
+  The dense kernel replaces the float-tile `prefill_affine_qmm_simdgroup`.
+- **Layer readahead.** A chunk this long touches ~481 of a layer's 512
+  experts, and the drive idles while the GPU runs the layer's attention. At
+  each layer's start `F_RDADVISE` reads the layer's uncached experts into the
+  buffer cache; the `F_NOCACHE` preads then find them there. Advising one
+  layer further ahead measured the same (90.8 s), two layers worse (108.3 s,
+  memory pressure). The expert phase is still ~7 s above its GPU work.
+
+**Against upstream.** The upstream engine at the fork point (`0690c611`,
+built from a worktree, same prompt and flags, run back to back with the
+current build): 474.4 s against 82.5 s, **5.75x**, output identical at the
+start.

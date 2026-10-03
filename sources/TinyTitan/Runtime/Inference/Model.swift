@@ -756,6 +756,27 @@ public struct Model {
         }
     }
 
+    /// Best-effort readahead of a whole layer's routed experts (those not
+    /// already in its slots) into the unified buffer cache with `F_RDADVISE`,
+    /// for a prefill chunk long enough to touch nearly all of them. Issued at
+    /// the layer's start, it runs on the drive while the GPU does the layer's
+    /// attention, which the streamed reads otherwise leave idle; the reads
+    /// that follow find the pages in memory. The open runs on the streamer
+    /// queue as `beginOpeningRoutedExpertStreamer` does, the advice on a
+    /// utility queue so a slow call cannot hold the streamer queue.
+    public func beginAdvisingRoutedLayer(_ L: Int) {
+        nonisolated(unsafe) let model = self
+        streamersQueue.async {
+            guard (try? model.openLayerLocked(L)) != nil,
+                let streamer = model.streamersBox.streamers[L]
+            else { return }
+            DispatchQueue.global(qos: .utility).async {
+                _ = streamer.adviseExpertMisses(
+                    experts: Array(0..<streamer.layout.expertsPerLayer))
+            }
+        }
+    }
+
     /// Drop a layer's expert cache. Safe once that layer's work is finished:
     /// the next use reopens it lazily, which is how it was created.
     public func releaseLayerStreamer(_ L: Int) {

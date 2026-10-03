@@ -723,10 +723,15 @@ final class ANEPrefillAttention: @unchecked Sendable {
             throw ModelError.internalInconsistency(
                 detail: "the ANE selection mask for history \(history) was not cached")
         }
+        guard let selectionIndices = selection.indices, let selectionCounts = selection.counts
+        else {
+            throw ModelError.internalInconsistency(
+                detail: "the ANE needs the host QSA selection, got a GPU one")
+        }
         let values = storage.bindMemory(to: Float16.self, capacity: count)
-        let indices = selection.indices.contents().bindMemory(
+        let indices = selectionIndices.contents().bindMemory(
             to: UInt32.self, capacity: max(1, tokenCount * selection.indexStride))
-        let counts = selection.counts.contents().bindMemory(
+        let counts = selectionCounts.contents().bindMemory(
             to: UInt32.self, capacity: max(1, tokenCount))
         for row in 0..<chunkTokens {
             let base = row * total

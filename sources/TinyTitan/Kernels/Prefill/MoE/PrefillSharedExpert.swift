@@ -82,7 +82,7 @@ final class PrefillSharedExpert {
                     y: output, yOffset: outputOffset,
                     m: queryCount, n: rows, k: columns) == .affineThreadgroupF16
             case .simdgroup(let qmm, let bits):
-                guard qmm.accepts(bits: bits, k: columns) else { return false }
+                guard qmm.accepts(bits: bits, n: rows, k: columns) else { return false }
                 try qmm.encode(
                     commandBuffer: cb,
                     weights: p.weights, weightsOffset: p.weightsOffset,

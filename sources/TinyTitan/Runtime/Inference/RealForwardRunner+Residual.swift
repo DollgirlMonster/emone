@@ -494,7 +494,8 @@ extension RealForwardRunner {
         cb: inout MTLCommandBuffer,
         blockInput: MTLBuffer,
         layer: Int, startPosition: Int, tokens: Int,
-        eps: Float
+        eps: Float,
+        gpuSelect: Bool = false
     ) throws -> QSASelection? {
         guard let indexer = qsaIndexer,
             cfg.fullAttentionLayerMask[layer] == 1
@@ -579,6 +580,11 @@ extension RealForwardRunner {
                     x: x, y: y,
                     tokens: count, rows: rows, columns: columns)
             })
+        // On the GPU the selection rides the same command buffer: no barrier.
+        if gpuSelect, indexer.canSelectPrefillOnGPU {
+            return try indexer.encodeSelectPrefill(
+                commandBuffer: commandBuffer, startPosition: startPosition, tokens: tokens)
+        }
         // The selection is a host computation over the scores, so the chunk's
         // command buffer has to land first. The same barrier the routed MoE
         // already takes for its route readback, one layer earlier.
@@ -814,7 +820,7 @@ extension RealForwardRunner {
         tokens: Int, rows: Int, columns: Int
     ) throws {
         if let simdgroup = prefillSimdgroupQMMKernel,
-            simdgroup.accepts(bits: model.attentionWeightBits, k: columns)
+            simdgroup.accepts(bits: model.attentionWeightBits, n: rows, k: columns)
         {
             try simdgroup.encode(
                 commandBuffer: commandBuffer,

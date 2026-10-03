@@ -534,7 +534,7 @@ extension RealForwardRunner {
         x: MTLBuffer, y: MTLBuffer, rows: Int, columns: Int, tokenCount: Int
     ) throws -> Bool {
         guard let simdgroup = prefillSimdgroupQMMKernel,
-            simdgroup.accepts(bits: weightBits, k: columns)
+            simdgroup.accepts(bits: weightBits, n: rows, k: columns)
         else { return false }
         try simdgroup.encode(
             commandBuffer: commandBuffer,
@@ -1165,8 +1165,10 @@ extension RealForwardRunner {
             topK: UInt32(cfg.topKExperts),
             hiddenStrideElements: UInt32(D))
 
+        let traceCommit = Self.prefillLayerTrace ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0
         cb.commit()
         try waitForCompletion(cb)
+        let traceWaited = Self.prefillLayerTrace ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0
         // Prefill had no occupancy instrumentation at all: these buffers
         // never reached recordKernelGPU, so TINYTITAN_KERNEL_STATS reported
         // only the decode tokens of a request and prefill looked idle.
@@ -1179,6 +1181,8 @@ extension RealForwardRunner {
             role: cfg.layerIsLinear(L)
                 ? "prefill_gdn_router"
                 : "prefill_attn_router", cb)
+        for (role, tile) in splitTimedBuffers { recordKernelGPU(role: role, tile) }
+        splitTimedBuffers.removeAll(keepingCapacity: true)
 
         let routeCount = t * cfg.topKExperts
         let idPtr = scratch.routeIDs.contents()
@@ -1236,6 +1240,25 @@ extension RealForwardRunner {
             expertSortKeys: model.routedExpertPhysicalOffsets(layer: L))
         prefillRouteEnd = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         prefillRouteNanos &+= prefillRouteEnd - prefillLayerStart
+        if Self.prefillLayerTrace {
+            // Host clock and the command buffer's GPU times share one base
+            // (mach absolute time), so the gaps between them are comparable.
+            let ms = { (a: UInt64, b: UInt64) in Double(b &- a) / 1e6 }
+            let gpuStart = UInt64(cb.gpuStartTime * 1e9)
+            let gpuEnd = UInt64(cb.gpuEndTime * 1e9)
+            FileHandle.standardError.write(
+                Data(
+                    String(
+                        format:
+                            "[prefill-layer] L=%d linear=%d encode_ms=%.1f queue_ms=%.1f gpu_ms=%.1f wake_ms=%.1f route_host_ms=%.1f\n",
+                        L, cfg.layerIsLinear(L) ? 1 : 0,
+                        ms(prefillLayerStart, traceCommit),
+                        gpuStart > traceCommit ? ms(traceCommit, gpuStart) : 0,
+                        ms(gpuStart, gpuEnd),
+                        traceWaited > gpuEnd ? ms(gpuEnd, traceWaited) : 0,
+                        ms(traceWaited, prefillRouteEnd)
+                    ).utf8))
+        }
         // One group per *distinct* expert this chunk touches. For a
         // 1-token chunk this is topK; for a speculative 2-token verify
         // it is the union of the two tokens' routes, which is what
@@ -1576,6 +1599,9 @@ extension RealForwardRunner {
         try Task.checkCancellation()
         let prefillLayerStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         model.beginOpeningRoutedExpertStreamer(layer: L)
+        if Self.prefillLayerReadahead, t >= Self.prefillLayerReadaheadMinTokens {
+            model.beginAdvisingRoutedLayer(L)
+        }
         let views = layerViews[L]
         let isLinear = cfg.layerIsLinear(L)
         let isFull = cfg.fullAttentionLayerMask[L] == 1
@@ -1601,10 +1627,16 @@ extension RealForwardRunner {
         // The indexer caches a key for every prefilled token, in or out
         // of the dense-exact window: decode crossing the boundary later
         // must not find holes behind it.
+        // The masked flash attention reads only the selection mask, so the
+        // GPU can make it in place. The ANE and the activation dump read the
+        // selection on the host and keep the host path.
         let qsaSelection = try encodeQSAPrefill(
             cb: &cb, blockInput: scratch.normed,
             layer: L, startPosition: startPosition,
-            tokens: t, eps: eps)
+            tokens: t, eps: eps,
+            gpuSelect: prefillAttention.maskedFlash
+                && !(aneChunk?.coveredLayers.contains(L) ?? false)
+                && activationDumpDirectory == nil)
         if isLinear {
             try encodeLinearAttentionPrefill(
                 cb: &cb, layer: L, views: views, scratch: scratch,

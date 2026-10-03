@@ -375,7 +375,13 @@ extension RealForwardRunner {
                     ? prefillAttentionPath
                     // Only the tiled kernel
                     // honours a selection.
-                    : .causalTiled)
+                    : .causalTiled,
+                // Every tile but the last runs in a buffer this layer never
+                // waits on directly; queue order completes them before the
+                // route readback, which drains them into the GPU timings.
+                onCommit: kernelGPUTimingsEnabled
+                    ? { [unowned self] in self.splitTimedBuffers.append(("prefill_attn_tiles", $0)) }
+                    : nil)
         } else {
             throw PrefillError.chunkedUnsupported(
                 "chunked prefill attention requires a KV cache")

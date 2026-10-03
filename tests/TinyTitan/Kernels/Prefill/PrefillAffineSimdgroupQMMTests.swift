@@ -5,10 +5,10 @@ import Testing
 @testable import TinyTitan
 
 /// The simdgroup-matrix QMM computes what the scalar prefill QMM computes, in
-/// a different order: both dequantize the weights in float and accumulate in
-/// float, so the outputs may differ only by the rounding of those sums -- a
-/// half-precision ulp or two, not the 2% the MPP path is allowed. Shapes cover
-/// the partial edge tiles in both T and N, both widths, and a production K.
+/// a different order and with each dequantized weight rounded to half (as the
+/// MPP path does), accumulating in float: held to 1% of each output or 0.2% of
+/// the outputs' largest magnitude, half the 2% the MPP path is allowed. Shapes cover a partial edge tile in T,
+/// both widths and a production K; N must be whole 32-column tiles.
 @Suite struct PrefillAffineSimdgroupQMMTests {
     private struct LCG {
         var state: UInt64
@@ -38,17 +38,17 @@ import Testing
     }
 
     @Test(arguments: [
-        Case(t: 37, n: 45, k: 128, bits: 4),
+        Case(t: 37, n: 32, k: 128, bits: 4),
         Case(t: 64, n: 64, k: 256, bits: 4),
-        Case(t: 5, n: 33, k: 64, bits: 8),
+        Case(t: 5, n: 32, k: 64, bits: 8),
         Case(t: 70, n: 96, k: 2_560, bits: 4),
-        Case(t: 33, n: 40, k: 640, bits: 8),
+        Case(t: 33, n: 64, k: 640, bits: 8),
     ])
     func matchesTheScalarKernel(_ shape: Case) throws {
         let ctx = try MetalContext()
         let scalar = try PrefillInt4QMM(context: ctx, weightBits: shape.bits)
         let simdgroup = try PrefillAffineSimdgroupQMM(context: ctx)
-        #expect(simdgroup.accepts(bits: shape.bits, k: shape.k))
+        #expect(simdgroup.accepts(bits: shape.bits, n: shape.n, k: shape.k))
 
         var rng = LCG(state: UInt64(shape.t * 131 + shape.n * 7 + shape.k + shape.bits))
         let groups = shape.k / Quantization.groupSize
@@ -84,16 +84,24 @@ import Testing
             start: reference.contents().bindMemory(to: Float16.self, capacity: count), count: count)
         let b = UnsafeBufferPointer(
             start: candidate.contents().bindMemory(to: Float16.self, capacity: count), count: count)
+        // A dot product's rounding error scales with its terms, not its
+        // result, so near-zero outputs are held to the output's scale.
+        let maxRef = (0..<count).reduce(Float(0)) { max($0, abs(Float(a[$1]))) }
         var worst: Float = 0
-        var maxRef: Float = 0
         for i in 0..<count {
             let ref = Float(a[i])
-            maxRef = max(maxRef, abs(ref))
-            // Two half ulps at the reference's magnitude, with a floor near zero.
-            let allowed = max(Float(1e-3), 2 * Float(Float16(abs(ref)).ulp))
+            let allowed = max(maxRef * 0.002, abs(ref) * 0.01)
             worst = max(worst, abs(Float(b[i]) - ref) / allowed)
         }
         #expect(maxRef > 0.1, "the reference output is too small to prove anything")
         #expect(worst <= 1, "worst element is \(worst)x its allowance (max |ref| \(maxRef))")
+    }
+
+    /// A width that is not whole 32-column tiles is refused, so the caller
+    /// takes another path.
+    @Test func refusesPartialColumnTiles() throws {
+        let simdgroup = try PrefillAffineSimdgroupQMM(context: try MetalContext())
+        #expect(!simdgroup.accepts(bits: 4, n: 45, k: 128))
+        #expect(!simdgroup.accepts(bits: 4, n: 64, k: 100))
     }
 }
