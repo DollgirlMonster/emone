@@ -22,13 +22,14 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 | + QSA attention as masked dense flash tiles, key selection on the GPU | 104 | 163 | rounding |
 | + routed experts and dense projections on tiled QMMs, expert readahead | 82.5 | 205 | rounding |
 | + 64 x 64 QMM tiles | 76.1 | 222 | identical |
-| + router: 8 tokens per threadgroup | **66.2** | **256** | identical |
+| + router: 8 tokens per threadgroup | 66.2 | 256 | identical |
+| + QSA attention over packed 4-key blocks | **61.4** | **276** | rounding |
 
 **Speed against baseline so far** (same M1 Max, same 16,931-token prompt):
 
 | | baseline | now | speedup |
 | --- | ---: | ---: | ---: |
-| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 66.2 s | **7.2x** |
+| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 61.4 s | **7.7x** |
 | Decode, 256 tokens, 12 GiB -> 16 GiB expert cache | 5.06 tok/s | 5.62 tok/s | **+11%** |
 
 **The other installed models** (same M1 Max, the first 30,000 characters of
