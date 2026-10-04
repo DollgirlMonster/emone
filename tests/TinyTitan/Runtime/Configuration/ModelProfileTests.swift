@@ -79,7 +79,13 @@ import Testing
         #expect(q36.keepExpertCacheWired)
         let q36four = ModelProfile.resolve(
             modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 4, environment: [:])
-        #expect(q36four.expertCacheBudgetBytes == 10 << 30)
+        #expect(q36four.expertCacheBudgetBytes == 17 << 30)
+        // 64 GB holds the whole expert set: all 256 slots.
+        #expect(
+            RuntimeConfiguration.expertCacheSlots(
+                expertStrideBytes: 1_769_472, layers: 40,
+                budgetBytes: RuntimeConfiguration.affordableExpertCacheBudget(
+                    q36four.expertCacheBudgetBytes, physicalMemory: 64 << 30)) == 256)
         #expect(q36.prefetchDepth == 1)
         #expect(q36.prefillChunkTokens == 4_096)
         #expect(q36.sampling == GenerationDefaults.house)

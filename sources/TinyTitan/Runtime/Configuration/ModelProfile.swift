@@ -151,8 +151,13 @@ public struct ModelProfile: Sendable, Equatable {
             // chunk 4096, prefill 14.7 / 12.6 -> 11.9 s, decode unchanged.
             // Surprisal, 512 tokens after 20,197 of context: Qwen 3.6 -0.002
             // nats (t -0.65), Ornith 1.5 -0.005 (t -0.74), no measurable change.
+            // 4-bit budget 17 GiB (2026-10-04, 64 GB M1 Max): the whole expert
+            // set (256 slots x 40 layers x 1.77 MB = 16.9 GiB), under a third of
+            // RAM there. 512 tokens after 2,092: 20.3 / 21.7 tok/s at 160 slots
+            // (96.8% hit) -> 23.1 / 24.3 (99.8%). A 24 GB machine is still cut
+            // to 8 GiB by `affordableExpertCacheBudget`.
             Key("qwen3.6-35b-a3b", 4): (
-                10 << 30, 1, 4_096,
+                17 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
                 true, true, false, false, true, false, true, true, false, true, true, true, false, true
@@ -166,8 +171,9 @@ public struct ModelProfile: Sendable, Equatable {
             // Ornith 1.5, same geometry, measured on its own 2026-09-05: 4-bit
             // 128 slots 19.91 / 20.41 vs 160 20.84 / 21.02; 8-bit 64 slots
             // 8.69 / 9.12 vs 96 10.83 / 10.86, swap flat on every arm.
+            // 4-bit: 17 GiB, the whole expert set, as Qwen 3.6 (same geometry).
             Key("ornith-1.5-35b-a3b", 4): (
-                10 << 30, 1, 4_096, GenerationDefaults.house,
+                17 << 30, 1, 4_096, GenerationDefaults.house,
                 true, true, false, false, true, false, true, true, false, true, true, true, false, true
             ),
             Key("ornith-1.5-35b-a3b", 8): (
