@@ -68,11 +68,26 @@ struct FrontierTracker: Equatable {
         }
     }
 
-    /// Where a verbatim prefill should take its unaligned anchor: the prefix
-    /// proven shared with a recent conversation when there is a useful one,
-    /// else the end of the system block (the first conversation's best guess).
-    static func anchor(proven: Int, systemBlockEnd: Int?) -> Int? {
-        proven >= anchorMinimumGain ? proven : systemBlockEnd
+    /// Where a verbatim prefill should take its unaligned anchor: the deeper
+    /// of the prefix proven shared with a recent conversation and the
+    /// frontier this render just diverged at, when one is useful; else the end
+    /// of the system block (the first conversation's best guess).
+    ///
+    /// The divergence point is where the next turn is likely to diverge
+    /// again: a render that edits an earlier message (a memory log appended
+    /// to the system prompt, a clock) keeps editing the same place. Chunk
+    /// rungs land up to a whole chunk short of it -- a median 8,704 tokens in
+    /// the 64-request prefix log, which an exact cut at the divergence
+    /// recovers in 53 of its 60 divergences (benchmark/prefix_log_report.py).
+    static func anchor(proven: Int, systemBlockEnd: Int?, divergence: Int = 0) -> Int? {
+        let shared = max(proven, divergence)
+        return shared >= anchorMinimumGain ? shared : systemBlockEnd
+    }
+
+    /// Where this render diverged from the frontier, after `observe`: the
+    /// frontier's length when the render runs past it.
+    func divergencePoint(in render: [Int32]) -> Int {
+        frontier.count < render.count ? commonPrefixLength(frontier, render) : 0
     }
 
     /// The chunk-aligned positions this prefill should checkpoint, deepest
