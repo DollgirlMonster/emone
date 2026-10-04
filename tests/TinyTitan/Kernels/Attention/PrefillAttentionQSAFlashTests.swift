@@ -177,6 +177,7 @@ import Testing
         let ctx = try MetalContext()
         _ = try ctx.pipeline("attention_prefill_qsa_masked_flash")
         _ = try ctx.pipeline("qsa_flash_tile_flags")
+        _ = try ctx.pipeline("qsa_flash_pack_q")
     }
 
     @Test(arguments: [8, 4, 16])
@@ -274,6 +275,87 @@ import Testing
             try Self.run(kvBits: 8, queries: 150, startPosition: 64, rowTile: 64, blockSparse: true),
             "row tiles")
     }
+    /// Packed mode at the Qwen3.8 shape of one 4,096-row tile at the end of a
+    /// 16.9K prompt, int8 KV, with QSA's measured row correlation: each row
+    /// keeps 512 4-key blocks drawn from its 8-row tile's pool of ~0.42 of the
+    /// visible blocks (the union the real prompt showed). Prints GPU ms and
+    /// the rate on the tiles walked; asserts nothing.
+    /// TINYTITAN_QSA_FLASH_BENCH=1 to run.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_QSA_FLASH_BENCH"] == "1"))
+    func packedBenchmark() throws {
+        let ctx = try MetalContext()
+        let attention = try PrefillAttention(context: ctx)
+        let (qHeads, kvHeads, headDim) = (24, 2, 256)
+        let (startPosition, queries) = (12_835, 4_096)
+        let valid = startPosition + queries
+        let groupSize = KVCacheManager.quantizationGroupSize
+        var rng = LCG(state: 11)
+        let kCache = try Self.kvCache(
+            ctx, bits: 8, rows: valid, elementsPerRow: kvHeads * headDim,
+            groupSize: groupSize, rng: &rng)
+        let vCache = try Self.kvCache(
+            ctx, bits: 8, rows: valid, elementsPerRow: kvHeads * headDim,
+            groupSize: groupSize, rng: &rng)
+        let q = try Self.buffer(
+            ctx, (0..<(queries * qHeads * headDim)).map { _ in Float16(rng.unit() * 0.5) })
+        var mask = [UInt8](repeating: 0, count: queries * valid)
+        var walkedBlocks = 0
+        for tile in 0..<(queries / 8) {
+            let blocks = (startPosition + tile * 8 + 8) / 4
+            var pool = Array(0..<blocks)
+            for i in 0..<pool.count {
+                let j = i + Int(rng.next() % UInt64(pool.count - i))
+                pool.swapAt(i, j)
+            }
+            pool = Array(pool.prefix(max(512, blocks * 42 / 100)))
+            var union = Set<Int>()
+            for r in 0..<8 {
+                let t = tile * 8 + r
+                let visible = startPosition + t + 1
+                var picked = 0
+                for b in pool where picked < 512 && b * 4 + 4 <= visible && rng.next() % 2 == 0 {
+                    for key in (b * 4)..<(b * 4 + 4) { mask[t * valid + key] = 1 }
+                    union.insert(b)
+                    picked += 1
+                }
+                mask[t * valid + visible - 1] = 1
+                union.insert((visible - 1) / 4)
+            }
+            walkedBlocks += (union.count + 3) / 4 * 4
+        }
+        let maskBuffer = try Self.buffer(ctx, mask)
+        let params = PrefillAttentionParams(
+            startPosition: UInt32(startPosition), queryCount: UInt32(queries),
+            headDim: UInt32(headDim), numQHeads: UInt32(qHeads), numKVHeads: UInt32(kvHeads),
+            kvValidCount: UInt32(valid), slidingWindow: UInt32(valid),
+            kvTokenStrideElements: UInt32(kvHeads * headDim),
+            qTokenStrideElements: UInt32(qHeads * headDim),
+            oTokenStrideElements: UInt32(qHeads * headDim),
+            scale: 0.0625, kvBits: 8,
+            kvTokenStrideBytes: UInt32(kCache.strideBytes),
+            kvValueBytes: UInt32(kCache.valueBytes), kvGroupSize: UInt32(groupSize))
+        guard let out = ctx.device.makeBuffer(
+            length: queries * qHeads * headDim * 2, options: .storageModeShared)
+        else { throw MetalError.commandEncoderFailed }
+        // Two products of 8 rows x 4 keys x 256 per block per query head.
+        let flop = Double(walkedBlocks) * 2 * 2 * 8 * 4 * Double(headDim) * Double(qHeads)
+        attention.maskedFlash = true
+        attention.packedFlash = true
+        var best = Double.infinity
+        for round in 0..<6 {
+            guard let cb = ctx.queue.makeCommandBuffer() else { throw MetalError.commandEncoderFailed }
+            try attention.encodeCausal(
+                commandBuffer: cb, q: q, k: kCache.buffer, v: vCache.buffer, out: out,
+                params: params, keepMask: maskBuffer, keepStride: valid,
+                groupedQueryHeads: false, matrixUnits: false)
+            cb.commit()
+            cb.waitUntilCompleted()
+            if round > 0 { best = min(best, cb.gpuEndTime - cb.gpuStartTime) }
+        }
+        print(String(format: "[qsa-packed-bench] best_gpu_ms=%.1f walked_tflops=%.2f",
+            best * 1000, flop / best / 1e12))
+    }
+
     /// GPU time at the Qwen3.8 shape of one 4,096-row attention tile at the
     /// end of a 16.9K prompt, int8 KV, every row keeping 2,048 keys in 4-key
     /// blocks (random, so near-dense per 8-row tile: the worst case). Prints;

@@ -2045,14 +2045,16 @@ kernel void attention_prefill_causal_qsa_gqa_mma(
 // gathered kernels; another sum order, and K/V held in half, so the output
 // differs by rounding. HD must be 256, G at most 16.
 /// Eight consecutive cache elements from `flat_element` (a multiple of 8,
-/// inside one quantization group), into `out`: the same arithmetic as
-/// `prefill_load_kv`, with the group's scale and bias read once.
-static inline void prefill_load_kv8(
+/// inside one quantization group), into registers: the same arithmetic as
+/// `prefill_load_kv`, with the group's scale and bias read once, and int8
+/// read as two 4-byte words (`flat_element` is a multiple of 8 and the row
+/// stride a multiple of 4).
+static inline void prefill_dequant_kv8(
     device const uchar* cache,
     uint physical_position,
     uint flat_element,
     constant PrefillAttentionParams& p,
-    threadgroup half* out
+    thread half* out
 ) {
     if (p.kvBits == 16u) {
         device const half* fp16 = reinterpret_cast<device const half*>(cache)
@@ -2068,9 +2070,10 @@ static inline void prefill_load_kv8(
     const float scale = float(scales[group]);
     const float bias = float(scales[groups + group]);
     if (p.kvBits == 8u) {
-        for (uint e = 0u; e < 8u; ++e) {
-            out[e] = half(float(row[flat_element + e]) * scale + bias);
-        }
+        device const uchar4* src = reinterpret_cast<device const uchar4*>(row + flat_element);
+        const half4 a = half4(float4(src[0]) * scale + bias);
+        const half4 b = half4(float4(src[1]) * scale + bias);
+        for (uint e = 0u; e < 4u; ++e) { out[e] = a[e]; out[4u + e] = b[e]; }
     } else {
         for (uint e = 0u; e < 4u; ++e) {
             const uchar packed = row[flat_element / 2u + e];
@@ -2171,6 +2174,31 @@ kernel void qsa_flash_group_blocks(
     }
 }
 
+/// Q in the flash kernel's fragment order: for each 8-row tile and query
+/// head, 32 8x8 blocks of 64 consecutive halves (rows of 8 head-dim
+/// elements), zero past the last row. One fragment is one 128-byte line,
+/// where the row-major Q puts its 8 rows a whole token stride apart.
+kernel void qsa_flash_pack_q(
+    device const half* Q [[buffer(0)]],
+    device half4* packedQ [[buffer(1)]],
+    constant PrefillAttentionParams& p [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    // One thread per 4 halves: index = ((rt * heads + h) * 32 + kb) * 16 + quad.
+    const uint quad = gid % 16u;
+    const uint kb = (gid / 16u) % 32u;
+    const uint h = (gid / 512u) % p.numQHeads;
+    const uint rt = gid / (512u * p.numQHeads);
+    const uint row = rt * kQSAFlashRows + quad / 2u;
+    if (rt * kQSAFlashRows >= p.queryCount) return;
+    half4 v = half4(0);
+    if (row < p.queryCount) {
+        v = *reinterpret_cast<device const half4*>(
+            Q + ulong(row) * p.qTokenStrideElements + h * kQSAFlashHD + kb * 8u + (quad % 2u) * 4u);
+    }
+    packedQ[gid] = v;
+}
+
 [[kernel, max_total_threads_per_threadgroup(512)]]
 kernel void attention_prefill_qsa_masked_flash(
     device const half* Q [[buffer(0)]],
@@ -2184,6 +2212,7 @@ kernel void attention_prefill_qsa_masked_flash(
     constant uint& keyTiles [[buffer(8)]],
     constant uint& causalOnly [[buffer(9)]],
     device const uint* blockCounts [[buffer(10)]],
+    device const half* packedQ [[buffer(11)]],
     uint3 tg [[threadgroup_position_in_grid]],
     uint lid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -2202,33 +2231,17 @@ kernel void attention_prefill_qsa_masked_flash(
     const uint q0 = rt * kQSAFlashRows;
     if (q0 >= p.queryCount || kvh >= p.numKVHeads) return;
 
-    // Q staging first (four heads at a time), then each step's K and V tiles.
-    threadgroup half buf[2u * kQSAFlashKeys * kQSAFlashHD];
-    threadgroup half* ks = buf;
-    threadgroup half* vs = buf + kQSAFlashKeys * kQSAFlashHD;
+    // K staged transposed, [d][key], so the score product loads it without
+    // a transposing simdgroup_load; V as it comes, [key][d].
+    threadgroup half ks[kQSAFlashHD * kQSAFlashKeys];
+    threadgroup half vs[kQSAFlashKeys * kQSAFlashHD];
     threadgroup uchar maskTile[kQSAFlashRows * kQSAFlashKeys];
 
-    simdgroup_half8x8 qf[kQSAFlashHD / 8u];
-    const uint stage = kQSAFlashRows * HD;  // one head's 8 rows
-    for (uint first = 0u; first < G; first += 4u) {
-        const uint heads = min(4u, G - first);
-        for (uint i = lid; i < heads * stage; i += threads) {
-            const uint g = first + i / stage;
-            const uint r = (i % stage) / HD;
-            const uint d = i % HD;
-            const uint row = q0 + r;
-            buf[i] = row < p.queryCount
-                ? Q[ulong(row) * p.qTokenStrideElements + (kvh * G + g) * HD + d] : half(0);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        if (sg >= first && sg < first + heads) {
-            _Pragma("clang loop unroll(full)")
-            for (uint kb = 0u; kb < HD / 8u; ++kb) {
-                simdgroup_load(qf[kb], buf + (sg - first) * stage + kb * 8u, HD);
-            }
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
+    // Q is not held: its 32 fragments plus O's 32 float ones per head are
+    // more registers than the products can afford (holding them measured
+    // ~25% slower). Each step reads them from `qsa_flash_pack_q`'s copy,
+    // one cache line per fragment, through the L1.
+    device const half* qpacked = packedQ + (ulong(rt) * p.numQHeads + h) * (HD * kQSAFlashRows);
     simdgroup_float8x8 of[kQSAFlashHD / 8u];
     _Pragma("clang loop unroll(full)")
     for (uint cb = 0u; cb < HD / 8u; ++cb) {
@@ -2269,11 +2282,20 @@ kernel void attention_prefill_qsa_masked_flash(
             const bool isValue = task >= kQSAFlashKeys * HD / 8u;
             const uint i = (isValue ? task - kQSAFlashKeys * HD / 8u : task) * 8u;
             const uint key = tileKey(kt, i / HD);
-            threadgroup half* dst = (isValue ? vs : ks) + i;
+            half v8[8];
             if (key < p.kvValidCount) {
-                prefill_load_kv8(isValue ? V : K, key, kvh * HD + i % HD, p, dst);
+                prefill_dequant_kv8(isValue ? V : K, key, kvh * HD + i % HD, p, v8);
             } else {
-                for (uint e = 0u; e < 8u; ++e) { dst[e] = half(0); }
+                for (uint e = 0u; e < 8u; ++e) { v8[e] = half(0); }
+            }
+            if (isValue) {
+                threadgroup half4* dst = reinterpret_cast<threadgroup half4*>(vs + i);
+                dst[0] = half4(v8[0], v8[1], v8[2], v8[3]);
+                dst[1] = half4(v8[4], v8[5], v8[6], v8[7]);
+            } else {
+                const uint j = i / HD;
+                const uint d0 = i % HD;
+                for (uint e = 0u; e < 8u; ++e) { ks[(d0 + e) * kQSAFlashKeys + j] = v8[e]; }
             }
         }
         if (lid < kQSAFlashRows * kQSAFlashKeys) {
@@ -2297,11 +2319,13 @@ kernel void attention_prefill_qsa_masked_flash(
         }
         _Pragma("clang loop unroll(full)")
         for (uint kb = 0u; kb < HD / 8u; ++kb) {
+            simdgroup_half8x8 qk;
+            simdgroup_load(qk, qpacked + kb * 64u, 8u);
             _Pragma("clang loop unroll(full)")
             for (uint cb = 0u; cb < 2u; ++cb) {
                 simdgroup_half8x8 kf;
-                simdgroup_load(kf, ks + (cb * 8u) * HD + kb * 8u, HD, ulong2(0, 0), true);
-                simdgroup_multiply_accumulate(part[kb % 4u][cb], qf[kb], kf, part[kb % 4u][cb]);
+                simdgroup_load(kf, ks + (kb * 8u) * kQSAFlashKeys + cb * 8u, kQSAFlashKeys);
+                simdgroup_multiply_accumulate(part[kb % 4u][cb], qk, kf, part[kb % 4u][cb]);
             }
         }
         simdgroup_float8x8 sacc[2];

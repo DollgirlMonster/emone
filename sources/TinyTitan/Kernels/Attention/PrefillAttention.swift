@@ -86,6 +86,8 @@ final class PrefillAttention {
     /// Packed mode (`FC_QSA_FLASH_PACKED`) and its per-row-tile block lists.
     private let psoQSAFlashPacked: MTLComputePipelineState?
     private let psoQSAGroupBlocks: MTLComputePipelineState?
+    private let psoQSAPackQ: MTLComputePipelineState?
+    private var packedQ: MTLBuffer?
     private var packedBlockLists: MTLBuffer?
     private var packedBlockCounts: MTLBuffer?
     /// Walk each row tile's selected 4-key blocks, four to a tile, instead of
@@ -155,6 +157,7 @@ final class PrefillAttention {
             "attention_prefill_qsa_masked_flash",
             constants: [MetalFunctionConstant(index: 111, value: .bool(true))])
         self.psoQSAGroupBlocks = try? context.pipeline("qsa_flash_group_blocks")
+        self.psoQSAPackQ = try? context.pipeline("qsa_flash_pack_q")
         // Four bytes, not one: the kernels declare `keepIdx`/`keepIndices` as
         // `device const uint*`, and Metal's own validation aborts a binding
         // whose length is shorter than the argument it is bound to ("space for
@@ -217,7 +220,8 @@ final class PrefillAttention {
             params.numQHeads % params.numKVHeads == 0,
             params.numQHeads / params.numKVHeads <= 16,
             path != .fullTensorOps2DValidityV2,
-            let flash = psoQSAMaskedFlash, let tileFlags = psoQSAFlashTileFlags
+            let flash = psoQSAMaskedFlash, let tileFlags = psoQSAFlashTileFlags,
+            psoQSAPackQ != nil
         {
             try encodeMaskedFlash(
                 commandBuffer: commandBuffer, pipeline: flash, flagsPipeline: tileFlags,
@@ -399,10 +403,34 @@ final class PrefillAttention {
             flagEnc.endEncoding()
         }
 
+        // Q in fragment order for the kernel's streamed score product.
+        var packedQBinding: MTLBuffer?
+        if let packPSO = psoQSAPackQ {
+            // One 8-row tile's fragments for every query head, per row tile.
+            let halves = rowTiles * Self.flashRows * Int(params.numQHeads) * Int(params.headDim)
+            if (packedQ?.length ?? 0) < halves * 2 {
+                packedQ = context.device.makeBuffer(length: halves * 2, options: .storageModePrivate)
+                packedQ?.label = "prefillAttention.qsaFlash.packedQ"
+            }
+            guard let packed = packedQ, let packEnc = commandBuffer.makeComputeCommandEncoder() else {
+                throw PrefillAttentionError.commandEncoderFailed
+            }
+            packEnc.setComputePipelineState(packPSO)
+            packEnc.setBuffer(q, offset: qOffset, index: 0)
+            packEnc.setBuffer(packed, offset: 0, index: 1)
+            var pp = params
+            packEnc.setBytes(&pp, length: MemoryLayout<PrefillAttentionParams>.stride, index: 2)
+            packEnc.dispatchThreads(
+                MTLSize(width: halves / 4, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            packEnc.endEncoding()
+            packedQBinding = packed
+        }
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
             throw PrefillAttentionError.commandEncoderFailed
         }
         enc.setComputePipelineState(attentionPipeline)
+        enc.setBuffer(packedQBinding ?? emptyKeepMask, offset: 0, index: 11)
         enc.setBuffer(q, offset: qOffset, index: 0)
         enc.setBuffer(k, offset: kOffset, index: 1)
         enc.setBuffer(v, offset: vOffset, index: 2)
