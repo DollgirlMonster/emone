@@ -759,3 +759,14 @@ of context: Qwen 3.6 +0.003 nats (t +0.85), Ornith 1.5 -0.010 (t -1.40), no
 measurable change; the A/B's own runs went from 506 s to 82-85 s. Shipped on
 both 4-bit rows. The causal mode also serves Qwen3.8-Flash's chunks inside its
 2,048-key dense window (the masked path with every key kept).
+
+## Spike 20 (2026-10-03): Qwen3.8 27B dense
+
+The dense 27B (64 layers, GDN hybrid, no experts) takes chunked GDN, the
+tiled QMM for its projections and dense FFN, and causal flash attention.
+8,529-token prompt, 4-bit: prefill 644.0 -> **91.9 s (7.0x)**; dense FFN
+374.4 -> 42.4 s of GPU, GDN layers 38.4 s, attention 10.1 s, GPU 99% busy
+(27B parameters x 8.5K tokens is ~460 TFLOP, so this model is now bound by
+the QMM's ~7 TFLOPS). The dense layers' attention buffers are now timed
+(`prefill_gdn_layer`, `prefill_attn_layer`). Surprisal, 512 tokens after
+8,904 of context: +0.002 nats, t +1.14, no measurable change.

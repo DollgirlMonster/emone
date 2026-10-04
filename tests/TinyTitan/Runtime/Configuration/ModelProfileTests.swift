@@ -90,22 +90,25 @@ import Testing
 
     /// The prefill switches ship where they were measured: all of them on
     /// Qwen3.8 4-bit, the non-QSA ones on the Qwen 3.6 and Ornith 1.5 4-bit
-    /// rows; every other row, and every family fallback, keeps the default
+    /// rows, the non-routed ones on Qwen3.8 27B dense 4-bit; every other row, and every family fallback, keeps the default
     /// kernels.
     @Test func prefillSwitchesShipOnlyWhereMeasured() {
         let q38 = ModelProfile.Key("qwen3.8-flash-next", 4)
         let hybrids: Set<ModelProfile.Key> = [
             ModelProfile.Key("qwen3.6-35b-a3b", 4), ModelProfile.Key("ornith-1.5-35b-a3b", 4),
         ]
+        // Dense: no routed experts, so no routed switches.
+        let dense = ModelProfile.Key("qwen3.8-27b", 4)
         for (key, row) in ModelProfile.table {
             let isQ38 = key == q38
-            let measured = isQ38 || hybrids.contains(key)
+            let routed = isQ38 || hybrids.contains(key)
+            let measured = routed || key == dense
             let name = Comment(rawValue: "\(key.modelID) \(key.weightBits)")
             #expect(row.wideMPP == isQ38, name)
             #expect(row.qsaFlash == isQ38, name)
-            #expect(row.routedMPP == measured, name)
+            #expect(row.routedMPP == routed, name)
+            #expect(row.routedQMM == routed, name)
             #expect(row.gdnChunked == measured, name)
-            #expect(row.routedQMM == measured, name)
             #expect(row.denseQMM == measured, name)
             #expect(row.denseFlash == measured, name)
         }

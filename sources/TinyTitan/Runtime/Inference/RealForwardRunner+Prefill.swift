@@ -1077,6 +1077,10 @@ extension RealForwardRunner {
         // confident nonsense rather than as an error.
         cb.commit()
         try waitForCompletion(cb)
+        recordKernelGPU(
+            role: cfg.layerIsLinear(L) ? "prefill_gdn_layer" : "prefill_attn_layer", cb)
+        for (role, tile) in splitTimedBuffers { recordKernelGPU(role: role, tile) }
+        splitTimedBuffers.removeAll(keepingCapacity: true)
         guard let sharedCB = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }

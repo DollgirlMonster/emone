@@ -293,10 +293,15 @@ public struct ModelProfile: Sendable, Equatable {
             // Flash-Next's; its instruct row (0.7 / 0.80, presence 1.5) is not
             // applied yet, because this family has one row for both modes
             // (docs/next-models-research.md). Nothing here is measured.
+            // 2026-10-03, M1 Max: chunked GDN, the dense projections and FFN on
+            // the tiled QMM, causal attention on the flash kernel. 8,529-token
+            // prompt: dense FFN 374.4 -> 42.4 s of GPU, prefill 644.0 -> 91.9 s
+            // (7.0x), GPU 99% busy. Surprisal, 512 tokens after 8,904 of
+            // context: +0.002 nats (t +1.14), no measurable change. 4-bit only.
             Key("qwen3.8-27b", 4): (
                 RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, false, false, false, false, false, false, false, false
+                true, true, false, false, false, false, false, true, false, false, true, true
             ),
             Key("qwen3.8-27b", 8): (
                 RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
