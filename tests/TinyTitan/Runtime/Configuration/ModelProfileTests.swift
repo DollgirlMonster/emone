@@ -107,7 +107,7 @@ import Testing
             #expect(row.wideMPP == isQ38, name)
             #expect(row.qsaFlash == isQ38, name)
             #expect(row.qsaPacked == isQ38, name)
-            #expect(row.routerLogits == isQ38, name)
+            #expect(row.routerLogits == routed, name)
             #expect(row.routedMPP == routed, name)
             #expect(row.routedQMM == routed, name)
             #expect(row.gdnChunked == measured, name)

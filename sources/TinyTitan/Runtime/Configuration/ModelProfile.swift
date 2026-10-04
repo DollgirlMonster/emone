@@ -147,11 +147,15 @@ public struct ModelProfile: Sendable, Equatable {
             // Qwen 3.6 +0.003 nats (t +0.85), Ornith 1.5 -0.010 (t -1.40), no
             // measurable change. 4-bit rows only; AgentWorld and the 8-bit
             // rows keep the old kernels until checked.
+            // Router logits on the tiled QMM (2026-10-03): 8,529-token prompt,
+            // chunk 4096, prefill 14.7 / 12.6 -> 11.9 s, decode unchanged.
+            // Surprisal, 512 tokens after 20,197 of context: Qwen 3.6 -0.002
+            // nats (t -0.65), Ornith 1.5 -0.005 (t -0.74), no measurable change.
             Key("qwen3.6-35b-a3b", 4): (
                 10 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, true, true, false, true, true, true, false, false
+                true, true, false, false, true, false, true, true, false, true, true, true, false, true
             ),
             Key("qwen3.6-35b-a3b", 8): (
                 12 << 30, 1, 4_096,
@@ -164,7 +168,7 @@ public struct ModelProfile: Sendable, Equatable {
             // 8.69 / 9.12 vs 96 10.83 / 10.86, swap flat on every arm.
             Key("ornith-1.5-35b-a3b", 4): (
                 10 << 30, 1, 4_096, GenerationDefaults.house,
-                true, true, false, false, true, false, true, true, false, true, true, true, false, false
+                true, true, false, false, true, false, true, true, false, true, true, true, false, true
             ),
             Key("ornith-1.5-35b-a3b", 8): (
                 12 << 30, 1, 4_096, GenerationDefaults.house,
