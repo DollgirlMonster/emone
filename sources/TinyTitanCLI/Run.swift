@@ -338,6 +338,10 @@ public func run(
                 occupancy.spanMillis > 0
                     ? 100 * occupancy.busyMillis / occupancy.spanMillis : 0)
             stderr.write(Data(lines.utf8))
+            if let path = ProcessInfo.processInfo.environment["TINYTITAN_GPU_TIMELINE"] {
+                try? runner.kernelGPUTimelineCSV().write(
+                    toFile: path, atomically: true, encoding: .utf8)
+            }
         }
         if ProcessInfo.processInfo.environment["TURBO_FIELDFARE_PHASES"] == "1" {
             let ms = { (n: UInt64) in String(format: "%.1f", Double(n) / 1e6) }

@@ -121,6 +121,34 @@ import Testing
         #expect(Self.same(perRow, coalesced, bytes: tokens * half))
     }
 
+    /// The same scalar-gate shape when the gate was promoted to bf16.
+    @Test func bf16ScalarGateRowsMatchThePerRowLoopExactly() throws {
+        let ctx = try MetalContext()
+        let gemv = try BF16GEMV(context: ctx)
+        let (n, tokens) = (2_560, 37)
+        var rng = LCG(state: 21)
+        let weights = try Self.buffer(ctx, (0..<n).map { _ in Self.bf16(rng.unit() * 0.2) })
+        let x = try Self.buffer(ctx, (0..<(tokens * n)).map { _ in Float16(rng.unit()) })
+        let half = MemoryLayout<Float16>.stride
+        let perRow = try Self.zeroed(ctx, bytes: tokens * half)
+        let coalesced = try Self.zeroed(ctx, bytes: tokens * half)
+        try Self.run(ctx) { cb in
+            for row in 0..<tokens {
+                try gemv.encode(
+                    commandBuffer: cb, weights: weights,
+                    x: x, xOffset: row * n * half, y: perRow, yOffset: row * half,
+                    m: 1, n: UInt32(n))
+            }
+            try gemv.encodeRows(
+                commandBuffer: cb, weights: weights, x: x, y: coalesced,
+                rows: GEMVRows(xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: half, count: tokens),
+                m: 1, n: UInt32(n))
+        }
+        #expect(Self.same(perRow, coalesced, bytes: tokens * half))
+        let untouched = try Self.zeroed(ctx, bytes: tokens * half)
+        #expect(!Self.same(untouched, coalesced, bytes: tokens * half))
+    }
+
     @Test func sigmoidRowsMulMatchesThePerRowScalarMulExactly() throws {
         let ctx = try MetalContext()
         let elementwise = try Elementwise(context: ctx)

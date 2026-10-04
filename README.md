@@ -24,13 +24,14 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 | + 64 x 64 QMM tiles | 76.1 | 222 | identical |
 | + router: 8 tokens per threadgroup | 66.2 | 256 | identical |
 | + QSA attention over packed 4-key blocks | 61.4-62.9 | 269-276 | rounding |
-| + PLE n-gram rows read 128 deep, repeated rows read once (9.4 s -> 2.1 s) | **55.1-56.8** | **298-307** | identical |
+| + PLE n-gram rows read 128 deep, repeated rows read once (9.4 s -> 2.1 s) | 55.1-56.8 | 298-307 | identical |
+| + shared-expert scalar gate in one dispatch per chunk, not one per token (7.0 s -> 1.5 s) | **50.6** | **335** | identical |
 
 **Speed against baseline so far** (same M1 Max, same 16,931-token prompt):
 
 | | baseline | now | speedup |
 | --- | ---: | ---: | ---: |
-| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 55.1-56.8 s | **8.4-8.6x** |
+| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 50.6 s | **9.4x** |
 | Decode, 256 tokens, 12 GiB -> 16 GiB expert cache | 5.06 tok/s | 5.62 tok/s | **+11%** |
 
 Before the last step, three reruns on a quiet machine (Time Machine off)
