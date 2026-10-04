@@ -151,6 +151,77 @@ import TinyTitanValidationSupport
         #expect(block.1 == tiled.1)
     }
 
+    /// Float logits through the tiled QMM, then the top-k pass, against the
+    /// fused rows kernel. The QMM dequantizes weights to half and sums in
+    /// another order, so the scores are well separated: what this checks is
+    /// the selection, the softmax and the per-expert gain, not tie behaviour
+    /// (that is the surprisal A/B's).
+    @Test func logitsRouterMatchesRowsKernelOnSeparatedScores() throws {
+        var rng = SplitMix64(seed: 0x10_2026)
+        let (experts, rows) = (64, 37)
+        let weights: [[Float]] = (0..<experts).map { expert in
+            let bias = Float((expert * 37) % experts) * 0.02
+            return (0..<Self.d).map { _ in rng.uniform(-0.03, 0.03) + bias }
+        }
+        let hidden = (0..<(rows * Self.d)).map { _ in Float16(rng.uniform(0.2, 1.0)) }
+        let perExpertScale = (0..<experts).map { _ in rng.uniform(0.6, 1.4) }
+        let ctx = try MetalContext()
+        let router = try PrefillRouter(context: ctx)
+        func buffers() throws -> RouterBuffers {
+            let packed = Self.packWeights(weights)
+            let pes = perExpertScale.map { Quantization.bf16Bits($0) }
+            let ones = [UInt16](repeating: Quantization.bf16Bits(1), count: Self.d)
+            func make(_ bytes: UnsafeRawPointer, _ length: Int) throws -> MTLBuffer {
+                guard let b = ctx.device.makeBuffer(bytes: bytes, length: length, options: .storageModeShared)
+                else { throw RouterTestError.allocationFailed }
+                return b
+            }
+            guard
+                let idx = ctx.device.makeBuffer(length: rows * Self.topK * 4, options: .storageModeShared),
+                let wt = ctx.device.makeBuffer(length: rows * Self.topK * 2, options: .storageModeShared)
+            else { throw RouterTestError.allocationFailed }
+            return RouterBuffers(
+                weights: try make(packed.packed, packed.packed.count),
+                scales: try make(packed.scales, packed.scales.count * 2),
+                biases: try make(packed.biases, packed.biases.count * 2),
+                hidden: try make(hidden, hidden.count * 2),
+                effectiveScale: try make(ones, ones.count * 2),
+                perExpertScale: try make(pes, pes.count * 2),
+                blockIndices: idx, blockWeights: wt)
+        }
+        let fused = try buffers()
+        let split = try buffers()
+        guard let cb = ctx.queue.makeCommandBuffer() else { throw RouterTestError.allocationFailed }
+        try router.encodeBlock(
+            commandBuffer: cb, weights: fused.weights, scales: fused.scales,
+            biases: fused.biases, hidden: fused.hidden,
+            effectiveScale: fused.effectiveScale, perExpertScale: fused.perExpertScale,
+            outIndices: fused.blockIndices, outWeights: fused.blockWeights,
+            queryCount: UInt32(rows), numExperts: UInt32(experts), d: UInt32(Self.d),
+            topK: UInt32(Self.topK), hiddenStrideElements: UInt32(Self.d))
+        let took = try router.encodeFromLogits(
+            commandBuffer: cb,
+            weights: split.weights, weightsOffset: 0,
+            scales: split.scales, scalesOffset: 0,
+            biases: split.biases, biasesOffset: 0,
+            hidden: split.hidden, unitInputScale: true,
+            perExpertScale: split.perExpertScale, perExpertScaleOffset: 0,
+            outIndices: split.blockIndices, outWeights: split.blockWeights,
+            queryCount: rows, numExperts: experts, d: Self.d, topK: Self.topK,
+            hiddenStrideElements: Self.d)
+        #expect(took)
+        cb.commit()
+        cb.waitUntilCompleted()
+        #expect(cb.error == nil)
+        #expect(
+            Self.readUInt32(fused.blockIndices, count: rows * Self.topK)
+                == Self.readUInt32(split.blockIndices, count: rows * Self.topK))
+        Self.assertWeightsClose(
+            Fp16Buffer.readHalf(split.blockWeights, count: rows * Self.topK),
+            Fp16Buffer.readHalf(fused.blockWeights, count: rows * Self.topK),
+            tolerance: 2e-3)
+    }
+
     @Test func blockRouterNearTieMatchesScalarPath() throws {
         let weights = Self.makeNearTieWeights()
         let hidden = [Float16](repeating: 1, count: Self.d)

@@ -1152,6 +1152,22 @@ extension RealForwardRunner {
         var prefillTileEnd = prefillLayerStart
         let perExpertScale: (buffer: any MTLBuffer, offset: Int) =
             (try requireOnesPerExpertScale(), 0)
+        let routedViaLogits =
+            try prefillRouterLogits
+            && prefillRouter.encodeFromLogits(
+                    commandBuffer: cb,
+                    weights: routerView.buffer, weightsOffset: Int(routerView.offset),
+                    scales: routerView.buffer, scalesOffset: Int(routerView.scaleOffset),
+                    biases: routerView.buffer, biasesOffset: Int(routerView.biasOffset),
+                    hidden: scratch.routedX,
+                    // The runner's effective scale is a ones buffer per layer.
+                    unitInputScale: true,
+                    perExpertScale: perExpertScale.buffer,
+                    perExpertScaleOffset: perExpertScale.offset,
+                    outIndices: scratch.routeIDs, outWeights: scratch.routeWeights,
+                    queryCount: t, numExperts: cfg.numExperts, d: D,
+                    topK: cfg.topKExperts, hiddenStrideElements: D)
+        if !routedViaLogits {
         try prefillRouter.encodeBlock(
             commandBuffer: cb,
             weights: routerView.buffer,
@@ -1171,6 +1187,7 @@ extension RealForwardRunner {
             d: UInt32(D),
             topK: UInt32(cfg.topKExperts),
             hiddenStrideElements: UInt32(D))
+        }
 
         let traceCommit = Self.prefillLayerTrace ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0
         cb.commit()

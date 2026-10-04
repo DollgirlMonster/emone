@@ -278,6 +278,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// `QSAExactness`'s window.
     let qsaIndexer: QSAIndexer?
     let pleBlock: PLEBlock?
+    /// The prefill router as tiled-QMM logits + a top-k pass
+    /// (`ModelProfile.prefillRouterLogits`).
+    let prefillRouterLogits: Bool
     let pleHash: PLEHash?
     let ngramTable: NgramTableReader?
     /// The current token and its predecessors, nearest first, as `PLEHash`
@@ -719,6 +722,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         self.prefillAttention.maskedFlash = profile.prefillQSAFlash
         self.prefillAttention.denseFlash = profile.prefillDenseFlash
         self.prefillAttention.packedFlash = profile.prefillQSAPacked
+        self.prefillRouterLogits = profile.prefillRouterLogits
         self.prefillRouter = try PrefillRouter(
             context: context,
             weightBits: model.effectiveRouterWeightBits)

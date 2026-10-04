@@ -615,6 +615,71 @@ kernel void prefill_router_rows(
     }
 }
 
+// Top-k + softmax over router logits a GEMM already wrote: one thread per
+// token. `prefill_router_rows` computes the logits itself with one scalar FMA
+// chain per expert, each lane reading its own expert's row a byte at a time
+// -- ~82 ms per layer for a 16.9K-token chunk on an M1 Max, ~0.5 TFLOPS. With
+// the logits from the tiled simdgroup QMM instead, only this selection is
+// left. The rules are the rows kernel's: strictly-greater insertion, lower
+// expert id first on a tie, softmax over the kept scores, then the
+// per-expert gain. The logits are float, but their sums run in a different
+// order over half-dequantized weights, so a near-tie at the k-th place can
+// resolve differently than in the rows kernel.
+kernel void prefill_router_topk_logits(
+    device const float*   logits           [[buffer(0)]],
+    device const bfloat*  per_expert_scale [[buffer(1)]],
+    device uint*          out_indices      [[buffer(2)]],
+    device half*          out_weights      [[buffer(3)]],
+    constant uint&        T                [[buffer(4)]],
+    constant uint&        num_experts      [[buffer(5)]],
+    constant uint&        top_k            [[buffer(6)]],
+    uint                  row              [[thread_position_in_grid]]
+) {
+    if (row >= T) return;
+    const uint NE = min(num_experts, kPrefillRouterMaxExperts);
+    const uint KK = min(top_k, kPrefillRouterMaxTopK);
+    device const float* row_scores = logits + row * num_experts;
+    uint top_idx[kPrefillRouterMaxTopK];
+    float top_score[kPrefillRouterMaxTopK];
+    for (uint i = 0; i < KK; ++i) {
+        top_idx[i] = 0u;
+        top_score[i] = -INFINITY;
+    }
+    for (uint e = 0; e < NE; ++e) {
+        float s = row_scores[e];
+        if (s < top_score[KK - 1]) continue;
+        uint pos = KK;
+        for (uint i = 0; i < KK; ++i) {
+            if (s > top_score[i] || (s == top_score[i] && e < top_idx[i])) {
+                pos = i;
+                break;
+            }
+        }
+        if (pos >= KK) continue;
+        for (uint i = KK - 1; i > pos; --i) {
+            top_idx[i] = top_idx[i - 1];
+            top_score[i] = top_score[i - 1];
+        }
+        top_idx[pos] = e;
+        top_score[pos] = s;
+    }
+    float max_s = top_score[0];
+    float sum_exp = 0.0f;
+    float exps[kPrefillRouterMaxTopK];
+    for (uint i = 0; i < KK; ++i) {
+        float e = fast::exp(top_score[i] - max_s);
+        exps[i] = e;
+        sum_exp += e;
+    }
+    for (uint i = 0; i < KK; ++i) {
+        const uint expert_idx = top_idx[i];
+        const float w = exps[i] / sum_exp;
+        const float gain = float(per_expert_scale[expert_idx]);
+        out_indices[row * top_k + i] = expert_idx;
+        out_weights[row * top_k + i] = half(w * gain);
+    }
+}
+
 kernel void prefill_moe_reduce_token_major(
     device const half* route_partials [[buffer(0)]],
     device const half* route_weights  [[buffer(1)]],
@@ -805,10 +870,10 @@ static inline PrefillQMMWeights prefill_qmm_weights(
 /// One BM x BN output tile: rows `item.row ..` (`item.rows` <= BM of them) of
 /// x against `w1` (and `w2` when fused), columns from tg.x * BN. Four
 /// simdgroups in a 2 x 2 grid, each (BM / 2) x (BN / 2) as 8 x 8 fragments.
-template <bool kFused, short BM, short BN>
+template <bool kFused, short BM, short BN, typename OutT = half>
 static inline void prefill_routed_qmm_body(
     device const half* x,
-    device half* y,
+    device OutT* y,
     const PrefillQMMWeights w1,
     const PrefillQMMWeights w2,
     const PrefillRoutedQMMWork item,
@@ -915,7 +980,7 @@ static inline void prefill_routed_qmm_body(
     for (short i = 0; i < TM; ++i) {
         const uint r = wm * (BM / 2) + i * 8 + fm;
         if (r >= item.rows) continue;
-        device half* out = y + ulong(item.row + r) * p.N + n0 + wn * (BN / 2) + fn;
+        device OutT* out = y + ulong(item.row + r) * p.N + n0 + wn * (BN / 2) + fn;
         _Pragma("clang loop unroll(full)")
         for (short j = 0; j < TN; ++j) {
             float v0 = acc[i][j].thread_elements()[0];
@@ -924,7 +989,7 @@ static inline void prefill_routed_qmm_body(
                 v0 = prefill_hidden_activation(v0) * acc2[i][j].thread_elements()[0];
                 v1 = prefill_hidden_activation(v1) * acc2[i][j].thread_elements()[1];
             }
-            *reinterpret_cast<device half2*>(out + j * 8) = half2(half(v0), half(v1));
+            *reinterpret_cast<device vec<OutT, 2>*>(out + j * 8) = vec<OutT, 2>(OutT(v0), OutT(v1));
         }
     }
 }
@@ -1014,6 +1079,33 @@ PREFILL_DENSE_QMM(64, 32)
 PREFILL_DENSE_QMM(32, 64)
 PREFILL_DENSE_QMM(64, 64)
 #undef PREFILL_DENSE_QMM
+
+/// `prefill_dense_qmm_64x64` with float output: the prefill router's logits,
+/// which a top-k and a softmax read next. Half logits round a score near 10
+/// to 1/128, coarser than the selection should see.
+[[kernel, max_total_threads_per_threadgroup(128)]]
+kernel void prefill_dense_qmm_64x64_f32out(
+    device const half* x [[buffer(0)]],
+    device float* y [[buffer(1)]],
+    device const uint8_t* weights [[buffer(2)]],
+    constant uint& M [[buffer(3)]],
+    constant PrefillRoutedQMMParams& p [[buffer(4)]],
+    device const bfloat* scales [[buffer(5)]],
+    device const bfloat* biases [[buffer(6)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    ushort lid [[thread_index_in_threadgroup]],
+    ushort sg [[simdgroup_index_in_threadgroup]],
+    ushort lane [[thread_index_in_simdgroup]]
+) {
+    threadgroup half xs[64 * kRoutedQMMLd];
+    threadgroup half ws[64 * kRoutedQMMLd];
+    const uint row = tg.y * 64u;
+    if (row >= M) return;
+    const PrefillRoutedQMMWork item = {0u, row, min(64u, M - row), 0u};
+    const PrefillQMMWeights w = {weights, scales, biases};
+    prefill_routed_qmm_body<false, 64, 64, float>(
+        x, y, w, w, item, p, tg, lid, sg, lane, xs, ws, ws);
+}
 
 kernel void prefill_routed_gather_rows(
     device const half*                      hidden         [[buffer(0)]],

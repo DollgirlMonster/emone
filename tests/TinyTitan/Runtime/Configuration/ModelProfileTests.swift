@@ -107,6 +107,7 @@ import Testing
             #expect(row.wideMPP == isQ38, name)
             #expect(row.qsaFlash == isQ38, name)
             #expect(row.qsaPacked == isQ38, name)
+            #expect(row.routerLogits == isQ38, name)
             #expect(row.routedMPP == routed, name)
             #expect(row.routedQMM == routed, name)
             #expect(row.gdnChunked == measured, name)
@@ -120,6 +121,11 @@ import Testing
         #expect(!fallback.prefillQSAFlash && !fallback.prefillRoutedQMM)
         #expect(!fallback.prefillDenseQMM && !fallback.prefillDenseFlash)
         #expect(!fallback.prefillQSAPacked)
+        #expect(!fallback.prefillRouterLogits)
+        let forcedOff = ModelProfile.resolve(
+            modelID: "qwen3.8-flash-next", family: .qwen38flash, weightBits: 4,
+            environment: ["TINYTITAN_PREFILL_ROUTER_LOGITS": "0"])
+        #expect(!forcedOff.prefillRouterLogits)
     }
 
     @Test func samplingRowsFollowTheirSeries() {
