@@ -143,28 +143,78 @@ public final class NgramTableReader: @unchecked Sendable {
     /// Each row is its own small uncached read, so one at a time every row
     /// pays a full device round trip -- on an external NVMe about 250 us, which
     /// made a prefill token's 16 rows ~4 ms and 69 s of a 16.9K-token prompt
-    /// on an M1 Max. Issued together, the drive overlaps them. Every row is
+    /// on an M1 Max. Issued together, the drive overlaps them -- but only as
+    /// deeply as there are blocked readers. `concurrentPerform` stops at the
+    /// core count (~10 in flight, ~18K reads/s, 9.4 s for that prompt's 271K
+    /// rows); the same drive gives ~86K reads/s at 128 in flight (2026-10-03),
+    /// so this runs its own `threads` readers. Repeated rows -- a prompt
+    /// repeats n-grams -- are read once and copied. Every row is
     /// range-checked before any read starts, so a bad id reads nothing.
+    public static let defaultGatherThreads: Int = {
+        if let raw = ProcessInfo.processInfo.environment["TINYTITAN_PLE_GATHER_THREADS"],
+            let n = Int(raw), n > 0
+        {
+            return min(n, 512)
+        }
+        return 128
+    }()
+
     public func gatherConcurrently(
         rows: [UInt32],
-        into destination: UnsafeMutableRawPointer
+        into destination: UnsafeMutableRawPointer,
+        threads: Int = NgramTableReader.defaultGatherThreads
     ) throws {
         for row in rows where UInt64(row) >= rowCount {
             throw Failure.rowOutOfRange(row: row, rowCount: rowCount)
         }
-        let firstError = Mutex<Error?>(nil)
-        // `concurrentPerform` returns only after every iteration has finished,
-        // so the destination outlives the closure; iterations write disjoint
-        // `rowBytes` ranges of it.
-        nonisolated(unsafe) let target = destination
-        DispatchQueue.concurrentPerform(iterations: rows.count) { i in
-            do {
-                try readRow(rows[i], into: target.advanced(by: i * rowBytes))
-            } catch {
-                firstError.withLock { if $0 == nil { $0 = error } }
+        // First position of each distinct row; later positions copy from it.
+        var firstSeen: [UInt32: Int] = [:]
+        firstSeen.reserveCapacity(rows.count)
+        var unique: [Int] = []
+        unique.reserveCapacity(rows.count)
+        var copyFrom = [Int](repeating: -1, count: rows.count)
+        for (i, row) in rows.enumerated() {
+            if let first = firstSeen[row] {
+                copyFrom[i] = first
+            } else {
+                firstSeen[row] = i
+                unique.append(i)
             }
         }
+        let firstError = Mutex<Error?>(nil)
+        let next = Atomic<Int>(0)
+        nonisolated(unsafe) let target = destination
+        let workers = max(1, min(threads, unique.count))
+        let done = DispatchGroup()
+        // Readers spend their lives blocked in `pread`, so they are plain
+        // threads, not GCD workers: the pool would not grow past the cores.
+        // The group is waited on below, so the destination outlives every
+        // reader; readers write disjoint `rowBytes` ranges of it.
+        for _ in 0..<workers {
+            done.enter()
+            let thread = Thread {
+                defer { done.leave() }
+                while true {
+                    let k = next.wrappingAdd(1, ordering: .relaxed).oldValue
+                    if k >= unique.count { return }
+                    let i = unique[k]
+                    do {
+                        try self.readRow(rows[i], into: target.advanced(by: i * self.rowBytes))
+                    } catch {
+                        firstError.withLock { if $0 == nil { $0 = error } }
+                        return
+                    }
+                }
+            }
+            thread.stackSize = 64 << 10
+            thread.start()
+        }
+        done.wait()
         if let error = firstError.withLock({ $0 }) { throw error }
+        for (i, first) in copyFrom.enumerated() where first >= 0 {
+            target.advanced(by: i * rowBytes).copyMemory(
+                from: target.advanced(by: first * rowBytes), byteCount: rowBytes)
+        }
     }
 
     private func readRow(_ row: UInt32, into target: UnsafeMutableRawPointer) throws {

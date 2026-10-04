@@ -23,14 +23,25 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 | + routed experts and dense projections on tiled QMMs, expert readahead | 82.5 | 205 | rounding |
 | + 64 x 64 QMM tiles | 76.1 | 222 | identical |
 | + router: 8 tokens per threadgroup | 66.2 | 256 | identical |
-| + QSA attention over packed 4-key blocks | **61.4** | **276** | rounding |
+| + QSA attention over packed 4-key blocks | 61.4-62.9 | 269-276 | rounding |
+| + PLE n-gram rows read 128 deep, repeated rows read once (9.4 s -> 2.1 s) | **55.1-56.8** | **298-307** | identical |
 
 **Speed against baseline so far** (same M1 Max, same 16,931-token prompt):
 
 | | baseline | now | speedup |
 | --- | ---: | ---: | ---: |
-| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 61.4 s | **7.7x** |
+| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 55.1-56.8 s | **8.4-8.6x** |
 | Decode, 256 tokens, 12 GiB -> 16 GiB expert cache | 5.06 tok/s | 5.62 tok/s | **+11%** |
+
+Before the last step, three reruns on a quiet machine (Time Machine off)
+measured 62.90, 62.53 and 76.62 s; the third had the same GPU span as the
+others, so its extra 14 s was host or drive interference. Those runs spent
+~9.4 s before the GPU started: the PLE n-gram gather, 271K uncached 320-byte
+reads with only ~10 in flight. The drive gives ~18K reads/s at that depth and
+~86K at 128 in flight, and the prompt repeats n-grams, so reading 128 deep and
+each row once cut it to 2.1 s with byte-identical output. Overlapping the
+gather with layer 0 was tried and measured worse (56.5-64.3 s): it competes
+with layer 0's expert reads on the same drive and hides at most ~1 s.
 
 **The other installed models** (same M1 Max, the first 30,000 characters of
 the same prompt: 8,529 tokens, default chunking, 4-bit), before and after the

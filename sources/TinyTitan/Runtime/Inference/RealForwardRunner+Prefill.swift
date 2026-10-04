@@ -343,8 +343,11 @@ extension RealForwardRunner {
         }
         // The n-gram rows depend only on token ids, so the whole chunk's
         // gather runs before any layer needs it.
+        //
+        // Measured 2026-10-03 on an M1 Max: overlapping this gather with layer
+        // 0 does not pay. It competes with layer 0's expert reads on the same
+        // drive (2.1 s alone, 2.9 s beside them) and hides at most ~1 s.
         try gatherPLERowsPrefill(tokens: tokens)
-
         guard var cb = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }
