@@ -837,3 +837,14 @@ does. Two interleaved pairs on a noisy machine (Time Machine running):
 attention tiles 13.5 -> 10.6 s and 20.6 -> 14.1 s (-22% / -31%), output
 identical at the start. Surprisal +0.015 nats, t +1.06, no measurable change.
 Shipped on the Qwen3.8 4-bit row (`prefillQSAPacked`).
+
+## Spike 24 (2026-10-03): the CPU's matrix units do not add throughput
+
+Accelerate's `cblas_sgemm` (AMX) at a GDN projection shape (4096 x 2560 x
+2560, fp32) runs ~1.58 TFLOPS alone. Run continuously beside a 16.9K-token
+prefill it keeps ~1.39 TFLOPS, but the GPU's busy time goes 55.2 -> 83.2 s
+(+51%) and prefill 66.2 -> 95.2 s: the GPU loses more matmul work (~28 s at
+~6 TFLOPS) than the AMX adds. They share the memory bus and the package power
+budget -- the same pattern as the Neural Engine on this chip. A short overlap
+(the first ~15 s of prefill) showed no slowdown, so the contention builds
+with sustained load. Not pursued.
