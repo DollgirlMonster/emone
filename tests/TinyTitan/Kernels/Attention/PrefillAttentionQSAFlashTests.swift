@@ -67,7 +67,8 @@ import Testing
     }
 
     private static func run(
-        kvBits: Int, queries: Int, startPosition: Int, rowTile: Int?, blockSparse: Bool
+        kvBits: Int, queries: Int, startPosition: Int, rowTile: Int?, blockSparse: Bool,
+        packed: Bool = false
     ) throws -> (reference: [Float16], flash: [Float16]) {
         let ctx = try MetalContext()
         let attention = try PrefillAttention(context: ctx)
@@ -126,6 +127,7 @@ import Testing
         let outBytes = queries * rowElements * half
         func once(flash: Bool) throws -> [Float16] {
             attention.maskedFlash = flash
+            attention.packedFlash = packed
             guard let out = ctx.device.makeBuffer(length: outBytes, options: .storageModeShared),
                 let cb = ctx.queue.makeCommandBuffer()
             else { throw MetalError.commandEncoderFailed }
@@ -232,6 +234,31 @@ import Testing
                 start: out.contents().bindMemory(to: Float16.self, capacity: count), count: count))
         }
         Self.check((try once(flash: false), try once(flash: true)), "dense q\(qHeads) kv\(kvBits)")
+    }
+
+    /// Packed mode walks each row tile's selected 4-key blocks instead of
+    /// whole 16-key tiles: same selection, so it tracks the gathered kernel
+    /// too, on block-shaped and scattered selections and offset row tiles.
+    @Test(arguments: [8, 4, 16])
+    func packedTracksTheQSAKernel(_ kvBits: Int) throws {
+        Self.check(
+            try Self.run(
+                kvBits: kvBits, queries: 77, startPosition: 300, rowTile: nil,
+                blockSparse: true, packed: true),
+            "packed kv\(kvBits)")
+    }
+
+    @Test func packedScatteredAndRowTiles() throws {
+        Self.check(
+            try Self.run(
+                kvBits: 8, queries: 45, startPosition: 130, rowTile: nil, blockSparse: false,
+                packed: true),
+            "packed scattered")
+        Self.check(
+            try Self.run(
+                kvBits: 8, queries: 150, startPosition: 64, rowTile: 64, blockSparse: true,
+                packed: true),
+            "packed row tiles")
     }
 
     @Test func scatteredSelection() throws {

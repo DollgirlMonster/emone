@@ -2017,6 +2017,68 @@ kernel void qsa_flash_tile_flags(
     flags[rt * keyTiles + kt] = any != 0 ? 1 : 0;
 }
 
+// Packed mode: instead of skipping whole 16-key tiles, a row tile walks the
+// union of the 4-key blocks its 8 rows selected (QSA selects in 4-key
+// blocks), four blocks to a 16-key tile (`qsa_flash_group_blocks` lists them,
+// ascending). On a 16.9K Qwen3.8 prompt that is ~0.42 of the dense causal
+// work against ~0.65 for the 16-key tiles. The K/V staging reads each key row
+// by index either way, so a gathered tile costs what a contiguous one does.
+constant bool FC_QSA_FLASH_PACKED [[function_constant(111)]];
+constant constexpr uint kQSABlockKeys = 4u;
+
+/// blocks[rowTile * listStride + i]: the i-th 4-key block (ascending) any of
+/// the row tile's rows keeps; counts[rowTile]: how many.
+[[kernel, max_total_threads_per_threadgroup(256)]]
+kernel void qsa_flash_group_blocks(
+    device const uchar* keep [[buffer(0)]],
+    constant uint& keepStride [[buffer(1)]],
+    constant uint& rows [[buffer(2)]],
+    device uint* blocks [[buffer(3)]],
+    constant uint& listStride [[buffer(4)]],
+    device uint* counts [[buffer(5)]],
+    uint rt [[threadgroup_position_in_grid]],
+    uint tid [[thread_position_in_threadgroup]]
+) {
+    threadgroup uint chunkCount[256];
+    const uint r0 = rt * kQSAFlashRows;
+    const uint r1 = min(r0 + kQSAFlashRows, rows);
+    const uint nb = (keepStride + kQSABlockKeys - 1u) / kQSABlockKeys;
+    const uint per = (nb + 255u) / 256u;
+    const uint b0 = min(tid * per, nb);
+    const uint b1 = min(b0 + per, nb);
+    uint mine = 0;
+    for (uint b = b0; b < b1; ++b) {
+        uchar any = 0;
+        const uint k0 = b * kQSABlockKeys;
+        const uint k1 = min(k0 + kQSABlockKeys, keepStride);
+        for (uint r = r0; r < r1 && any == 0; ++r) {
+            device const uchar* row = keep + ulong(r) * keepStride;
+            for (uint k = k0; k < k1; ++k) { any |= row[k]; }
+        }
+        mine += any != 0 ? 1u : 0u;
+    }
+    chunkCount[tid] = mine;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0) {
+        uint run = 0;
+        for (uint i = 0; i < 256u; ++i) { const uint c = chunkCount[i]; chunkCount[i] = run; run += c; }
+        counts[rt] = run;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint at = chunkCount[tid];
+    device uint* out = blocks + ulong(rt) * listStride;
+    for (uint b = b0; b < b1; ++b) {
+        uchar any = 0;
+        const uint k0 = b * kQSABlockKeys;
+        const uint k1 = min(k0 + kQSABlockKeys, keepStride);
+        for (uint r = r0; r < r1 && any == 0; ++r) {
+            device const uchar* row = keep + ulong(r) * keepStride;
+            for (uint k = k0; k < k1; ++k) { any |= row[k]; }
+        }
+        if (any != 0) { out[at++] = b; }
+    }
+}
+
 [[kernel, max_total_threads_per_threadgroup(512)]]
 kernel void attention_prefill_qsa_masked_flash(
     device const half* Q [[buffer(0)]],
@@ -2029,6 +2091,7 @@ kernel void attention_prefill_qsa_masked_flash(
     device const uchar* flags [[buffer(7)]],
     constant uint& keyTiles [[buffer(8)]],
     constant uint& causalOnly [[buffer(9)]],
+    device const uint* blockCounts [[buffer(10)]],
     uint3 tg [[threadgroup_position_in_grid]],
     uint lid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -2095,14 +2158,25 @@ kernel void attention_prefill_qsa_masked_flash(
     const uint tileEnd = min((visibleEnd + kQSAFlashKeys - 1u) / kQSAFlashKeys, keyTiles);
     device const uchar* tileFlags = flags + ulong(rt) * keyTiles;
 
-    for (uint kt = 0u; kt < tileEnd; ++kt) {
-        if (causalOnly == 0u && tileFlags[kt] == 0) continue;
-        const uint k0 = kt * kQSAFlashKeys;
+    // Packed: `flags` is this row tile's block list and `keyTiles` its stride.
+    const bool packed = is_function_constant_defined(FC_QSA_FLASH_PACKED) && FC_QSA_FLASH_PACKED;
+    const uint packedBlocks = packed ? blockCounts[rt] : 0u;
+    device const uint* blockList = reinterpret_cast<device const uint*>(flags) + ulong(rt) * keyTiles;
+    const uint loopEnd = packed ? (packedBlocks + 3u) / 4u : tileEnd;
+    // Key j of this step's 16-key tile, or ~0 past the end of a packed list.
+    auto tileKey = [&](uint kt, uint j) -> uint {
+        if (!packed) return kt * kQSAFlashKeys + j;
+        const uint slot = kt * 4u + j / kQSABlockKeys;
+        return slot < packedBlocks ? blockList[slot] * kQSABlockKeys + j % kQSABlockKeys : 0xFFFFFFFFu;
+    };
+
+    for (uint kt = 0u; kt < loopEnd; ++kt) {
+        if (!packed && causalOnly == 0u && tileFlags[kt] == 0) continue;
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint task = lid; task < 2u * kQSAFlashKeys * HD / 8u; task += threads) {
             const bool isValue = task >= kQSAFlashKeys * HD / 8u;
             const uint i = (isValue ? task - kQSAFlashKeys * HD / 8u : task) * 8u;
-            const uint key = k0 + i / HD;
+            const uint key = tileKey(kt, i / HD);
             threadgroup half* dst = (isValue ? vs : ks) + i;
             if (key < p.kvValidCount) {
                 prefill_load_kv8(isValue ? V : K, key, kvh * HD + i % HD, p, dst);
@@ -2112,7 +2186,7 @@ kernel void attention_prefill_qsa_masked_flash(
         }
         if (lid < kQSAFlashRows * kQSAFlashKeys) {
             const uint r = q0 + lid / kQSAFlashKeys;
-            const uint key = k0 + lid % kQSAFlashKeys;
+            const uint key = tileKey(kt, lid % kQSAFlashKeys);
             maskTile[lid] = (r < p.queryCount && key < keepStride)
                 ? (causalOnly != 0u ? uchar(key <= p.startPosition + r)
                                     : keep[ulong(r) * keepStride + key])

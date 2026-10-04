@@ -106,6 +106,7 @@ import Testing
             let name = Comment(rawValue: "\(key.modelID) \(key.weightBits)")
             #expect(row.wideMPP == isQ38, name)
             #expect(row.qsaFlash == isQ38, name)
+            #expect(row.qsaPacked == isQ38, name)
             #expect(row.routedMPP == routed, name)
             #expect(row.routedQMM == routed, name)
             #expect(row.gdnChunked == measured, name)
@@ -118,6 +119,7 @@ import Testing
         #expect(!fallback.prefillGDNChunked)
         #expect(!fallback.prefillQSAFlash && !fallback.prefillRoutedQMM)
         #expect(!fallback.prefillDenseQMM && !fallback.prefillDenseFlash)
+        #expect(!fallback.prefillQSAPacked)
     }
 
     @Test func samplingRowsFollowTheirSeries() {

@@ -83,6 +83,14 @@ final class PrefillAttention {
     /// dense flash tiles under the selection mask, head dim 256 only.
     private let psoQSAMaskedFlash: MTLComputePipelineState?
     private let psoQSAFlashTileFlags: MTLComputePipelineState?
+    /// Packed mode (`FC_QSA_FLASH_PACKED`) and its per-row-tile block lists.
+    private let psoQSAFlashPacked: MTLComputePipelineState?
+    private let psoQSAGroupBlocks: MTLComputePipelineState?
+    private var packedBlockLists: MTLBuffer?
+    private var packedBlockCounts: MTLBuffer?
+    /// Walk each row tile's selected 4-key blocks, four to a tile, instead of
+    /// whole 16-key tiles. Set from `ModelProfile.prefillQSAPacked`.
+    var packedFlash = false
     /// One byte per (8-row tile, 16-key tile) of a chunk; grown on demand.
     private var flashTileFlags: MTLBuffer?
     static let flashRows = 8
@@ -143,6 +151,10 @@ final class PrefillAttention {
             (try? context.pipeline("attention_prefill_qsa_masked_flash"))
         self.psoQSAFlashTileFlags =
             (try? context.pipeline("qsa_flash_tile_flags"))
+        self.psoQSAFlashPacked = try? context.pipeline(
+            "attention_prefill_qsa_masked_flash",
+            constants: [MetalFunctionConstant(index: 111, value: .bool(true))])
+        self.psoQSAGroupBlocks = try? context.pipeline("qsa_flash_group_blocks")
         // Four bytes, not one: the kernels declare `keepIdx`/`keepIndices` as
         // `device const uint*`, and Metal's own validation aborts a binding
         // whose length is shorter than the argument it is bound to ("space for
@@ -329,7 +341,49 @@ final class PrefillAttention {
         var rowCount = UInt32(rows)
         var tiles = UInt32(keyTiles)
         let maskOffset = keepMask == nil ? 0 : keepRowOffset * keepStride
-        if let keepMask {
+        // Packed: the row tiles' block lists stand in for the tile flags.
+        var listBinding: (MTLBuffer, Int)?
+        var countsBinding: (MTLBuffer, Int)?
+        var listStride = UInt32(0)
+        var attentionPipeline = pipeline
+        if let keepMask, packedFlash, let packedPSO = psoQSAFlashPacked,
+            let listPSO = psoQSAGroupBlocks
+        {
+            let blocksPerRow = (keepStride + 3) / 4
+            let firstTile = keepRowOffset / Self.flashRows
+            let listBytes = (firstTile + rowTiles) * blocksPerRow * 4
+            let countBytes = (firstTile + rowTiles) * 4
+            if (packedBlockLists?.length ?? 0) < listBytes {
+                packedBlockLists = context.device.makeBuffer(
+                    length: listBytes, options: .storageModePrivate)
+                packedBlockLists?.label = "prefillAttention.qsaFlash.blockLists"
+            }
+            if (packedBlockCounts?.length ?? 0) < countBytes {
+                packedBlockCounts = context.device.makeBuffer(
+                    length: countBytes, options: .storageModePrivate)
+                packedBlockCounts?.label = "prefillAttention.qsaFlash.blockCounts"
+            }
+            guard let lists = packedBlockLists, let counts = packedBlockCounts,
+                let listEnc = commandBuffer.makeComputeCommandEncoder()
+            else { throw PrefillAttentionError.commandEncoderFailed }
+            listStride = UInt32(blocksPerRow)
+            let listOffset = firstTile * blocksPerRow * 4
+            let countOffset = firstTile * 4
+            listEnc.setComputePipelineState(listPSO)
+            listEnc.setBuffer(keepMask, offset: maskOffset, index: 0)
+            listEnc.setBytes(&stride, length: 4, index: 1)
+            listEnc.setBytes(&rowCount, length: 4, index: 2)
+            listEnc.setBuffer(lists, offset: listOffset, index: 3)
+            listEnc.setBytes(&listStride, length: 4, index: 4)
+            listEnc.setBuffer(counts, offset: countOffset, index: 5)
+            listEnc.dispatchThreadgroups(
+                MTLSize(width: rowTiles, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            listEnc.endEncoding()
+            listBinding = (lists, listOffset)
+            countsBinding = (counts, countOffset)
+            attentionPipeline = packedPSO
+        } else if let keepMask {
             guard let flagEnc = commandBuffer.makeComputeCommandEncoder() else {
                 throw PrefillAttentionError.commandEncoderFailed
             }
@@ -348,7 +402,7 @@ final class PrefillAttention {
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
             throw PrefillAttentionError.commandEncoderFailed
         }
-        enc.setComputePipelineState(pipeline)
+        enc.setComputePipelineState(attentionPipeline)
         enc.setBuffer(q, offset: qOffset, index: 0)
         enc.setBuffer(k, offset: kOffset, index: 1)
         enc.setBuffer(v, offset: vOffset, index: 2)
@@ -357,9 +411,15 @@ final class PrefillAttention {
         enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 4)
         enc.setBuffer(keepMask ?? emptyKeepMask, offset: maskOffset, index: 5)
         enc.setBytes(&stride, length: 4, index: 6)
-        enc.setBuffer(flags, offset: flagOffset, index: 7)
-        enc.setBytes(&tiles, length: 4, index: 8)
+        if let listBinding {
+            enc.setBuffer(listBinding.0, offset: listBinding.1, index: 7)
+            enc.setBytes(&listStride, length: 4, index: 8)
+        } else {
+            enc.setBuffer(flags, offset: flagOffset, index: 7)
+            enc.setBytes(&tiles, length: 4, index: 8)
+        }
         enc.setBytes(&causalOnly, length: 4, index: 9)
+        enc.setBuffer(countsBinding?.0 ?? emptyKeepMask, offset: countsBinding?.1 ?? 0, index: 10)
         let group = Int(params.numQHeads / params.numKVHeads)
         enc.dispatchThreadgroups(
             MTLSize(width: rowTiles, height: Int(params.numKVHeads), depth: 1),

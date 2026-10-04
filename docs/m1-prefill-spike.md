@@ -806,3 +806,34 @@ All against the 66.2 s build, output identical where it ran end to end:
 
 The tiled QMM at 64 x 64 sits at ~7 TFLOPS of the M1 Max's ~10.4 fp16 peak;
 matmuls are ~42 s of the 66.2 s, QSA attention ~14 s.
+
+## Spike 23 (2026-10-03): QSA tiles -- grouping rows does not help, packing blocks does
+
+Real selections dumped for two layers (16,931 rows; 16-key tiles, then 4-key
+blocks), and the kernel's work simulated as the sum over 8-row groups of what
+any member selected:
+
+| scheme | work, share of dense causal |
+|---|---:|
+| per row, exact keys (the floor) | 0.23 |
+| packed 4-key blocks, 8 consecutive rows | **0.42** |
+| 16-key tiles, 8 consecutive rows (spike 16 kernel) | 0.64-0.66 |
+
+**Regrouping rows by their selections does not help.** MinHash ordering and
+greedy overlap within 64- or 256-row windows all came out at or above
+consecutive rows (1.59x the per-row tile minimum; MinHash 1.87-1.93x). Adjacent
+rows share their local window; their far picks are close to independent, so
+no ordering finds rows with matching far blocks. Each doubling of the group
+adds ~20% work (G1 1.00, G2 1.19, G4 1.39, G8 1.59, G16 1.79). Prior work
+permutes tokens for block-sparse attention (Sparse VideoGen2's k-means,
+PBS-Attn); on an indexer's top-k selections it buys nothing here.
+
+**Packing does.** QSA selects in 4-key blocks, but a 16-key tile is computed
+whole if any of its blocks is kept. `qsa_flash_group_blocks` lists each 8-row
+tile's selected blocks (ascending), and the flash kernel's packed mode
+(`FC_QSA_FLASH_PACKED`) walks them four to a tile; the K/V staging already
+reads each key row by index, so a gathered tile costs what a contiguous one
+does. Two interleaved pairs on a noisy machine (Time Machine running):
+attention tiles 13.5 -> 10.6 s and 20.6 -> 14.1 s (-22% / -31%), output
+identical at the start. Surprisal +0.015 nats, t +1.06, no measurable change.
+Shipped on the Qwen3.8 4-bit row (`prefillQSAPacked`).
