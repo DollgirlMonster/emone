@@ -31,6 +31,19 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 | Prefill, against the upstream engine (measured, back to back) | 474.4 s | 66.2 s | **7.2x** |
 | Decode, 256 tokens, 12 GiB -> 16 GiB expert cache | 5.06 tok/s | 5.62 tok/s | **+11%** |
 
+**The other installed models** (same M1 Max, the first 30,000 characters of
+the same prompt: 8,529 tokens, default chunking, 4-bit), before and after the
+same kernels plus causal flash attention for models without QSA:
+
+| model | before | now | speedup |
+| --- | ---: | ---: | ---: |
+| Qwen 3.6 35B-A3B | 111.3 s | 15.6 s | **7.1x** |
+| Ornith 1.5 35B-A3B | -- | 15.9 s | (same geometry as Qwen 3.6) |
+| Qwen3.8 27B dense | 644.0 s | 92.6 s | **7.0x** |
+
+Each passed the paired surprisal A/B on its own weights
+(`docs/m1-prefill-spike.md`, spikes 19-20).
+
 The 32K chunk took prefill from 154.7-159.9 s to 140.7-151.2 s (-7.0%) with
 byte-identical output and no change to decode. The 16 GiB cache (128 slots, up
 from 96) costs 4 GiB more resident memory (peak 21.5 GiB, no swap) and does not

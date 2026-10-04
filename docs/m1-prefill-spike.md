@@ -784,3 +784,25 @@ the same sequence of fused multiply-adds, so routing is byte-identical
 (`rowsKernelMatchesBlockKernelExactly`, and against the decode router).
 16,931-token prompt: prefill 75.4 -> **66.2 s**, output identical; 7.2x the
 upstream engine.
+
+## Spike 22 (2026-10-03): what did not help
+
+All against the 66.2 s build, output identical where it ran end to end:
+
+- **Flash attention reading fp16 K/V straight from device memory** (K/V
+  decoded once per layer, no threadgroup staging or per-tile barriers): 5x
+  slower in the microbenchmark (2.6 s against 0.53 s per 4,096-row tile).
+  Device-side simdgroup loads of the transposed key tile are the cost.
+- **A skinny-N QMM** for the hyper-connection inject (N = 4, K = 10,240) and
+  the GDN gates (N = 48): 66.4 s, no change. The split timing that suggested
+  it (`prefill_split_hc_*`, ~4 s) overstates small steps, since splitting
+  serializes the command buffers.
+- **A 64-wide K step** in the tiled QMM: 6.2 against 7.1 TFLOPS (twice the
+  threadgroup memory, lower occupancy).
+- **Half-precision weight dequantization** in the QMM loader: 7.0 against 7.1
+  TFLOPS dense, 6.1 against 6.6 routed.
+- **Expert readahead one or two layers ahead**: the same (one) or worse (two,
+  memory pressure) than the current layer at its start.
+
+The tiled QMM at 64 x 64 sits at ~7 TFLOPS of the M1 Max's ~10.4 fp16 peak;
+matmuls are ~42 s of the 66.2 s, QSA attention ~14 s.
