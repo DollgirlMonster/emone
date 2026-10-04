@@ -14,6 +14,7 @@ final class Elementwise {
     // Hyper-connection (Gated Residual) stream plumbing.
     private let hcMixReducePSO: MTLComputePipelineState
     private let hcInjectPSO: MTLComputePipelineState
+    private let hcInjectX8PSO: MTLComputePipelineState
     private let sigmoidPSO: MTLComputePipelineState
     private let siluPSO: MTLComputePipelineState
     // PLE (n-gram) block.
@@ -34,6 +35,7 @@ final class Elementwise {
         self.concatRowsPSO = try context.pipeline("concat_rows_fp16")
         self.hcMixReducePSO = try context.pipeline("hc_stream_mix_reduce_fp16")
         self.hcInjectPSO = try context.pipeline("hc_stream_inject_fp16")
+        self.hcInjectX8PSO = try context.pipeline("hc_stream_inject_fp16_x8")
         self.sigmoidPSO = try context.pipeline("sigmoid_fp16")
         self.siluPSO = try context.pipeline("silu_fp16")
         self.pleScorePSO = try context.pipeline("ple_stream_score_fp16")
@@ -149,7 +151,9 @@ final class Elementwise {
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }
-        enc.setComputePipelineState(hcInjectPSO)
+        // Eight elements a thread when the offsets and D allow 16-byte access.
+        let wide = dim % 8 == 0 && streamsOffset % 16 == 0 && blockOutOffset % 16 == 0
+        enc.setComputePipelineState(wide ? hcInjectX8PSO : hcInjectPSO)
         enc.setBuffer(streams, offset: streamsOffset, index: 0)
         enc.setBuffer(blockOut, offset: blockOutOffset, index: 1)
         enc.setBuffer(inject, offset: injectOffset, index: 2)
@@ -161,7 +165,7 @@ final class Elementwise {
         enc.setBytes(&t, length: MemoryLayout<UInt32>.size, index: 5)
         var gs = inScale
         enc.setBytes(&gs, length: MemoryLayout<Float>.size, index: 6)
-        let total = dim * streamCount * tokens
+        let total = dim * streamCount * tokens / (wide ? 8 : 1)
         let w = min(hcInjectPSO.maxTotalThreadsPerThreadgroup, 256)
         enc.dispatchThreads(
             MTLSize(width: total, height: 1, depth: 1),

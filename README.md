@@ -27,13 +27,14 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 | + PLE n-gram rows read 128 deep, repeated rows read once (9.4 s -> 2.1 s) | 55.1-56.8 | 298-307 | identical |
 | + shared-expert scalar gate in one dispatch per chunk, not one per token (7.0 s -> 1.5 s) | 50.6 | 335 | identical |
 | + router logits on the tiled QMM, then a top-k pass (82 ms -> ~5 ms per layer) | 46.9-47.1 | 359-361 | rounding |
-| + attention reads Q from a fragment-packed copy instead of holding it, K staged transposed (kernel 158 -> 118 ms) | **43.7-44.2** | **383-387** | identical |
+| + attention reads Q from a fragment-packed copy instead of holding it, K staged transposed (kernel 158 -> 118 ms) | 43.7-44.2 | 383-387 | identical |
+| + hyper-connection inject eight halves a thread (4.3 -> 2.0 ms per write, 96 writes) | **43.4-43.5** | **389-390** | identical |
 
 **Speed against baseline so far** (same M1 Max, same 16,931-token prompt):
 
 | | baseline | now | speedup |
 | --- | ---: | ---: | ---: |
-| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 43.9 s | **10.8x** |
+| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 43.4 s | **10.9x** |
 | Decode, 256 tokens, 12 GiB -> 16 GiB expert cache | 5.06 tok/s | 5.62 tok/s | **+11%** |
 
 Before the last step, three reruns on a quiet machine (Time Machine off)

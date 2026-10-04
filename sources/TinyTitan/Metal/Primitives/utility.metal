@@ -215,6 +215,36 @@ void hc_stream_inject_fp16(
                         + float(block_out[t * D + d]) * float(g));
 }
 
+// `hc_stream_inject_fp16` eight elements to a thread (D a multiple of 8):
+// the gate is computed once per thread instead of once per element, and the
+// loads and stores are 16 bytes wide. Same arithmetic per element, so the
+// same bytes; a prefill chunk's inject went from ~180 to bandwidth speed.
+[[kernel, max_total_threads_per_threadgroup(256)]]
+void hc_stream_inject_fp16_x8(
+    device       half4* streams  [[buffer(0)]],  // [T, S, D], updated in place
+    device const half4* block_out [[buffer(1)]], // [T, D]
+    device const half* inject    [[buffer(2)]],  // [T, S], pre-sigmoid
+    constant     uint& D         [[buffer(3)]],
+    constant     uint& S         [[buffer(4)]],
+    constant     uint& T         [[buffer(5)]],
+    constant    float& inScale   [[buffer(6)]],
+    uint               tid       [[thread_position_in_grid]]
+) {
+    const uint D8 = D / 8u;
+    if (tid >= D8 * S * T) return;
+    const uint t = tid / (D8 * S);
+    const uint rest = tid - t * D8 * S;
+    const uint s = rest / D8;
+    const uint d8 = rest - s * D8;
+    const half g = half(2.0f / (1.0f + exp(-float(inject[t * S + s]) * inScale)));
+    const float fg = float(g);
+    for (uint k = 0u; k < 2u; ++k) {
+        const uint si = tid * 2u + k;
+        const float4 b = float4(block_out[(t * D8 + d8) * 2u + k]);
+        streams[si] = half4(float4(streams[si]) + b * fg);
+    }
+}
+
 // out[i] = outScale * sigmoid(inScale * x[i]) — standalone gate, distinct
 // from the fused sigmoid_gate_mul which multiplies into an existing value.
 //
