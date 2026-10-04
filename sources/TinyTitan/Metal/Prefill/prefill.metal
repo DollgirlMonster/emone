@@ -463,6 +463,158 @@ kernel void prefill_router_block(
     }
 }
 
+// `prefill_router_block` for 8 tokens per threadgroup. That kernel gave
+// every expert a thread that streamed the token's whole hidden row and its own
+// weight row, ~6 MB of cache traffic per token, and ran the top-k on one
+// thread; ~0.32 s per Qwen3.8 layer at 16.9K tokens. Here 256 threads stage
+// the 8 rows' scaled inputs in threadgroup memory 256 columns at a time, each
+// weight is decoded once for all 8 rows, and 8 threads run the top-k, one per
+// row. Every (row, expert) score is the same sequence of fused multiply-adds
+// in the same order as `prefill_router_block`, so the routing is identical.
+constant constexpr uint kPrefillRouterRows = 8u;
+constant constexpr uint kPrefillRouterCols = 256u;
+constant constexpr uint kPrefillRouterThreads = 256u;
+constant constexpr uint kPrefillRouterExpertsPerThread =
+    kPrefillRouterMaxExperts / kPrefillRouterThreads;
+
+[[kernel, max_total_threads_per_threadgroup(256)]]
+kernel void prefill_router_rows(
+    device const uint8_t* W                [[buffer(0)]],
+    device const bfloat*  scales           [[buffer(1)]],
+    device const bfloat*  biases           [[buffer(2)]],
+    device const half*    hidden           [[buffer(3)]],
+    device const bfloat*  effective_scale  [[buffer(4)]],
+    device const bfloat*  per_expert_scale [[buffer(5)]],
+    device uint*          out_indices      [[buffer(6)]],
+    device half*          out_weights      [[buffer(7)]],
+    constant uint&        T                [[buffer(8)]],
+    constant uint&        num_experts      [[buffer(9)]],
+    constant uint&        D                [[buffer(10)]],
+    constant uint&        top_k            [[buffer(11)]],
+    constant uint&        hidden_stride    [[buffer(12)]],
+    uint                  tile             [[threadgroup_position_in_grid]],
+    uint                  tid              [[thread_position_in_threadgroup]]
+) {
+    threadgroup float xv[kPrefillRouterRows * kPrefillRouterCols];
+    threadgroup float scores[kPrefillRouterRows * kPrefillRouterMaxExperts];
+    const uint row0 = tile * kPrefillRouterRows;
+    if (row0 >= T) return;
+    const uint rows = min(kPrefillRouterRows, T - row0);
+    const uint NE = min(num_experts, kPrefillRouterMaxExperts);
+    const uint KK = min(top_k, kPrefillRouterMaxTopK);
+    const uint n_groups = D / kPrefillGroupSize;
+    const uint bits = is_function_constant_defined(FC_PREFILL_ROUTER_BITS)
+        ? FC_PREFILL_ROUTER_BITS : 8u;
+    const uint row_bytes = D * bits / 8u;
+
+    float acc[kPrefillRouterExpertsPerThread][kPrefillRouterRows];
+    for (uint j = 0; j < kPrefillRouterExpertsPerThread; ++j) {
+        for (uint r = 0; r < kPrefillRouterRows; ++r) acc[j][r] = 0.0f;
+    }
+
+    for (uint c0 = 0; c0 < D; c0 += kPrefillRouterCols) {
+        const uint cols = min(kPrefillRouterCols, D - c0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint i = tid; i < kPrefillRouterRows * kPrefillRouterCols; i += kPrefillRouterThreads) {
+            const uint r = i / kPrefillRouterCols;
+            const uint c = i % kPrefillRouterCols;
+            xv[i] = (r < rows && c < cols)
+                ? float(hidden[(row0 + r) * hidden_stride + c0 + c]) * float(effective_scale[c0 + c])
+                : 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint j = 0; j < kPrefillRouterExpertsPerThread; ++j) {
+            const uint e = tid + j * kPrefillRouterThreads;
+            if (e >= NE) continue;
+            device const uint8_t* W_row = W + e * row_bytes;
+            for (uint g = c0 / kPrefillGroupSize; g < (c0 + cols) / kPrefillGroupSize; ++g) {
+                const uint gc = g * kPrefillGroupSize - c0;  // group's first staged column
+                if (bits == 16u) {
+                    device const bfloat* W_bf = (device const bfloat*)W_row;
+                    for (uint k = 0; k < kPrefillGroupSize; ++k) {
+                        const float w = float(W_bf[g * kPrefillGroupSize + k]);
+                        for (uint r = 0; r < kPrefillRouterRows; ++r) {
+                            acc[j][r] = fma(w, xv[r * kPrefillRouterCols + gc + k], acc[j][r]);
+                        }
+                    }
+                } else {
+                    const float s = float(scales[e * n_groups + g]);
+                    const float b = float(biases[e * n_groups + g]);
+                    float dot_qx[kPrefillRouterRows];
+                    float sum_x[kPrefillRouterRows];
+                    for (uint r = 0; r < kPrefillRouterRows; ++r) { dot_qx[r] = 0.0f; sum_x[r] = 0.0f; }
+                    for (uint k = 0; k < kPrefillGroupSize; ++k) {
+                        const float q = float(prefill_affine_value(
+                            W_row, g * kPrefillGroupSize + k, bits));
+                        for (uint r = 0; r < kPrefillRouterRows; ++r) {
+                            const float x = xv[r * kPrefillRouterCols + gc + k];
+                            dot_qx[r] = fma(q, x, dot_qx[r]);
+                            sum_x[r] += x;
+                        }
+                    }
+                    for (uint r = 0; r < kPrefillRouterRows; ++r) {
+                        acc[j][r] = fma(s, dot_qx[r], acc[j][r]);
+                        acc[j][r] = fma(b, sum_x[r], acc[j][r]);
+                    }
+                }
+            }
+        }
+    }
+    for (uint j = 0; j < kPrefillRouterExpertsPerThread; ++j) {
+        const uint e = tid + j * kPrefillRouterThreads;
+        if (e >= NE) continue;
+        for (uint r = 0; r < kPrefillRouterRows; ++r) {
+            scores[r * kPrefillRouterMaxExperts + e] = acc[j][r];
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid < rows) {
+        const uint row = row0 + tid;
+        threadgroup const float* row_scores = scores + tid * kPrefillRouterMaxExperts;
+        uint top_idx[kPrefillRouterMaxTopK];
+        float top_score[kPrefillRouterMaxTopK];
+        for (uint i = 0; i < kPrefillRouterMaxTopK; ++i) {
+            top_idx[i] = 0u;
+            top_score[i] = -INFINITY;
+        }
+        for (uint e = 0; e < NE; ++e) {
+            float s = row_scores[e];
+            // Strictly less than, as `prefill_router_block` and decode.
+            if (KK > 0 && s < top_score[KK - 1]) continue;
+            uint pos = KK;
+            for (uint i = 0; i < KK; ++i) {
+                if (s > top_score[i] || (s == top_score[i] && e < top_idx[i])) {
+                    pos = i;
+                    break;
+                }
+            }
+            if (pos >= KK) continue;
+            for (uint i = KK - 1; i > pos; --i) {
+                top_idx[i] = top_idx[i - 1];
+                top_score[i] = top_score[i - 1];
+            }
+            top_idx[pos] = e;
+            top_score[pos] = s;
+        }
+        float max_s = top_score[0];
+        float sum_exp = 0.0f;
+        float exps[kPrefillRouterMaxTopK];
+        for (uint i = 0; i < KK; ++i) {
+            float e = fast::exp(top_score[i] - max_s);
+            exps[i] = e;
+            sum_exp += e;
+        }
+        for (uint i = 0; i < KK; ++i) {
+            const uint expert_idx = top_idx[i];
+            const float w = exps[i] / sum_exp;
+            const float gain = float(per_expert_scale[expert_idx]);
+            out_indices[row * top_k + i] = expert_idx;
+            out_weights[row * top_k + i] = half(w * gain);
+        }
+    }
+}
+
 kernel void prefill_moe_reduce_token_major(
     device const half* route_partials [[buffer(0)]],
     device const half* route_weights  [[buffer(1)]],

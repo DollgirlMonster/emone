@@ -107,6 +107,50 @@ import TinyTitanValidationSupport
             used: Self.d)
     }
 
+    /// `prefill_router_rows` (8 tokens per threadgroup) against
+    /// `prefill_router_block` (one token each): the same scores in the same
+    /// order, so the indices and weights must match byte for byte, including
+    /// a partial last tile of rows.
+    @Test func rowsKernelMatchesBlockKernelExactly() throws {
+        var rng = SplitMix64(seed: 0x8_2026)
+        let rows = 19
+        let hiddenStride = Self.d + 13
+        let weights = Self.makeStableWeights(rng: &rng)
+        let hidden = Self.makeHiddenBlock(
+            rows: rows, rowStride: hiddenStride, d: Self.d, rng: &rng, sentinel: Float16(-31.0))
+        let effectiveScale = (0..<Self.d).map { _ in
+            rng.uniform(0.5, 1.5) / Float(Self.d).squareRoot()
+        }
+        let perExpertScale = (0..<Self.experts).map { _ in rng.uniform(0.6, 1.4) }
+        let ctx = try MetalContext()
+        let prefill = try PrefillRouter(context: ctx)
+        func run(rowsKernel: Bool) throws -> ([UInt32], [UInt16]) {
+            prefill.useRowsKernel = rowsKernel
+            let buffers = try Self.makeBuffers(
+                ctx: ctx, weights: weights, hidden: hidden,
+                effectiveScale: effectiveScale, perExpertScale: perExpertScale, rows: rows)
+            guard let cb = ctx.queue.makeCommandBuffer() else { throw RouterTestError.allocationFailed }
+            try prefill.encodeBlock(
+                commandBuffer: cb, weights: buffers.weights, scales: buffers.scales,
+                biases: buffers.biases, hidden: buffers.hidden,
+                effectiveScale: buffers.effectiveScale, perExpertScale: buffers.perExpertScale,
+                outIndices: buffers.blockIndices, outWeights: buffers.blockWeights,
+                queryCount: UInt32(rows), numExperts: UInt32(Self.experts), d: UInt32(Self.d),
+                topK: UInt32(Self.topK), hiddenStrideElements: UInt32(hiddenStride))
+            cb.commit()
+            cb.waitUntilCompleted()
+            #expect(cb.error == nil)
+            return (
+                Self.readUInt32(buffers.blockIndices, count: rows * Self.topK),
+                Fp16Buffer.readHalf(buffers.blockWeights, count: rows * Self.topK).map(\.bitPattern)
+            )
+        }
+        let block = try run(rowsKernel: false)
+        let tiled = try run(rowsKernel: true)
+        #expect(block.0 == tiled.0)
+        #expect(block.1 == tiled.1)
+    }
+
     @Test func blockRouterNearTieMatchesScalarPath() throws {
         let weights = Self.makeNearTieWeights()
         let hidden = [Float16](repeating: 1, count: Self.d)

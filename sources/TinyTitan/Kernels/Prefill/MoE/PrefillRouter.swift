@@ -29,6 +29,12 @@ public struct PrefillTokenExpertPair: Equatable, Sendable {
 
 final class PrefillRouter {
     private let pso: MTLComputePipelineState
+    /// `prefill_router_rows`: 8 tokens per threadgroup, the same scores and
+    /// selection as `prefill_router_block` (one token per threadgroup) at a
+    /// fraction of the cache traffic. On unless a test asks for the old one.
+    private let rowsPSO: MTLComputePipelineState
+    var useRowsKernel = true
+    static let rowsPerThreadgroup = 8
 
     init(context: MetalContext, weightBits: Int = 8) throws {
         // 16 means the router is unquantized bf16; the shader branches on it,
@@ -41,6 +47,9 @@ final class PrefillRouter {
                     index: 79,
                     value: .uint32(UInt32(weightBits)))
             ])
+        self.rowsPSO = try context.pipeline(
+            "prefill_router_rows",
+            constants: [MetalFunctionConstant(index: 79, value: .uint32(UInt32(weightBits)))])
     }
 
     func encodeBlock(
@@ -80,7 +89,7 @@ final class PrefillRouter {
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }
-        enc.setComputePipelineState(pso)
+        enc.setComputePipelineState(useRowsKernel ? rowsPSO : pso)
         enc.setBuffer(weights, offset: weightsOffset, index: 0)
         enc.setBuffer(scales, offset: scalesOffset, index: 1)
         enc.setBuffer(biases, offset: biasesOffset, index: 2)
@@ -99,10 +108,17 @@ final class PrefillRouter {
         enc.setBytes(&dVar, length: MemoryLayout<UInt32>.size, index: 10)
         enc.setBytes(&topKVar, length: MemoryLayout<UInt32>.size, index: 11)
         enc.setBytes(&strideVar, length: MemoryLayout<UInt32>.size, index: 12)
-        let tgWidth = min(max(Int(numExperts), 32), pso.maxTotalThreadsPerThreadgroup)
-        enc.dispatchThreadgroups(
-            MTLSize(width: Int(queryCount), height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
+        if useRowsKernel {
+            let tiles = (Int(queryCount) + Self.rowsPerThreadgroup - 1) / Self.rowsPerThreadgroup
+            enc.dispatchThreadgroups(
+                MTLSize(width: tiles, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        } else {
+            let tgWidth = min(max(Int(numExperts), 32), pso.maxTotalThreadsPerThreadgroup)
+            enc.dispatchThreadgroups(
+                MTLSize(width: Int(queryCount), height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
+        }
         enc.endEncoding()
     }
 

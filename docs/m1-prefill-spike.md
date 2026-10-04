@@ -770,3 +770,17 @@ tiled QMM for its projections and dense FFN, and causal flash attention.
 the QMM's ~7 TFLOPS). The dense layers' attention buffers are now timed
 (`prefill_gdn_layer`, `prefill_attn_layer`). Surprisal, 512 tokens after
 8,904 of context: +0.002 nats, t +1.14, no measurable change.
+
+## Spike 21 (2026-10-03): the router was 15 s
+
+A split-timing run (`TINYTITAN_PREFILL_SPLIT=1`) put ~317 ms per layer after
+the last projection: the MoE router. `prefill_router_block` gave each of the
+512 experts a thread that streamed the token's whole hidden row and its own
+weight row (~6 MB of cache traffic per token), one threadgroup per token.
+`prefill_router_rows` takes 8 tokens per threadgroup, stages their scaled
+inputs in threadgroup memory 256 columns at a time, decodes each weight once
+for all 8 rows, and runs the 8 top-k selections in parallel; every score is
+the same sequence of fused multiply-adds, so routing is byte-identical
+(`rowsKernelMatchesBlockKernelExactly`, and against the decode router).
+16,931-token prompt: prefill 75.4 -> **66.2 s**, output identical; 7.2x the
+upstream engine.
