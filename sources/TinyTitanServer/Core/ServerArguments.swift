@@ -69,6 +69,12 @@ public struct ServerArguments: Equatable, Sendable {
     public let catalogOnly: Bool
     /// The explicit `--reasoning` level; nil when the older flags were used.
     public let reasoningLevel: ReasoningLevel?
+    /// `--live-trace`: draw the live expert-grid view in this terminal while the
+    /// server runs. Off by default; the server never draws anything otherwise.
+    public let liveTrace: Bool
+    /// `--live-trace-log`: where the full log goes while the view owns the
+    /// terminal. Nil means the default path.
+    public let liveTraceLogPath: String?
 
     /// The server-wide level, however it was spelled: `--reasoning` wins,
     /// otherwise `--thinking` and `--reasoning-effort` say the same thing.
@@ -217,6 +223,31 @@ public struct ServerArguments: Equatable, Sendable {
                                  instead of faulting the snapshot in at startup.
                                  Only worth it on a machine too small to hold the
                                  model, where the alternative is swapping.
+          --live-trace           Draw a live view of the server in this terminal: the
+                                 expert grid of the layer being decoded, the router's
+                                 picks, a ribbon of the token's layers, the last two
+                                 lines of the reply being generated, prefill progress,
+                                 the queue, the client's model id, and the tail of the
+                                 server log (error, warn and fail lines in red).
+                                 Between requests it shows the resident model, the
+                                 last request's speed and prompt-cache hit, and the
+                                 recent heat cooling. A catalog switch re-lays it out
+                                 for the new model. Off by default. Needs stdout on a
+                                 terminal (TERM set, not dumb) at least 78x31 for the
+                                 grid; 40x10 gets the compact view, as does a dense
+                                 or CPU model, batched serving or MTP; anywhere else
+                                 the flag is ignored with a one-line note on stderr.
+                                 While it is on, stdout and stderr go into the log
+                                 tail and, in full, to the --live-trace-log file (a
+                                 stderr you already redirected to a file keeps going
+                                 there). It records routing for display only and
+                                 changes nothing the model computes. Ctrl-C and
+                                 SIGTERM restore the terminal.
+          --live-trace-log <path>
+                                 With --live-trace: the file that receives the full
+                                 server log while the view is up (default
+                                 ~/Library/Logs/TinyTitan/server-live-trace.log,
+                                 appended, owner-only).
           --help                 Show this help.
         """
 
@@ -264,6 +295,8 @@ public struct ServerArguments: Equatable, Sendable {
         var modelsDirectory: String?
         var catalogOnly = false
         var reasoningLevel: ReasoningLevel?
+        var liveTrace = false
+        var liveTraceLogPath: String?
         // Tracked apart from the values, which the environment can also set:
         // only flags typed next to --reasoning conflict with it.
         var thinkingWasSet = false
@@ -292,6 +325,11 @@ public struct ServerArguments: Equatable, Sendable {
             }
             if flag == "--no-cpu-resident" {
                 cpuResident = false
+                index += 1
+                continue
+            }
+            if flag == "--live-trace" {
+                liveTrace = true
                 index += 1
                 continue
             }
@@ -434,6 +472,11 @@ public struct ServerArguments: Equatable, Sendable {
                             + ReasoningLevel.allCases.map(\.rawValue).joined(separator: ", "))
                 }
                 reasoningLevel = parsed
+            case "--live-trace-log":
+                guard !value.isEmpty else {
+                    throw ServerArgumentError.invalid("--live-trace-log must not be empty")
+                }
+                liveTraceLogPath = value
             case "--models-dir":
                 guard !value.isEmpty else {
                     throw ServerArgumentError.invalid("--models-dir must not be empty")
@@ -474,6 +517,9 @@ public struct ServerArguments: Equatable, Sendable {
             default:
                 throw ServerArgumentError.invalid("unknown flag: \(flag)")
             }
+        }
+        if liveTraceLogPath != nil, !liveTrace {
+            throw ServerArgumentError.invalid("--live-trace-log requires --live-trace")
         }
         if catalogOnly, modelsDirectory == nil {
             throw ServerArgumentError.invalid("--catalog requires --models-dir")
@@ -553,7 +599,9 @@ public struct ServerArguments: Equatable, Sendable {
             idleUnloadSeconds: idleUnloadSeconds,
             modelsDirectory: modelsDirectory,
             catalogOnly: catalogOnly,
-            reasoningLevel: reasoningLevel)
+            reasoningLevel: reasoningLevel,
+            liveTrace: liveTrace,
+            liveTraceLogPath: liveTraceLogPath)
     }
 }
 

@@ -238,9 +238,30 @@ struct StructuredOutputFailure: Error, CustomDebugStringConvertible, Sendable {
     let kind: StructuredOutputFailureKind
     let cause: StructuredOutputFailureCause
     let diagnostics: StructuredOutputFailureDiagnostics
+    /// The name the model called, for `unknown_tool`: whether it invented a
+    /// tool or the call was mis-parsed is unanswerable without it.
+    var toolName: String? = nil
 
     var debugDescription: String {
         "structured_output_failure kind=\(kind.rawValue) "
-            + "cause=\(cause.rawValue) \(diagnostics.logDescription)"
+            + "cause=\(cause.rawValue) "
+            + (toolName.map { "tool=\(String(reflecting: $0)) " } ?? "")
+            + diagnostics.logDescription
+    }
+
+    /// What the client is told: enough to act on (retry, or tell the model
+    /// which tool it got wrong) without the forensic hashes.
+    var clientMessage: String {
+        var message = "structured output failed: \(kind.rawValue), \(cause.rawValue)"
+        if let toolName {
+            message += "; the model called a tool that is not in this request's tools: "
+                + String(reflecting: String(toolName.prefix(200)))
+        }
+        return message
+    }
+
+    static func toolName(of error: Error) -> String? {
+        if case .unknownTool(let name)? = error as? ToolCallParserError { return name }
+        return nil
     }
 }

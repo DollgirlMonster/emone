@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanLiveTrace
 
 /// Manages when the model is resident: loads it on the first inference request
 /// rather than at startup, and optionally releases it again after an idle
@@ -201,13 +202,20 @@ public actor ManagedModelBackend: ServerInferenceBackend, ResidencyManaging, Pro
 
         let plan = self.plan
         let loader = self.loader
+        ServerLiveTrace.current?.modelLoading(facts.modelID)
         let task = Task { try await loader(plan, context) }
         loadTask = task
         defer { loadTask = nil }
 
         // On failure `session` stays nil, so the next request retries cleanly
         // rather than inheriting a half-built session.
-        let loaded = try await task.value
+        let loaded: any ServerInferenceBackend
+        do {
+            loaded = try await task.value
+        } catch {
+            ServerLiveTrace.current?.modelLoadFailed()
+            throw error
+        }
         session = loaded
         lastActivity = .now
         startReaper()

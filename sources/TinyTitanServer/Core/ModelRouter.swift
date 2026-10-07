@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanLiveTrace
 
 /// What the HTTP layer needs to validate a request for one model before that
 /// model is resident: the omitted-sampling defaults, the max_tokens bound and
@@ -381,10 +382,17 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
             resident = nil
             ServerLog.residency("unloaded \(previous.id) to load \(entry.id)")
         }
+        ServerLiveTrace.current?.modelLoading(entry.id)
         // Unstructured, so a client that disconnects mid-load does not abort a
         // load that the requests queued behind it are waiting for.
         let loader = self.loader
-        let loaded = try await Task { try await loader(entry, choice) }.value
+        let loaded: any ServerInferenceBackend
+        do {
+            loaded = try await Task { try await loader(entry, choice) }.value
+        } catch {
+            ServerLiveTrace.current?.modelLoadFailed()
+            throw error
+        }
         resident = Resident(id: entry.id, backend: loaded)
         inFlight += 1
         let fitted =

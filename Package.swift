@@ -13,7 +13,7 @@ import PackageDescription
 /// `-warnings-as-errors` is part of the standard, not a preference: a warning
 /// that only appears in a build log is a check nobody runs, and the release
 /// script's log scan did not cover `swift test` at all. Every target carries
-/// this array (23 of 23 at the time of writing), so the flag cannot be dodged
+/// this array (24 of 24 at the time of writing), so the flag cannot be dodged
 /// by a new target either. The tree builds and tests clean with it
 /// (`swift build --build-tests`, `swift test --no-parallel`).
 let tinytitanLanguageStandard: [SwiftSetting] = [
@@ -120,9 +120,19 @@ let package = Package(
             path: "sources/TinyTitanRepack/Command",
             swiftSettings: tinytitanLanguageStandard
         ),
+        // The live expert-grid view: the renderer, the terminal handling and the
+        // trace model, shared by the CLI's `--live-trace` and the server's. A
+        // library of its own so neither front end depends on the other; it
+        // links the runtime only for the trace ring and the runner hook.
+        .target(
+            name: "TinyTitanLiveTrace",
+            dependencies: ["TinyTitan"],
+            path: "sources/TinyTitanLiveTrace",
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .target(
             name: "TinyTitanCLICore",
-            dependencies: ["TinyTitan"],
+            dependencies: ["TinyTitan", "TinyTitanLiveTrace"],
             path: "sources/TinyTitanCLI",
             exclude: ["Command"],
             swiftSettings: tinytitanLanguageStandard
@@ -178,6 +188,7 @@ let package = Package(
             name: "TinyTitanServerCore",
             dependencies: [
                 "TinyTitan",
+                "TinyTitanLiveTrace",
                 "TinyTitanMemory",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -228,7 +239,7 @@ let package = Package(
             name: "TinyTitanTests",
             dependencies: [
                 "TinyTitan", "TinyTitanValidationSupport", "TinyTitanRepackCore",
-                "TinyTitanCLICore",
+                "TinyTitanCLICore", "TinyTitanLiveTrace",
             ],
             path: "tests/TinyTitan",
             resources: [
@@ -264,6 +275,9 @@ let package = Package(
             dependencies: [
                 "TinyTitanServerCore",
                 "TinyTitanMemory",
+                // The live-trace view's types, for the server's `--live-trace`
+                // tests that read what it drew.
+                "TinyTitanLiveTrace",
                 // `GenerationDefaults.Sampling`, so the mapper tests can pin
                 // that an omitted field follows the served model's profile
                 // rather than a hardcoded house default.

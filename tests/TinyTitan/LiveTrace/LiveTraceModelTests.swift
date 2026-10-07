@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import TinyTitan
 
-@testable import TinyTitanCLICore
+@testable import TinyTitanLiveTrace
 
 /// A synthetic event stream: no model, no ring, no clock.
 struct SyntheticTrace {

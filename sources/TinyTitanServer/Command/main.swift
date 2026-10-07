@@ -4,6 +4,7 @@ import Foundation
 // type) and its `rawValue`, so this file names that module directly rather than
 // relying on TinyTitanServerCore re-exporting it.
 import TinyTitan
+import TinyTitanLiveTrace
 import TinyTitanMemory
 import TinyTitanServerCore
 
@@ -34,6 +35,13 @@ if arguments.catalogOnly, let directory = arguments.modelsDirectory {
 
 do {
     let signals = ServerTerminationSignals()
+    // `--live-trace`: built here so what loads below is recorded, opened once the
+    // server is ready (so the startup banner is printed normally) and closed as
+    // soon as a termination signal arrives, before shutdown logs anything. nil,
+    // with a one-line note on stderr, when this terminal cannot show it.
+    ServerLiveTrace.install(
+        arguments: arguments,
+        nameOverride: arguments.modelsDirectory == nil ? arguments.modelIDOverride : nil)
     let modelURL = URL(fileURLWithPath: arguments.model).standardizedFileURL
     // Without --reasoning these are the --thinking / --reasoning-effort
     // values verbatim and nothing is read from disk; the router fits the
@@ -241,7 +249,11 @@ do {
                     + "cold prefill\n").utf8))
     }
 
+    ServerLiveTrace.current?.open()
     _ = await signals.wait()
+    // The view first: it hides the cursor and owns stdout and stderr, and
+    // shutdown has things to say. Closing is what a Ctrl-C or SIGTERM must do.
+    ServerLiveTrace.shutdown()
     try await server.shutdown()
     // After the server, so nothing is still writing: this flushes memory that
     // has not reached a session boundary and releases the workspace lock.
@@ -253,6 +265,8 @@ do {
     await router?.shutdown()
     await signals.cancel()
 } catch {
+    // Put the terminal back before the error is printed on it.
+    ServerLiveTrace.shutdown()
     FileHandle.standardError.write(Data("error: \(error)\n".utf8))
     exit(1)
 }
