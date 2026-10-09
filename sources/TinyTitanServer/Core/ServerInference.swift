@@ -1044,16 +1044,28 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     /// chain-of-thought leaked into `content` or the whole answer was reported
     /// as reasoning with `content` empty.
     ///
-    /// Re-prefilling is the correct cost of a switch: the cached KV belongs to a
+    /// Re-prefilling is the correct cost of a switch that changes the render of
+    /// the conversation so far: a different reasoning *effort* can put its
+    /// instructions in the system prompt, so the cached KV belongs to a
     /// different render, and the honest outcome is a miss.
+    ///
+    /// Thinking on against off, at the same effort, changes only the
+    /// generation prompt after the last message (`<think>\n` against a closed
+    /// empty block); no template puts the switch anywhere earlier. A cached
+    /// turn is a message-shaped entry plus a bridge rendered from the new tail,
+    /// so with the bridge rendered by the request's own tokenizer
+    /// (`messageShapedStart`) the entry serves either level, and an agent can
+    /// turn thinking off for an easy turn without paying for its whole history
+    /// again.
     private func reasoningForbidsCacheReuse(_ requested: RequestReasoning?) -> Bool {
         guard let requested else { return false }
-        return !requested.matches(loadedReasoning)
+        return !requested.matches(loadedReasoning) && requested.effort != loadedReasoning.effort
     }
 
     private func resolveCacheStart(
         cacheRequest: ValidatedChatRequest,
         promptIDs: [Int32],
+        renderTokenizer: GFTokenizer,
         requestedReasoning: RequestReasoning?,
         guidanceAnchor: () -> Int? = { nil }
     ) async throws -> (
@@ -1076,7 +1088,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         let frontierOn = frontierCacheActive
         if frontierOn { frontier.observe(promptIDs) }
         var (effectivePromptIDs, completionStart) = try await messageShapedStart(
-            cacheRequest: cacheRequest, promptIDs: promptIDs)
+            cacheRequest: cacheRequest, promptIDs: promptIDs, renderTokenizer: renderTokenizer)
         // Token-prefix frontier fallback. The message-shaped cache above keys
         // on whole-message equality, so an edit to any earlier message (a
         // mutated system prompt) drops it to a full re-prefill. A checkpoint
@@ -1133,7 +1145,8 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     /// Mutates `promptCache` and `activePromptCacheEntryID`.
     private func messageShapedStart(
         cacheRequest: ValidatedChatRequest,
-        promptIDs: [Int32]
+        promptIDs: [Int32],
+        renderTokenizer: GFTokenizer
     ) async throws -> (effectivePromptIDs: [Int32], start: RawCompletionStart) {
         let effectivePromptIDs: [Int32]
         let completionStart: RawCompletionStart
@@ -1142,7 +1155,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                 domain: promptCacheDomain,
                 request: cacheRequest,
                 renderedPromptIDs: promptIDs,
-                tokenizer: tokenizer)
+                tokenizer: renderTokenizer)
             {
             case .miss:
                 promptCache.invalidate()
@@ -1166,7 +1179,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                 domain: promptCacheDomain,
                 request: cacheRequest,
                 renderedPromptIDs: promptIDs,
-                tokenizer: tokenizer)
+                tokenizer: renderTokenizer)
             {
             case .miss:
                 activePromptCacheEntryID = nil
@@ -1509,13 +1522,23 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         // follow the switch. `nil` (the common case) reuses the session's.
         let renderTokenizer = try await resolvedTokenizer(for: request.reasoning)
         let prepared = try preparePrompt(request, renderTokenizer: renderTokenizer)
-        let promptIDs = prepared.promptIDs
+        // An `x_prefill_reply` request commits a reply this server did not
+        // sample: its tokens follow the generation prompt, and the one token
+        // the runner samples after them is thrown away (see the publish below).
+        var replyTail: [Int32] = []
+        if let reply = request.prefillReply {
+            replyTail = try prefillReplyTokens(
+                reply, generationPrompt: prepared.promptIDs, renderTokenizer: renderTokenizer,
+                maxContext: maxContext)
+        }
+        let promptIDs = prepared.promptIDs + replyTail
         let cacheRequest = prepared.cacheRequest
         let needsToolTemplate = prepared.needsToolTemplate
 
         let resolved = try await resolveCacheStart(
             cacheRequest: cacheRequest,
             promptIDs: promptIDs,
+            renderTokenizer: renderTokenizer,
             requestedReasoning: request.reasoning,
             guidanceAnchor: {
                 Self.guidanceAnchor(promptIDs: promptIDs, messages: prepared.renderedMessages) {
@@ -1532,6 +1555,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             request.maximumCompletionTokens,
             maxContext - effectivePromptIDs.count)
         config.stopStrings = []
+        if request.prefillReply != nil { config.maxNewTokens = 1 }
         // Structured output is a per-request grammar: a fresh constraint per
         // request (its state is the document parsed so far), over a table that
         // is built once per model.
@@ -1554,11 +1578,15 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         // The stall clock starts at the first visible token, so a long
         // thought before the answer cannot trip it. Reasoning is watched for
         // loops alone, in a window of its own.
+        var streamedEvents: @Sendable (ServerInferenceEvent) -> Void = onEvent
+        if request.prefillReply != nil { streamedEvents = { _ in } }
         let state = GenerationDecodeState(
             decoder: decoder,
             output: AssistantOutput(
                 stops: request.generationConfig.stopStrings,
-                onEvent: onEvent,
+                // A prefilled reply has nothing to stream: the one token the
+                // runner samples after it is not part of the turn.
+                onEvent: streamedEvents,
                 observeVisible: { watchdogs.observe($0) },
                 observeReasoning: { watchdogs.observeReasoning($0) }))
 
@@ -1750,7 +1778,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         // by the server after the fact and has no tokens behind it in the KV
         // range, so publishing it would leave an entry whose text and KV
         // disagree, and a later continuation would splice the difference in.
-        let generated = content
+        let generated = request.prefillReply?.content ?? content
         if let note = outcome.note {
             content = outcome.content
             reason = outcome.finishReason
@@ -1764,17 +1792,18 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                 cacheRequest: cacheRequest,
                 content: generated,
                 calls: calls,
-                result: result,
-                stopStringFiltered: state.output.isStopped)
+                result: request.prefillReply == nil
+                    ? result : result.endingTurn(boundary: renderTokenizer.endOfTurnID),
+                stopStringFiltered: request.prefillReply == nil && state.output.isStopped)
         }
         PrefixHashLog.record(
             promptIDs: promptIDs, cachedTokens: result.cachedPromptTokens,
             chunkTokens: prefillChunkTokens)
         completed = true
         return ServerCompletion(
-            content: content,
-            toolCalls: calls,
-            finishReason: reason,
+            content: request.prefillReply == nil ? content : "",
+            toolCalls: request.prefillReply == nil ? calls : [],
+            finishReason: request.prefillReply == nil ? reason : "prefill",
             // S26: completion_tokens reports the number of GENERATED tokens,
             // matching OpenAI's "completion_tokens = tokens in the generated
             // completion". A stop-string-hidden suffix is therefore counted as

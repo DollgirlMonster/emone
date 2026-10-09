@@ -558,6 +558,98 @@ struct ServerPromptCacheTests {
                 == original.generationConfig.maxNewTokens)
     }
 
+    /// A reply this server did not sample, committed by `x_prefill_reply`: the
+    /// runner's one sampled token is not part of the turn, so the entry is
+    /// rewritten to end on the end-of-turn token, and the next request that
+    /// replays the reply plus a user turn resumes from it.
+    @Test func aPrefilledReplyIsResumedByAReplayOfItWithAUserTurn() async throws {
+        let tokenizer = try await GFTokenizer.load(from: TokenizerFixture.folder())
+        let initial = request(messages: [
+            GFTokenizer.Message(role: .user, content: "first")
+        ])
+        let initialPrompt = tokenizer.encode(
+            try tokenizer.applyChatTemplate(initial.messages), addBOS: false)
+        let kvBacked = initialPrompt + tokenizer.encode("elsewhere's answer", addBOS: false)
+        let sampledJunk = tokenizer.encode("zebra", addBOS: false)[0]
+        let sampled = rawResult(
+            prompt: kvBacked, kvBacked: kvBacked, boundary: sampledJunk, reason: .maxTokens)
+        var cache = ServerPromptCache()
+        cache.publish(
+            domain: domain, request: initial, content: "elsewhere's answer", calls: [],
+            result: sampled.endingTurn(boundary: tokenizer.endOfTurnID))
+
+        let continuation = request(
+            messages: initial.messages + [
+                GFTokenizer.Message(role: .assistant, content: "elsewhere's answer"),
+                GFTokenizer.Message(role: .user, content: "second"),
+            ])
+        let rendered = tokenizer.encode(
+            try tokenizer.applyChatTemplate(continuation.messages), addBOS: false)
+        guard
+            case .hit(_, let effective, let cached) = cache.match(
+                domain: domain, request: continuation, renderedPromptIDs: rendered,
+                tokenizer: tokenizer)
+        else {
+            Issue.record("expected the prefilled reply to be resumed")
+            return
+        }
+        #expect(cached == kvBacked.count)
+        #expect(effective[cached] == tokenizer.endOfTurnID)
+        #expect(!effective.contains(sampledJunk) || sampledJunk == kvBacked.last)
+    }
+
+    @Test func endingATurnKeepsTheKVAndReplacesTheBoundary() {
+        let result = RawDecodeResult(
+            prefillTokens: 5, cachedPromptTokens: 2, computedPrefillTokens: 3,
+            prefillSeconds: 1, newTokens: 1, decodeSeconds: 0, reason: .maxTokens,
+            kvPosition: 5, kvBackedTokenIDs: [1, 2, 3, 4, 5], uncommittedBoundaryTokenIDs: [9])
+        let ended = result.endingTurn(boundary: 7)
+        #expect(ended.reason == .endOfTurn)
+        #expect(ended.uncommittedBoundaryTokenIDs == [7])
+        #expect(ended.kvBackedTokenIDs == [1, 2, 3, 4, 5] && ended.kvPosition == 5)
+        #expect(ended.cachedPromptTokens == 2 && ended.newTokens == 0)
+    }
+
+    /// A turn answered with thinking on is resumed by a follow-up rendered with
+    /// thinking off: the cached rows are the same, and only the bridge's
+    /// generation prompt follows the request's tokenizer.
+    @Test func aThinkingSwitchResumesTheSameEntryWithTheRequestsOwnGenerationPrompt() async throws {
+        let folder = try TokenizerFixture.folder()
+        let on = try await GFTokenizer.load(from: folder, thinkingMode: .on)
+        let off = try await GFTokenizer.load(from: folder, thinkingMode: .off)
+        let initial = request(messages: [GFTokenizer.Message(role: .user, content: "first")])
+        let prompt = on.encode(try on.applyChatTemplate(initial.messages), addBOS: false)
+        let kvBacked = prompt + on.encode("answer", addBOS: false)
+        var cache = ServerPromptCache()
+        cache.publish(
+            domain: domain, request: initial, content: "answer", calls: [],
+            result: rawResult(
+                prompt: prompt, kvBacked: kvBacked, boundary: on.endOfTurnID, reason: .endOfTurn))
+        let followUp = request(
+            messages: initial.messages + [
+                GFTokenizer.Message(role: .assistant, content: "answer"),
+                GFTokenizer.Message(role: .user, content: "second"),
+            ])
+
+        func resume(with tokenizer: GFTokenizer) throws -> [Int32]? {
+            var copy = cache
+            let rendered = tokenizer.encode(
+                try tokenizer.applyChatTemplate(followUp.messages), addBOS: false)
+            guard
+                case .hit(_, let effective, let cached) = copy.match(
+                    domain: domain, request: followUp, renderedPromptIDs: rendered,
+                    tokenizer: tokenizer)
+            else { return nil }
+            #expect(cached == kvBacked.count)
+            return effective
+        }
+        let withOn = try #require(try resume(with: on))
+        let withOff = try #require(try resume(with: off))
+        #expect(withOn.prefix(kvBacked.count).elementsEqual(kvBacked))
+        #expect(withOff.prefix(kvBacked.count).elementsEqual(kvBacked))
+        #expect(withOn != withOff, "the bridge must carry each request's own generation prompt")
+    }
+
     private func request(
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition] = []

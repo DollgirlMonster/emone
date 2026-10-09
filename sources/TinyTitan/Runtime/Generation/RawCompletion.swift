@@ -28,6 +28,19 @@ public struct RawDecodeResult: Sendable {
     public let kvPosition: Int
     public let kvBackedTokenIDs: [Int32]
     public let uncommittedBoundaryTokenIDs: [Int32]
+
+    /// This result as if the turn had ended on `boundary`: the same KV rows,
+    /// the stop reason an ended turn has, and `boundary` as the one token the
+    /// KV does not hold. For a reply the model did not sample (a prefilled one),
+    /// where the single token the runner did sample is not part of the turn.
+    public func endingTurn(boundary: Int32) -> RawDecodeResult {
+        RawDecodeResult(
+            prefillTokens: prefillTokens, cachedPromptTokens: cachedPromptTokens,
+            computedPrefillTokens: computedPrefillTokens, prefillSeconds: prefillSeconds,
+            newTokens: 0, decodeSeconds: decodeSeconds, reason: .endOfTurn,
+            kvPosition: kvPosition, kvBackedTokenIDs: kvBackedTokenIDs,
+            uncommittedBoundaryTokenIDs: [boundary])
+    }
 }
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token

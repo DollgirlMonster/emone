@@ -203,6 +203,12 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// Opt-in hidden-state readout (`HiddenStateReadout.swift`): the last
     /// prompt token's residual after chosen layers. Nil is an ordinary request.
     public let hiddenStates: OpenAIHiddenStatesRequest?
+    /// `x_prefill_reply`: the final message is an assistant reply this server
+    /// did not generate (a fallback model's, say). The request prefills the
+    /// history through that reply and publishes it as a finished turn, so the
+    /// next request that replays it resumes from it. Nothing is sampled and no
+    /// text comes back. Nil or false is an ordinary request.
+    public let prefillReply: Bool?
 
     /// Explicit, with the two thinking-control extras defaulted, so the protocol
     /// mappers that build a chat request from their own shapes keep compiling
@@ -232,7 +238,8 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         chatTemplateKwargs: OpenAIChatTemplateKwargs? = nil,
         reasoningBudgetTokens: Int? = nil,
         responseFormat: JSONValue? = nil,
-        hiddenStates: OpenAIHiddenStatesRequest? = nil
+        hiddenStates: OpenAIHiddenStatesRequest? = nil,
+        prefillReply: Bool? = nil
     ) {
         self.model = model
         self.messages = messages
@@ -258,6 +265,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         self.reasoningBudgetTokens = reasoningBudgetTokens
         self.responseFormat = responseFormat
         self.hiddenStates = hiddenStates
+        self.prefillReply = prefillReply
     }
 
     enum CodingKeys: String, CodingKey {
@@ -277,6 +285,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case reasoningBudgetTokens = "reasoning_budget_tokens"
         case responseFormat = "response_format"
         case hiddenStates = "x_hidden_states"
+        case prefillReply = "x_prefill_reply"
     }
 }
 
@@ -503,6 +512,9 @@ public struct ValidatedChatRequest: Sendable {
     /// prefilling the prompt alone: no sampling, and nothing published to any
     /// cache. Otherwise the capture rides the ordinary generation.
     public let hiddenStates: HiddenReadoutPlan?
+    /// The assistant reply a `x_prefill_reply` request commits: `messages` then
+    /// holds the history before it. Nil for every other request.
+    public let prefillReply: GFTokenizer.Message?
 
     public init(
         messages: [GFTokenizer.Message],
@@ -518,7 +530,8 @@ public struct ValidatedChatRequest: Sendable {
         reasoningNotes: [String] = [],
         reasoning: RequestReasoning? = nil,
         jsonSchema: JSONSchemaNode? = nil,
-        hiddenStates: HiddenReadoutPlan? = nil
+        hiddenStates: HiddenReadoutPlan? = nil,
+        prefillReply: GFTokenizer.Message? = nil
     ) {
         self.messages = messages
         self.tools = tools
@@ -534,6 +547,7 @@ public struct ValidatedChatRequest: Sendable {
         self.reasoning = reasoning
         self.jsonSchema = jsonSchema
         self.hiddenStates = hiddenStates
+        self.prefillReply = prefillReply
     }
 
     /// Every derived request is built through here.
@@ -565,7 +579,8 @@ public struct ValidatedChatRequest: Sendable {
             reasoningNotes: reasoningNotes,
             reasoning: reasoning,
             jsonSchema: jsonSchema,
-            hiddenStates: hiddenStates)
+            hiddenStates: hiddenStates,
+            prefillReply: prefillReply)
     }
 
     /// The post-strip view of this request: the same request carrying the
@@ -776,7 +791,7 @@ public enum OpenAIRequestValidator {
         // configured context window (further clamped to the available context
         // at inference time), so the model replies until it is done.
         let maximum =
-            hiddenStates?.prefillOnly == true
+            hiddenStates?.prefillOnly == true || request.prefillReply == true
             ? 1 : request.maxCompletionTokens ?? request.maxTokens ?? maxContext
         guard maximum > 0 else {
             throw invalid(
@@ -838,7 +853,13 @@ public enum OpenAIRequestValidator {
         let tools = try (includeTools ? request.tools ?? [] : []).map {
             try validateTool($0)
         }
-        let messages = try validateMessages(request.messages)
+        var messages = try validateMessages(request.messages)
+        var prefillReply: GFTokenizer.Message?
+        if request.prefillReply == true {
+            prefillReply = try splitPrefillReply(
+                &messages, stream: request.stream == true, hiddenStates: hiddenStates != nil,
+                jsonSchema: jsonSchema != nil)
+        }
         // A client-supplied seed makes sampling deterministic.
         let config = GenerationConfig(
             maxNewTokens: maximum,
@@ -862,7 +883,37 @@ public enum OpenAIRequestValidator {
             reasoningNotes: reasoningNotes,
             reasoning: reasoning,
             jsonSchema: jsonSchema,
-            hiddenStates: hiddenStates)
+            hiddenStates: hiddenStates,
+            prefillReply: prefillReply)
+    }
+
+    /// Takes the final assistant message off `messages` for an
+    /// `x_prefill_reply` request, refusing what the path cannot do. The reply
+    /// is committed as plain text: a tool-calling turn needs the model's own
+    /// call tokens, which a reply from elsewhere does not have.
+    private static func splitPrefillReply(
+        _ messages: inout [GFTokenizer.Message], stream: Bool, hiddenStates: Bool,
+        jsonSchema: Bool
+    ) throws -> GFTokenizer.Message {
+        func refuse(_ message: String) -> ServerRequestError {
+            invalid(message, "x_prefill_reply", "unsupported_value")
+        }
+        guard !stream else { throw refuse("x_prefill_reply cannot stream; there is nothing to stream") }
+        guard !hiddenStates else { throw refuse("x_prefill_reply cannot be combined with x_hidden_states") }
+        guard !jsonSchema else { throw refuse("x_prefill_reply cannot be combined with response_format") }
+        guard messages.count >= 2, let reply = messages.last, reply.role == .assistant,
+            reply.toolCalls.isEmpty, reply.toolCallID == nil,
+            let text = reply.content,
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw refuse(
+                "x_prefill_reply needs the history followed by a final plain-text assistant message")
+        }
+        guard messages[messages.count - 2].role != .assistant else {
+            throw refuse("the message before the prefilled reply must not be an assistant message")
+        }
+        messages.removeLast()
+        return reply
     }
 
     /// The compiled schema a `response_format` asks for, or nil for plain text.
