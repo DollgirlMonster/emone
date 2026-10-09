@@ -23,6 +23,12 @@ final class GDN {
     private let qkNormPSO: MTLComputePipelineState
     private let deltaDecodePSO: MTLComputePipelineState
     private let deltaPrefillPSO: MTLComputePipelineState
+    /// The chunked (WY-form) prefill recurrence, when the shape has a
+    /// variant (`keyHeadDim` 32, 64 or 128; `valueHeadDim` a multiple of 32)
+    /// and the profile turns it on (`ModelProfile.prefillGDNChunked`). It sums
+    /// in a different order from the sequential kernel, so a row takes it only
+    /// after its surprisal A/B.
+    private let deltaChunkPrefillPSO: MTLComputePipelineState?
     private let gatedNormPSO: MTLComputePipelineState
     private let inProjPSO: MTLComputePipelineState
     private let inProjSpecializedPSO: MTLComputePipelineState?
@@ -36,7 +42,8 @@ final class GDN {
     init(
         context: MetalContext, config: LinearAttentionConfig,
         specializedHiddenSize: Int? = nil,
-        abBF16: Bool = false
+        abBF16: Bool = false,
+        chunkedPrefill: Bool = false
     ) throws {
         precondition(
             config.keyHeadDim > 0 && config.keyHeadDim % 32 == 0,
@@ -64,6 +71,14 @@ final class GDN {
             ])
         self.deltaDecodePSO = try context.pipeline("gdn_delta_step_decode")
         self.deltaPrefillPSO = try context.pipeline("gdn_delta_step_prefill")
+        if chunkedPrefill, [32, 64, 128].contains(config.keyHeadDim),
+            config.valueHeadDim % 32 == 0
+        {
+            self.deltaChunkPrefillPSO = try context.pipeline(
+                "gdn_delta_chunk_prefill_dk\(config.keyHeadDim)")
+        } else {
+            self.deltaChunkPrefillPSO = nil
+        }
         self.gatedNormPSO = try context.pipeline(
             "gdn_gated_norm",
             constants: [
@@ -331,8 +346,10 @@ final class GDN {
         encoder.endEncoding()
     }
 
-    /// Prefill: the recurrence runs sequentially over `rows` inside the
-    /// kernel; state persists in registers and is written back once.
+    /// Prefill: the recurrence runs over `rows` inside the kernel; state
+    /// persists in registers and is written back once. Sequential per token,
+    /// or in 8-token chunks when the chunked kernel is on and no first-row
+    /// checkpoint is asked for.
     func encodeDeltaStepPrefill(
         commandBuffer: MTLCommandBuffer,
         convOut: MTLBuffer, convOutOffset: Int = 0,
@@ -348,6 +365,26 @@ final class GDN {
     ) throws {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
+        }
+        if let chunkPSO = deltaChunkPrefillPSO, checkpointState == nil {
+            encoder.setComputePipelineState(chunkPSO)
+            encoder.setBuffer(convOut, offset: convOutOffset, index: 0)
+            encoder.setBuffer(aProj, offset: aProjOffset, index: 1)
+            encoder.setBuffer(bProj, offset: bProjOffset, index: 2)
+            encoder.setBuffer(aLog, offset: aLogOffset, index: 3)
+            encoder.setBuffer(dtBias, offset: dtBiasOffset, index: 4)
+            encoder.setBuffer(state, offset: stateOffset, index: 5)
+            encoder.setBuffer(y, offset: yOffset, index: 6)
+            setHeadDims(encoder, startingAt: 7)
+            var rowCount = UInt32(rows)
+            var rowStride = UInt32(config.qkvDim)
+            encoder.setBytes(&rowCount, length: MemoryLayout<UInt32>.size, index: 11)
+            encoder.setBytes(&rowStride, length: MemoryLayout<UInt32>.size, index: 12)
+            encoder.dispatchThreadgroups(
+                MTLSize(width: 1, height: config.valueHeadDim / 32, depth: config.numVHeads),
+                threadsPerThreadgroup: MTLSize(width: 32, height: 4, depth: 1))
+            encoder.endEncoding()
+            return
         }
         encoder.setComputePipelineState(deltaPrefillPSO)
         encoder.setBuffer(convOut, offset: convOutOffset, index: 0)

@@ -12,10 +12,16 @@ import Metal
 /// them per tensor without the caller knowing which it got.
 final class BF16GEMV {
     private let pipeline: MTLComputePipelineState
+    /// One-row weight over many inputs, one simdgroup per input.
+    private let oneRowManyX: MTLComputePipelineState
 
     init(context: MetalContext) throws {
         self.pipeline = try context.pipeline(
             "bf16_gemv_simd",
+            constants: [],
+            maxTotalThreadsPerThreadgroup: 256)
+        self.oneRowManyX = try context.pipeline(
+            "bf16_gemv_simd_one_row_many_x",
             constants: [],
             maxTotalThreadsPerThreadgroup: 256)
     }
@@ -46,6 +52,27 @@ final class BF16GEMV {
             "bf16 GEMV expects a column count that is a multiple of 64")
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
+        }
+        let half = MemoryLayout<Float16>.stride
+        if m == 1, rows.count > 1, rows.xRowStride % half == 0, rows.yRowStride % half == 0 {
+            // A one-row weight over many inputs (the shared-expert scalar gate
+            // across a prefill chunk): one dispatch, not one per input.
+            encoder.setComputePipelineState(oneRowManyX)
+            encoder.setBuffer(weights, offset: weightsOffset, index: 0)
+            encoder.setBuffer(x, offset: rows.xOffset, index: 1)
+            encoder.setBuffer(y, offset: rows.yOffset, index: 2)
+            var params = (
+                UInt32(rows.count), n,
+                UInt32(rows.xRowStride / half), UInt32(rows.yRowStride / half))
+            encoder.setBytes(&params.0, length: 4, index: 3)
+            encoder.setBytes(&params.1, length: 4, index: 4)
+            encoder.setBytes(&params.2, length: 4, index: 5)
+            encoder.setBytes(&params.3, length: 4, index: 6)
+            encoder.dispatchThreadgroups(
+                MTLSize(width: (rows.count + 7) / 8, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            encoder.endEncoding()
+            return
         }
         encoder.setComputePipelineState(pipeline)
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)

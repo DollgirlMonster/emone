@@ -62,33 +62,76 @@ import Testing
         // Prefill, spike 10 and its surprisal A/B (docs/m1-prefill-spike.md).
         #expect(q38.prefillChunkTokens == 32_768)
         #expect(q38.prefillWideMPP && q38.prefillRoutedMPP)
+        // The chunked GDN recurrence, 2026-10-03 and its surprisal A/B.
+        #expect(q38.prefillGDNChunked)
+        // QSA attention as masked flash tiles, 2026-10-03 and its surprisal A/B.
+        #expect(q38.prefillQSAFlash)
+        // Routed experts as tiled QMMs, 2026-10-03 and its surprisal A/B.
+        #expect(q38.prefillRoutedQMM && q38.prefillDenseQMM)
         // Not carried to 8-bit: no surprisal check has seen those weights.
         #expect(q38b.prefillChunkTokens == 4_096)
         #expect(!q38b.prefillWideMPP && !q38b.prefillRoutedMPP)
+        #expect(!q38b.prefillGDNChunked)
+        #expect(!q38b.prefillQSAFlash && !q38b.prefillRoutedQMM && !q38b.prefillDenseQMM)
         let q36 = ModelProfile.resolve(
             modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 8, environment: [:])
         #expect(q36.expertCacheBudgetBytes == 12 << 30)
         #expect(q36.keepExpertCacheWired)
         let q36four = ModelProfile.resolve(
             modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 4, environment: [:])
-        #expect(q36four.expertCacheBudgetBytes == 10 << 30)
+        #expect(q36four.expertCacheBudgetBytes == 17 << 30)
+        // 64 GB holds the whole expert set: all 256 slots.
+        #expect(
+            RuntimeConfiguration.expertCacheSlots(
+                expertStrideBytes: 1_769_472, layers: 40,
+                budgetBytes: RuntimeConfiguration.affordableExpertCacheBudget(
+                    q36four.expertCacheBudgetBytes, physicalMemory: 64 << 30)) == 256)
         #expect(q36.prefetchDepth == 1)
         #expect(q36.prefillChunkTokens == 4_096)
         #expect(q36.sampling == GenerationDefaults.house)
         #expect(!q36.prefillWideMPP && !q36.prefillRoutedMPP)
+        #expect(!q36.prefillGDNChunked)
+        #expect(!q36.prefillQSAFlash)
     }
 
-    /// The prefill switches ship on one row only; every other row, and every
-    /// family fallback, keeps the default kernels.
-    @Test func prefillSwitchesShipOnlyOnTheQwen38FourBitRow() {
+    /// The prefill switches ship where they were measured: all of them on
+    /// Qwen3.8 4-bit, the non-QSA ones on the Qwen 3.6 and Ornith 1.5 4-bit
+    /// rows, the non-routed ones on Qwen3.8 27B dense 4-bit; every other row, and every family fallback, keeps the default
+    /// kernels.
+    @Test func prefillSwitchesShipOnlyWhereMeasured() {
+        let q38 = ModelProfile.Key("qwen3.8-flash-next", 4)
+        let hybrids: Set<ModelProfile.Key> = [
+            ModelProfile.Key("qwen3.6-35b-a3b", 4), ModelProfile.Key("ornith-1.5-35b-a3b", 4),
+        ]
+        // Dense: no routed experts, so no routed switches.
+        let dense = ModelProfile.Key("qwen3.8-27b", 4)
         for (key, row) in ModelProfile.table {
-            let expected = key == ModelProfile.Key("qwen3.8-flash-next", 4)
-            #expect(row.wideMPP == expected, Comment(rawValue: key.modelID))
-            #expect(row.routedMPP == expected, Comment(rawValue: key.modelID))
+            let isQ38 = key == q38
+            let routed = isQ38 || hybrids.contains(key)
+            let measured = routed || key == dense
+            let name = Comment(rawValue: "\(key.modelID) \(key.weightBits)")
+            #expect(row.wideMPP == isQ38, name)
+            #expect(row.qsaFlash == isQ38, name)
+            #expect(row.qsaPacked == isQ38, name)
+            #expect(row.routerLogits == routed, name)
+            #expect(row.routedMPP == routed, name)
+            #expect(row.routedQMM == routed, name)
+            #expect(row.gdnChunked == measured, name)
+            #expect(row.denseQMM == measured, name)
+            #expect(row.denseFlash == measured, name)
         }
         let fallback = ModelProfile.resolve(
             modelID: "unknown", family: .qwen36, weightBits: 4, environment: [:])
         #expect(!fallback.prefillWideMPP && !fallback.prefillRoutedMPP)
+        #expect(!fallback.prefillGDNChunked)
+        #expect(!fallback.prefillQSAFlash && !fallback.prefillRoutedQMM)
+        #expect(!fallback.prefillDenseQMM && !fallback.prefillDenseFlash)
+        #expect(!fallback.prefillQSAPacked)
+        #expect(!fallback.prefillRouterLogits)
+        let forcedOff = ModelProfile.resolve(
+            modelID: "qwen3.8-flash-next", family: .qwen38flash, weightBits: 4,
+            environment: ["TINYTITAN_PREFILL_ROUTER_LOGITS": "0"])
+        #expect(!forcedOff.prefillRouterLogits)
     }
 
     @Test func samplingRowsFollowTheirSeries() {
@@ -177,12 +220,20 @@ import Testing
         // on where it does not.
         let q38Off = ModelProfile.resolve(
             modelID: "qwen3.8-flash-next", family: .qwen38flash, weightBits: 4,
-            environment: ["TINYTITAN_PREFILL_MPP_WIDE": "0", "TINYTITAN_PREFILL_ROUTED_MPP": "0"])
+            environment: [
+                "TINYTITAN_PREFILL_MPP_WIDE": "0", "TINYTITAN_PREFILL_ROUTED_MPP": "0",
+                "TINYTITAN_PREFILL_GDN_CHUNK": "0", "TINYTITAN_PREFILL_QSA_FLASH": "0",
+            ])
         #expect(!q38Off.prefillWideMPP && !q38Off.prefillRoutedMPP)
+        #expect(!q38Off.prefillGDNChunked && !q38Off.prefillQSAFlash)
         let q36On = ModelProfile.resolve(
             modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 4,
-            environment: ["TINYTITAN_PREFILL_MPP_WIDE": "1", "TINYTITAN_PREFILL_ROUTED_MPP": "1"])
+            environment: [
+                "TINYTITAN_PREFILL_MPP_WIDE": "1", "TINYTITAN_PREFILL_ROUTED_MPP": "1",
+                "TINYTITAN_PREFILL_GDN_CHUNK": "1", "TINYTITAN_PREFILL_QSA_FLASH": "1",
+            ])
         #expect(q36On.prefillWideMPP && q36On.prefillRoutedMPP)
+        #expect(q36On.prefillGDNChunked && q36On.prefillQSAFlash)
     }
 
     @Test func theRowDecidesWhetherTheCacheStaysWired() {
@@ -205,7 +256,8 @@ import Testing
         for needle in [
             "model=qwen-agentworld", "bits=8", "tabled", "budget=", "prefetch=1",
             "chunk=4096", "topk_simd=true", "hc_fused=false", "keep_wired=true",
-            "mpp_wide=false", "routed_mpp=false",
+            "mpp_wide=false", "routed_mpp=false", "gdn_chunk=false",
+            "qsa_flash=false", "routed_qmm=false", "dense_qmm=false",
         ] {
             #expect(p.summary.contains(needle), Comment(rawValue: needle))
         }

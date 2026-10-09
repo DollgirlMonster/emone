@@ -10,22 +10,55 @@ GPU, 64 GB, model on an external Thunderbolt NVMe). On a 16,931-token prompt:
 
 | step | prefill s | tok/s | output |
 | --- | ---: | ---: | --- |
-| upstream engine (estimated) | ~485 | ~35 | reference |
+| upstream engine (fork point `0690c611`, measured 2026-10-03) | 474 | 36 | reference |
 | + grouped-query QSA attention kernel | 419-451 | 39 | identical |
 | + PLE n-gram rows read concurrently | 353-389 | 46 | identical |
 | + 8,192-token chunks, parallel host key selection | 297-301 | 57 | identical |
 | + remaining scalar GEMMs and the shared expert on the MPP tensor ops | 246-251 | 68 | rounding |
 | + routed-expert tiles as grouped MPP GEMMs, run concurrently | 213-215 | 79 | rounding |
 | + QSA indexer and QSA attention on the simdgroup matrix units, 16,384-token chunks | 156 | 108 | rounding |
-| + 32,768-token chunks: this prompt in one chunk, no 547-token tail sweep (-7.0%) | **141-151** | **115-120** | identical |
+| + 32,768-token chunks: this prompt in one chunk, no 547-token tail sweep (-7.0%) | 141-151 | 115-120 | identical |
+| + Gated-DeltaNet recurrence in 8-token WY chunks on the matrix units | 141-149 | 117 | rounding |
+| + QSA attention as masked dense flash tiles, key selection on the GPU | 104 | 163 | rounding |
+| + routed experts and dense projections on tiled QMMs, expert readahead | 82.5 | 205 | rounding |
+| + 64 x 64 QMM tiles | 76.1 | 222 | identical |
+| + router: 8 tokens per threadgroup | 66.2 | 256 | identical |
+| + QSA attention over packed 4-key blocks | 61.4-62.9 | 269-276 | rounding |
+| + PLE n-gram rows read 128 deep, repeated rows read once (9.4 s -> 2.1 s) | 55.1-56.8 | 298-307 | identical |
+| + shared-expert scalar gate in one dispatch per chunk, not one per token (7.0 s -> 1.5 s) | 50.6 | 335 | identical |
+| + router logits on the tiled QMM, then a top-k pass (82 ms -> ~5 ms per layer) | 46.9-47.1 | 359-361 | rounding |
+| + attention reads Q from a fragment-packed copy instead of holding it, K staged transposed (kernel 158 -> 118 ms) | 43.7-44.2 | 383-387 | identical |
+| + hyper-connection inject eight halves a thread (4.3 -> 2.0 ms per write, 96 writes) | **43.4-43.5** | **389-390** | identical |
 
 **Speed against baseline so far** (same M1 Max, same 16,931-token prompt):
 
 | | baseline | now | speedup |
 | --- | ---: | ---: | ---: |
-| Prefill, against the upstream engine (estimated) | ~485 s | 141 s | **~3.4x** |
-| Prefill, against the first measured run | 419-451 s | 140.7-142.2 s | **~3.1x** |
+| Prefill, against the upstream engine (measured, back to back) | 474.4 s | 43.4 s | **10.9x** |
 | Decode, 256 tokens, 12 GiB -> 16 GiB expert cache | 5.06 tok/s | 5.62 tok/s | **+11%** |
+
+Before the last step, three reruns on a quiet machine (Time Machine off)
+measured 62.90, 62.53 and 76.62 s; the third had the same GPU span as the
+others, so its extra 14 s was host or drive interference. Those runs spent
+~9.4 s before the GPU started: the PLE n-gram gather, 271K uncached 320-byte
+reads with only ~10 in flight. The drive gives ~18K reads/s at that depth and
+~86K at 128 in flight, and the prompt repeats n-grams, so reading 128 deep and
+each row once cut it to 2.1 s with byte-identical output. Overlapping the
+gather with layer 0 was tried and measured worse (56.5-64.3 s): it competes
+with layer 0's expert reads on the same drive and hides at most ~1 s.
+
+**The other installed models** (same M1 Max, the first 30,000 characters of
+the same prompt: 8,529 tokens, default chunking, 4-bit), before and after the
+same kernels plus causal flash attention for models without QSA:
+
+| model | before | now | speedup |
+| --- | ---: | ---: | ---: |
+| Qwen 3.6 35B-A3B | 111.3 s | 15.6 s | **7.1x** |
+| Ornith 1.5 35B-A3B | -- | 15.9 s | (same geometry as Qwen 3.6) |
+| Qwen3.8 27B dense | 644.0 s | 92.6 s | **7.0x** |
+
+Each passed the paired surprisal A/B on its own weights
+(`docs/m1-prefill-spike.md`, spikes 19-20).
 
 The 32K chunk took prefill from 154.7-159.9 s to 140.7-151.2 s (-7.0%) with
 byte-identical output and no change to decode. The 16 GiB cache (128 slots, up

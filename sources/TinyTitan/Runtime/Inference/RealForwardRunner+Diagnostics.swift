@@ -25,6 +25,12 @@ extension RealForwardRunner {
             KernelGPUTiming(role: role, start: cb.gpuStartTime, end: cb.gpuEndTime))
     }
 
+    /// Every timed command buffer as `role,start,end` lines (seconds, GPU
+    /// clock), for working out overlap and gaps offline.
+    public func kernelGPUTimelineCSV() -> String {
+        kernelGPUTimings.map { "\($0.role),\($0.start),\($0.end)" }.joined(separator: "\n")
+    }
+
     /// Aggregated per-role GPU milliseconds for the current generation,
     /// largest first.
     public func kernelGPUTimingSummary() -> [(role: String, millis: Double, count: Int)] {

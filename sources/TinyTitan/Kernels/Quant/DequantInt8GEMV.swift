@@ -20,6 +20,9 @@ final class DequantInt8GEMV {
     }
 
     private let pso: MTLComputePipelineState
+    /// One-row weight over many inputs, one simdgroup per input (see
+    /// `encodeOneRowManyX`).
+    private let oneRowManyX: MTLComputePipelineState
     private let specializedPSOs: [Shape: MTLComputePipelineState]
     private static let realDecodeShapes: [Shape] = [
         Shape(m: 128, n: 2816),  // router.proj
@@ -33,6 +36,7 @@ final class DequantInt8GEMV {
     ) throws {
         let kernelName = "dequant_int8_gemv_simd"
         self.pso = try context.pipeline(kernelName)
+        self.oneRowManyX = try context.pipeline("dequant_int8_gemv_simd_one_row_many_x")
 
         let shapes =
             Self.realDecodeShapes
@@ -88,6 +92,32 @@ final class DequantInt8GEMV {
             "N must be a multiple of \(Quantization.groupSize)")
         precondition(
             rows.xOffset >= 0 && rows.yOffset >= 0, "buffer offsets must be non-negative")
+        let half = MemoryLayout<Float16>.stride
+        if m == 1, rows.count > 1, rows.xRowStride % half == 0, rows.yRowStride % half == 0 {
+            // A one-row weight over many inputs (the shared-expert scalar gate
+            // across a prefill chunk): one dispatch, not one per input.
+            guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+                throw MetalError.commandEncoderFailed
+            }
+            enc.setComputePipelineState(oneRowManyX)
+            enc.setBuffer(weights, offset: weightsOffset, index: 0)
+            enc.setBuffer(scales, offset: scalesOffset, index: 1)
+            enc.setBuffer(biases, offset: biasesOffset, index: 2)
+            enc.setBuffer(x, offset: rows.xOffset, index: 3)
+            enc.setBuffer(y, offset: rows.yOffset, index: 4)
+            var params = (
+                UInt32(rows.count), n,
+                UInt32(rows.xRowStride / half), UInt32(rows.yRowStride / half))
+            enc.setBytes(&params.0, length: 4, index: 5)
+            enc.setBytes(&params.1, length: 4, index: 6)
+            enc.setBytes(&params.2, length: 4, index: 7)
+            enc.setBytes(&params.3, length: 4, index: 8)
+            enc.dispatchThreadgroups(
+                MTLSize(width: (rows.count + 7) / 8, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.endEncoding()
+            return
+        }
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }

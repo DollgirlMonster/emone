@@ -61,6 +61,36 @@ public struct ModelProfile: Sendable, Equatable {
     /// (`PrefillRoutedExpertGEMM`). Same rule; `TINYTITAN_PREFILL_ROUTED_MPP`
     /// overrides.
     public var prefillRoutedMPP: Bool
+    /// The Gated-DeltaNet prefill recurrence in 8-token WY chunks on the
+    /// matrix units (`gdn_delta_chunk_prefill_dk*`). Same rule;
+    /// `TINYTITAN_PREFILL_GDN_CHUNK` overrides.
+    public var prefillGDNChunked: Bool
+    /// QSA prefill attention as masked dense flash tiles
+    /// (`attention_prefill_qsa_masked_flash`) instead of the gathered grouped
+    /// kernels. `TINYTITAN_PREFILL_QSA_FLASH` overrides.
+    public var prefillQSAFlash: Bool
+    /// Routed-expert tiles as two tiled QMM launches on the simdgroup matrix
+    /// units (`prefill_routed_qmm_gate_up`, `prefill_routed_qmm`) instead of
+    /// one MPP GEMM per expert and projection; needs `prefillRoutedMPP`.
+    /// `TINYTITAN_PREFILL_ROUTED_QMM` overrides.
+    public var prefillRoutedQMM: Bool
+    /// Batched dense prefill projections (attention, GDN, the shared expert)
+    /// on the tiled simdgroup QMM (`prefill_dense_qmm`) instead of the MPP or
+    /// scalar QMM. `TINYTITAN_PREFILL_SG_QMM` overrides.
+    public var prefillDenseQMM: Bool
+    /// Causal prefill attention with no selection on the flash kernel
+    /// (`attention_prefill_qsa_masked_flash`, causal mode) instead of
+    /// `attention_prefill_causal_tiled`. `TINYTITAN_PREFILL_DENSE_FLASH`
+    /// overrides.
+    public var prefillDenseFlash: Bool
+    /// QSA flash attention over each row tile's selected 4-key blocks, packed
+    /// four to a tile, instead of whole 16-key tiles.
+    /// `TINYTITAN_PREFILL_QSA_PACKED` overrides.
+    public var prefillQSAPacked: Bool
+    /// The prefill router as float logits on the tiled simdgroup QMM, then a
+    /// top-k pass (`prefill_router_topk_logits`), instead of the fused scalar
+    /// router. `TINYTITAN_PREFILL_ROUTER_LOGITS` overrides.
+    public var prefillRouterLogits: Bool
 
     /// The shipped entries. Measured values, each on its own install.
     public static let table:
@@ -69,7 +99,9 @@ public struct ModelProfile: Sendable, Equatable {
             sampling: GenerationDefaults.Sampling,
             topKSimd: Bool, attnSimd: Bool,
             hcFused: Bool, qsaSelect: Bool, keepWired: Bool,
-            wideMPP: Bool, routedMPP: Bool
+            wideMPP: Bool, routedMPP: Bool, gdnChunked: Bool, qsaFlash: Bool,
+            routedQMM: Bool, denseQMM: Bool, denseFlash: Bool, qsaPacked: Bool,
+            routerLogits: Bool
         )] = [
             // The 35B rows take prefetch depth 1 and hold the expert cache wired
             // through prefill (2026-09-05, on the repaired ring). Measured per
@@ -105,28 +137,48 @@ public struct ModelProfile: Sendable, Equatable {
             // 0.95. The rows state it rather than borrow `house`, which happens
             // to hold the same numbers today: a later house change must not move
             // a model off its series' settings.
+            // 2026-10-03, M1 Max: the prefill kernels measured on Qwen3.8 --
+            // chunked GDN, routed experts on the tiled QMM (routed_mpp is its
+            // host path), dense projections on the tiled QMM -- plus causal
+            // attention on the flash kernel, which this family needs most: its
+            // full-attention layers ran on the scalar tiled kernel at ~0.08
+            // TFLOPS. 8,529-token prompt: attention 78.1 -> 3.2 s of GPU, prefill
+            // 111.3 -> 15.6 s (7.2x). Surprisal at 19,087 tokens of context:
+            // Qwen 3.6 +0.003 nats (t +0.85), Ornith 1.5 -0.010 (t -1.40), no
+            // measurable change. 4-bit rows only; AgentWorld and the 8-bit
+            // rows keep the old kernels until checked.
+            // Router logits on the tiled QMM (2026-10-03): 8,529-token prompt,
+            // chunk 4096, prefill 14.7 / 12.6 -> 11.9 s, decode unchanged.
+            // Surprisal, 512 tokens after 20,197 of context: Qwen 3.6 -0.002
+            // nats (t -0.65), Ornith 1.5 -0.005 (t -0.74), no measurable change.
+            // 4-bit budget 17 GiB (2026-10-04, 64 GB M1 Max): the whole expert
+            // set (256 slots x 40 layers x 1.77 MB = 16.9 GiB), under a third of
+            // RAM there. 512 tokens after 2,092: 20.3 / 21.7 tok/s at 160 slots
+            // (96.8% hit) -> 23.1 / 24.3 (99.8%). A 24 GB machine is still cut
+            // to 8 GiB by `affordableExpertCacheBudget`.
             Key("qwen3.6-35b-a3b", 4): (
-                10 << 30, 1, 4_096,
+                17 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false
+                true, true, false, false, true, false, true, true, false, true, true, true, false, true
             ),
             Key("qwen3.6-35b-a3b", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false, false, false
             ),
             // Ornith 1.5, same geometry, measured on its own 2026-09-05: 4-bit
             // 128 slots 19.91 / 20.41 vs 160 20.84 / 21.02; 8-bit 64 slots
             // 8.69 / 9.12 vs 96 10.83 / 10.86, swap flat on every arm.
+            // 4-bit: 17 GiB, the whole expert set, as Qwen 3.6 (same geometry).
             Key("ornith-1.5-35b-a3b", 4): (
-                10 << 30, 1, 4_096, GenerationDefaults.house,
-                true, true, false, false, true, false, false
+                17 << 30, 1, 4_096, GenerationDefaults.house,
+                true, true, false, false, true, false, true, true, false, true, true, true, false, true
             ),
             Key("ornith-1.5-35b-a3b", 8): (
                 12 << 30, 1, 4_096, GenerationDefaults.house,
-                true, true, false, false, true, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false, false, false
             ),
             // AgentWorld, measured on its own 2026-09-05: 4-bit 128 slots 20.52 /
             // 20.50 vs 160 21.11 / 20.92; 8-bit 64 slots 9.31 / 9.25 vs 96
@@ -138,13 +190,13 @@ public struct ModelProfile: Sendable, Equatable {
                 10 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false, false, false
             ),
             Key("qwen-agentworld", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false, false, false
             ),
             // KAT-Coder-V2.5-Dev: a Qwen3.6-35B-A3B fine-tune with the same
             // geometry, so the cache budget, prefetch depth and wired cache are
@@ -159,13 +211,13 @@ public struct ModelProfile: Sendable, Equatable {
                 10 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 1.0, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false, false, false
             ),
             Key("kat-coder-v2.5", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 1.0, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false, false, false
             ),
             // Qwen3.8-Flash-Next: 96 slots (12 GiB) still climbing; its card
             // specifies temperature 1.0 / top-p 0.95. The fused hyper-connection
@@ -196,6 +248,46 @@ public struct ModelProfile: Sendable, Equatable {
             // 142.4-151.2 s (-7.0%), output byte-identical, decode unchanged
             // (median 4.22 -> 4.26 tok/s), RSS +0.2 GiB, no swap. It fits a
             // context up to 131,072; a larger one is capped back to 16,384.
+            // 2026-10-03, same machine: the GDN recurrence in 8-token WY chunks
+            // on the matrix units (a port of MLX's fused-chunk kernel). Kernel
+            // alone at 16,384 rows: 342 -> 24.8 ms per layer. Two interleaved
+            // rounds of the 16,931-token prompt: GDN layers 49.9 -> 39.2 s of
+            // GPU, prefill 153.5 / 151.9 -> 148.6 / 141.3 s. Surprisal over 512
+            // teacher-forced tokens after 19,087 of context: +0.007 nats, t
+            // +0.52 (no measurable change). Measured on this row only; the other
+            // GDN families keep the sequential kernel until checked.
+            // 2026-10-03, same machine: QSA attention as masked dense flash
+            // tiles (8 tokens x a KV head's 12 query heads per threadgroup, key
+            // tiles no token kept skipped) instead of the gathered grouped
+            // kernel. 16,931-token prompt: attention 44.7 -> 20.5 s of GPU,
+            // prefill 132.0 -> 108.4 s. Surprisal, same text and context:
+            // -0.007 nats, t -0.55 (no measurable change). This row only.
+            // 2026-10-03, same machine: routed-expert tiles as two tiled QMM
+            // launches on the simdgroup matrix units (gate+up+activation, then
+            // down; ~6.3 / 5.6 TFLOPS) instead of one MPP GEMM per expert and
+            // projection. Routed GEMM 25.2 -> 15.5 s of GPU, prefill 103.7 ->
+            // 99.6 s (before the layer readahead). Surprisal: +0.005 nats,
+            // t +0.42 (no measurable change). This row only.
+            // 2026-10-03, same machine: the batched dense projections on the
+            // tiled simdgroup QMM (5.55 TFLOPS against the MPP QMM's 4.0 at the
+            // GDN shapes). GDN layers 35.5 -> 29.2 s of GPU, prefill 91.2 ->
+            // 82.5 s. Surprisal: -0.029 nats, t -2.03 (if anything, less
+            // surprised). This row only.
+            // Causal attention with no selection (chunks inside the 2,048-key
+            // dense window) on the same flash kernel: the masked path with every
+            // key kept.
+            // QSA attention over each 8-row tile's selected 4-key blocks packed
+            // four to a 16-key tile, instead of whole 16-key tiles: ~0.42 of the
+            // dense work against ~0.65. Attention tiles -22% / -31% in two
+            // interleaved pairs on a noisy machine; surprisal +0.015 nats,
+            // t +1.06 (no measurable change).
+            // 2026-10-03, same machine: the prefill router as float logits on
+            // the tiled QMM plus a top-k pass, instead of the fused scalar
+            // router (~0.5 TFLOPS, each lane reading its own expert's row a
+            // byte at a time). Router ~82 -> ~5 ms per layer, prefill 50.6 ->
+            // 46.9-47.1 s, first 8 tokens unchanged. Surprisal: +0.022 nats,
+            // t +1.33 (half logits: +0.009, t +0.69); no measurable change.
+            // This row only.
             // 2026-10-01, same machine: 16 GiB (128 slots) against 12 GiB (96).
             // Three interleaved rounds of 256 decoded tokens (--ignore-eos):
             // decode 4.56 / 5.48 / 5.15 -> 5.73 / 5.83 / 5.29 tok/s (mean +11%),
@@ -207,7 +299,7 @@ public struct ModelProfile: Sendable, Equatable {
             Key("qwen3.8-flash-next", 4): (
                 16 << 30, 1, 32_768,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, true, true, true
+                true, true, false, false, true, true, true, true, true, true, true, true, true, true
             ),
             // 8-bit: 32 slots (8 GiB) 2.05 / 2.06 tok/s; 40 slots (9.5 GiB) 2.18 /
             // 2.27 with swap falling; 48 (13 GiB) 2.24-2.33 but ~1 GB of swap
@@ -221,7 +313,7 @@ public struct ModelProfile: Sendable, Equatable {
             Key("qwen3.8-flash-next", 8): (
                 Int(9.5 * Double(1 << 30)), 1, 4_096,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, true, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false, false, false
             ),
             // Qwen3.8-27B: the Qwen3.8 generation's dense model, served by the
             // Qwen 3.5 dense family (same `qwen3_5_text` architecture). Dense,
@@ -232,15 +324,20 @@ public struct ModelProfile: Sendable, Equatable {
             // Flash-Next's; its instruct row (0.7 / 0.80, presence 1.5) is not
             // applied yet, because this family has one row for both modes
             // (docs/next-models-research.md). Nothing here is measured.
+            // 2026-10-03, M1 Max: chunked GDN, the dense projections and FFN on
+            // the tiled QMM, causal attention on the flash kernel. 8,529-token
+            // prompt: dense FFN 374.4 -> 42.4 s of GPU, prefill 644.0 -> 91.9 s
+            // (7.0x), GPU 99% busy. Surprisal, 512 tokens after 8,904 of
+            // context: +0.002 nats (t +1.14), no measurable change. 4-bit only.
             Key("qwen3.8-27b", 4): (
                 RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, false, false, false
+                true, true, false, false, false, false, false, true, false, false, true, true, false, false
             ),
             Key("qwen3.8-27b", 8): (
                 RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, false, false, false
+                true, true, false, false, false, false, false, false, false, false, false, false, false, false
             ),
         ]
 
@@ -261,7 +358,10 @@ public struct ModelProfile: Sendable, Equatable {
             routerTopKSimd: true, attentionSimdPartial: true,
             hcFused: false, qsaGPUSelect: false,
             keepExpertCacheWired: false,
-            prefillWideMPP: false, prefillRoutedMPP: false)
+            prefillWideMPP: false, prefillRoutedMPP: false,
+            prefillGDNChunked: false, prefillQSAFlash: false,
+            prefillRoutedQMM: false, prefillDenseQMM: false, prefillDenseFlash: false,
+            prefillQSAPacked: false, prefillRouterLogits: false)
         if let row = table[profile.key] {
             profile.expertCacheBudgetBytes = row.budget
             profile.prefetchDepth = row.prefetch
@@ -274,6 +374,13 @@ public struct ModelProfile: Sendable, Equatable {
             profile.keepExpertCacheWired = row.keepWired
             profile.prefillWideMPP = row.wideMPP
             profile.prefillRoutedMPP = row.routedMPP
+            profile.prefillGDNChunked = row.gdnChunked
+            profile.prefillQSAFlash = row.qsaFlash
+            profile.prefillRoutedQMM = row.routedQMM
+            profile.prefillDenseQMM = row.denseQMM
+            profile.prefillDenseFlash = row.denseFlash
+            profile.prefillQSAPacked = row.qsaPacked
+            profile.prefillRouterLogits = row.routerLogits
         }
         if let v = env["TINYTITAN_ROUTER_TOPK_SIMD"] { profile.routerTopKSimd = v != "0" }
         if let v = env["TINYTITAN_ATTN_SIMD_PARTIAL"] { profile.attentionSimdPartial = v != "0" }
@@ -283,6 +390,13 @@ public struct ModelProfile: Sendable, Equatable {
         }
         if let v = env["TINYTITAN_PREFILL_MPP_WIDE"] { profile.prefillWideMPP = v == "1" }
         if let v = env["TINYTITAN_PREFILL_ROUTED_MPP"] { profile.prefillRoutedMPP = v == "1" }
+        if let v = env["TINYTITAN_PREFILL_GDN_CHUNK"] { profile.prefillGDNChunked = v == "1" }
+        if let v = env["TINYTITAN_PREFILL_QSA_FLASH"] { profile.prefillQSAFlash = v == "1" }
+        if let v = env["TINYTITAN_PREFILL_ROUTED_QMM"] { profile.prefillRoutedQMM = v == "1" }
+        if let v = env["TINYTITAN_PREFILL_SG_QMM"] { profile.prefillDenseQMM = v == "1" }
+        if let v = env["TINYTITAN_PREFILL_DENSE_FLASH"] { profile.prefillDenseFlash = v == "1" }
+        if let v = env["TINYTITAN_PREFILL_QSA_PACKED"] { profile.prefillQSAPacked = v == "1" }
+        if let v = env["TINYTITAN_PREFILL_ROUTER_LOGITS"] { profile.prefillRouterLogits = v == "1" }
         if let v = env["TINYTITAN_PREDICTIVE_PREFETCH"] {
             profile.prefetchDepth = v == "1" ? max(1, profile.prefetchDepth) : 0
         }
@@ -321,6 +435,10 @@ public struct ModelProfile: Sendable, Equatable {
             + "sampling=\(sampling.temperature)/\(sampling.topK)/\(sampling.topP) "
             + "topk_simd=\(routerTopKSimd) attn_simd=\(attentionSimdPartial) "
             + "hc_fused=\(hcFused) qsa_select=\(qsaGPUSelect) keep_wired=\(keepExpertCacheWired) "
-            + "mpp_wide=\(prefillWideMPP) routed_mpp=\(prefillRoutedMPP)"
+            + "mpp_wide=\(prefillWideMPP) routed_mpp=\(prefillRoutedMPP) "
+            + "gdn_chunk=\(prefillGDNChunked) qsa_flash=\(prefillQSAFlash) "
+            + "routed_qmm=\(prefillRoutedQMM) dense_qmm=\(prefillDenseQMM) "
+            + "dense_flash=\(prefillDenseFlash) qsa_packed=\(prefillQSAPacked) "
+            + "router_logits=\(prefillRouterLogits)"
     }
 }

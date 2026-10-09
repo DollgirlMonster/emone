@@ -52,6 +52,7 @@ final class QSAIndexer {
         ProcessInfo.processInfo.environment["TINYTITAN_QSA_SCORE_MMA"] != "0"
     /// Decode selection on the GPU; nil when the kernel is unavailable.
     private let selectPSO: MTLComputePipelineState?
+    private let selectPrefillPSO: MTLComputePipelineState?
     private let rms: RMSNorm
     private let rope: RoPE
     private let gemv: SlotGEMV
@@ -106,6 +107,7 @@ final class QSAIndexer {
         self.scoreRowsPSO = try context.pipeline("qsa_block_scores_rows")
         self.scoreRowsMMAPSO = try context.pipeline("qsa_block_scores_rows_mma")
         self.selectPSO = try? context.pipeline("qsa_select_decode")
+        self.selectPrefillPSO = try? context.pipeline("qsa_select_prefill")
         self.rms = try RMSNorm(context: context)
         self.rope = try RoPE(context: context)
         self.gemv = try SlotGEMV(context: context, weightBits: weightBits)
@@ -843,6 +845,46 @@ final class QSAIndexer {
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
         enc.endEncoding()
         return keepBuf
+    }
+
+    var canSelectPrefillOnGPU: Bool { selectPrefillPSO != nil }
+
+    /// `selectKeysPrefill` on the GPU, riding `commandBuffer` after
+    /// `encodeScoresPrefill`: the same mask (rows of `startPosition + tokens`
+    /// bytes), no readback and no host wait. Only the mask: see
+    /// `QSASelection`. Nil inside the dense window, exactly where the host
+    /// selection is.
+    func encodeSelectPrefill(
+        commandBuffer: MTLCommandBuffer, startPosition: Int, tokens: Int
+    ) throws -> QSASelection? {
+        let lastVisible = startPosition + tokens
+        guard lastVisible > selectionWidth else { return nil }
+        guard let pso = selectPrefillPSO else { throw MetalError.commandEncoderFailed }
+        try growKeepScratch(count: lastVisible * tokens)
+        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        enc.setComputePipelineState(pso)
+        enc.setBuffer(scoresBuf, offset: 0, index: 0)
+        enc.setBuffer(keepBuf, offset: 0, index: 1)
+        var start = UInt32(startPosition)
+        var r = UInt32(compressRatio)
+        var w = UInt32(selectionWidth)
+        var scored = UInt32(lastScoredBlocks)
+        var stride = UInt32(lastVisible)
+        enc.setBytes(&start, length: 4, index: 2)
+        enc.setBytes(&r, length: 4, index: 3)
+        enc.setBytes(&w, length: 4, index: 4)
+        enc.setBytes(&scored, length: 4, index: 5)
+        enc.setBytes(&stride, length: 4, index: 6)
+        enc.dispatchThreadgroups(
+            MTLSize(width: tokens, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(
+                width: min(pso.maxTotalThreadsPerThreadgroup, 256), height: 1, depth: 1))
+        enc.endEncoding()
+        return QSASelection(
+            mask: keepBuf, maskStride: lastVisible,
+            indices: nil, indexStride: 0, counts: nil)
     }
 
     /// The keep mask's first `count` bytes, for the verify mode.

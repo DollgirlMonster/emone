@@ -1126,7 +1126,8 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         var anchor: Int?
         if prefillsVerbatim {
             anchor = FrontierTracker.anchor(
-                proven: frontier.provenSharedPrefix(promptIDs), systemBlockEnd: guidanceAnchor())
+                proven: frontier.provenSharedPrefix(promptIDs), systemBlockEnd: guidanceAnchor(),
+                divergence: frontier.divergencePoint(in: promptIDs))
             frontier.rememberVerbatimRender(promptIDs)
         }
         let captureBoundaries =

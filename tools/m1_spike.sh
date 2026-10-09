@@ -48,6 +48,15 @@
 #   c16384attn   c8192attn at chunk 16384
 #   c32768       base at chunk 32768: a ~17K prompt in one chunk, so the small
 #                tail chunk (547 tokens, ~18 s, mostly expert fetch) is gone
+#   gdnchunk     base + TINYTITAN_PREFILL_GDN_CHUNK=1: the Gated-DeltaNet
+#                recurrence in 8-token WY chunks on the matrix units (MLX's
+#                fused-chunk kernel). Qwen3.8 4-bit's row ships it since
+#                2026-10-03, so there this arm is a second base; gdnseq
+#                (=0) is the before
+#   qsaflash     base + TINYTITAN_PREFILL_QSA_FLASH=1: QSA attention as masked
+#                dense flash tiles (8 tokens x a KV head's query heads), key
+#                tiles no token kept skipped; qsagather (=0) is the gathered
+#                grouped kernel it replaced
 # Chunking can change the output (the chunk boundaries move), so c8192/c16384
 # may legitimately differ from base; they are judged on speed and on staying
 # coherent, then on benchmark/quant_perplexity_ab.py before any default moves.
@@ -118,7 +127,7 @@ Options:
   --rounds <n>         interleaved rounds per arm (default 2)
   --arms "<list>"      any of: base c8192 c16384 c8192qsa c8192wide c8192sg
                        c8192routed c8192widerouted c8192fast c16384fast
-                       c8192attn c16384attn c32768
+                       c8192attn c16384attn c32768 gdnchunk gdnseq qsaflash qsagather
                        wide16k pergqa
                        mppwide gqa wide splitwide all combo
                        coalesce qqmm hcfused qsagpu split
@@ -204,6 +213,10 @@ arm_spec() {
     c8192attn) echo "c8192attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 8192" ;;
     c16384attn) echo "c16384attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 16384" ;;
     c32768) echo "c32768||--prefill-chunk 32768" ;;
+    gdnchunk) echo "gdnchunk|TINYTITAN_PREFILL_GDN_CHUNK=1|" ;;
+    gdnseq) echo "gdnseq|TINYTITAN_PREFILL_GDN_CHUNK=0|" ;;
+    qsaflash) echo "qsaflash|TINYTITAN_PREFILL_QSA_FLASH=1|" ;;
+    qsagather) echo "qsagather|TINYTITAN_PREFILL_QSA_FLASH=0|" ;;
     coalesce) echo "coalesce|TINYTITAN_PREFILL_COALESCE=1|" ;;
     qqmm) echo "qqmm|TINYTITAN_PREFILL_Q_QMM=1|" ;;
     hcfused) echo "hcfused|TINYTITAN_HC_FUSED=1|" ;;

@@ -17,6 +17,14 @@ import Metal
 /// so the output is close to the tile kernels', not identical.
 final class PrefillRoutedExpertGEMM {
     private let mpp: MPPPrefillInt4QMM
+    /// `prefill_routed_qmm_gate_up` / `prefill_routed_qmm`: the whole tile in
+    /// two launches on the simdgroup matrix units instead of one MPP GEMM per
+    /// expert and projection. Nil keeps the MPP GEMMs.
+    private let tiledGateUp: MTLComputePipelineState?
+    private let tiledDown: MTLComputePipelineState?
+    static let gateUpRows = 64
+    static let gateUpColumns = 32
+    static let downEdge = 64
     private let gather: MTLComputePipelineState
     private let scatter: MTLComputePipelineState
     private let activation: MTLComputePipelineState
@@ -29,11 +37,30 @@ final class PrefillRoutedExpertGEMM {
     private var capacityPairs = 0
 
     /// Nil when this GPU has no MPP QMM or the width is not one it serves.
-    init?(context: MetalContext, weightBits: Int, siluActivation: Bool) throws {
+    init?(
+        context: MetalContext, weightBits: Int, siluActivation: Bool, tiledQMM: Bool = false
+    ) throws {
         guard [4, 8].contains(weightBits) else { return nil }
         let mpp = MPPPrefillInt4QMM(context: context, weightBits: weightBits)
-        guard mpp.isAvailable else { return nil }
+        guard mpp.isAvailable || tiledQMM else { return nil }
         self.mpp = mpp
+        if tiledQMM {
+            let constants = [
+                MetalFunctionConstant(index: 77, value: .bool(siluActivation)),
+                MetalFunctionConstant(index: 78, value: .uint32(UInt32(weightBits))),
+            ]
+            // Fused gate+up holds two accumulator sets: 64 rows x 32 columns
+            // (6.6 TFLOPS; 32 x 32: 6.2, 64 x 64: 5.9). Down takes 64 x 64 (6.5;
+            // 32 x 32: 5.6). Microbenchmarks at Qwen3.8's routed shape, M1 Max.
+            self.tiledGateUp = try context.pipeline(
+                "prefill_routed_qmm_gate_up_\(Self.gateUpRows)x\(Self.gateUpColumns)",
+                constants: constants)
+            self.tiledDown = try context.pipeline(
+                "prefill_routed_qmm_\(Self.downEdge)x\(Self.downEdge)", constants: constants)
+        } else {
+            self.tiledGateUp = nil
+            self.tiledDown = nil
+        }
         self.gather = try context.pipeline("prefill_routed_gather_rows")
         self.scatter = try context.pipeline("prefill_routed_scatter_rows")
         self.activation = try context.pipeline(siluActivation ? "silu_mul_fp16" : "gelu_mul_fp16")
@@ -87,6 +114,25 @@ final class PrefillRoutedExpertGEMM {
         let pairs = Int(tile.pairCount)
         guard pairs > 0, Self.accepts(d: d, f: f, binding: binding, offsets: offsets) else {
             return false
+        }
+        if let tiledGateUp, let tiledDown,
+            Self.acceptsTiled(d: d, f: f, binding: binding, offsets: offsets)
+        {
+            try reserve(pairs: pairs, d: d, f: f)
+            guard let rowsIn, let activated, let rowsOut else {
+                throw MetalError.bufferAllocationFailed("prefill.routedGEMM")
+            }
+            try encodeRows(
+                commandBuffer, gather, source: hidden, destination: rowsIn,
+                sortedPairs: sortedPairs, tile: tile, d: d, last: UInt32(hiddenStrideElements))
+            try encodeTiled(
+                commandBuffer, gateUp: tiledGateUp, down: tiledDown,
+                rowsIn: rowsIn, activated: activated, rowsOut: rowsOut,
+                tile: tile, groups: groups, binding: binding, offsets: offsets, d: d, f: f)
+            try encodeRows(
+                commandBuffer, scatter, source: rowsOut, destination: routePartials,
+                sortedPairs: sortedPairs, tile: tile, d: d, last: UInt32(topK))
+            return true
         }
         try reserve(pairs: pairs, d: d, f: f)
         guard let rowsIn, let gateOut, let upOut, let activated, let rowsOut else {
@@ -161,6 +207,92 @@ final class PrefillRoutedExpertGEMM {
             commandBuffer, scatter, source: rowsOut, destination: routePartials,
             sortedPairs: sortedPairs, tile: tile, d: d, last: UInt32(topK))
         return true
+    }
+
+    /// The tiled kernels' extra terms: 32-column tiles in both projections,
+    /// group-64 scales, and weight rows the kernel reads a word (4-bit) or two
+    /// (8-bit) at a time.
+    static func acceptsTiled(
+        d: Int, f: Int, binding: PrefillStreamedTileBinding, offsets: MoEExpertOffsets
+    ) -> Bool {
+        guard d % 64 == 0, f % 64 == 0 else { return false }
+        let words = [offsets.gateWOff, offsets.upWOff, offsets.downWOff]
+        return binding.views.allSatisfy { view in
+            words.allSatisfy { (Int(view.offset) + Int($0)) % 8 == 0 }
+        }
+    }
+
+    /// The tile's rows as work items of at most one tile edge, each inside one
+    /// expert (64 rows for both launches); then
+    /// gate+up+activation in one launch and down in another, every expert of
+    /// the tile at once. The experts are reached through a table of device
+    /// addresses (`PrefillStreamedRoutedBlobsMSL`'s layout), indexed by the
+    /// expert's position in `binding`.
+    private func encodeTiled(
+        _ cb: MTLCommandBuffer,
+        gateUp: MTLComputePipelineState, down: MTLComputePipelineState,
+        rowsIn: MTLBuffer, activated: MTLBuffer, rowsOut: MTLBuffer,
+        tile: PrefillMoETile, groups: ArraySlice<PrefillMoEGroup>,
+        binding: PrefillStreamedTileBinding, offsets: MoEExpertOffsets,
+        d: Int, f: Int
+    ) throws {
+        var addresses = [UInt64](repeating: 0, count: 16)
+        for (slot, view) in binding.views.enumerated() {
+            addresses[slot] = view.buffer.gpuAddress + UInt64(view.offset)
+        }
+        func workItems(edge: Int) throws -> (buffer: MTLBuffer, count: Int) {
+            var work: [UInt32] = []
+            for group in groups where group.pairCount > 0 {
+                guard let slot = binding.expertIDs.firstIndex(of: Int(group.expert)) else {
+                    throw PrefillGroupedRoutedMoEError.invalidStreamedTileBinding(
+                        "expert \(group.expert) of the tile has no binding")
+                }
+                let first = Int(group.pairStart - tile.pairStart)
+                let count = Int(group.pairCount)
+                for start in stride(from: 0, to: count, by: edge) {
+                    work += [
+                        UInt32(slot), UInt32(first + start), UInt32(min(edge, count - start)), 0,
+                    ]
+                }
+            }
+            guard !work.isEmpty,
+                let buffer = device.makeBuffer(
+                    bytes: work, length: work.count * 4, options: .storageModeShared)
+            else { throw MetalError.bufferAllocationFailed("prefill.routedQMM.work") }
+            return (buffer, work.count / 4)
+        }
+        let gateUpWork = try workItems(edge: Self.gateUpRows)
+        let downWork =
+            Self.downEdge == Self.gateUpRows ? gateUpWork : try workItems(edge: Self.downEdge)
+        let gateUpParams: [UInt32] = [
+            UInt32(f), UInt32(d),
+            offsets.gateWOff, offsets.gateSOff, offsets.gateBOff,
+            offsets.upWOff, offsets.upSOff, offsets.upBOff, 64,
+        ]
+        let downParams: [UInt32] = [
+            UInt32(d), UInt32(f),
+            offsets.downWOff, offsets.downSOff, offsets.downBOff, 0, 0, 0, 64,
+        ]
+        for (pso, x, y, params, n, work, edge) in [
+            (gateUp, rowsIn, activated, gateUpParams, f, gateUpWork, Self.gateUpColumns),
+            (down, activated, rowsOut, downParams, d, downWork, Self.downEdge),
+        ] {
+            guard let enc = cb.makeComputeCommandEncoder() else {
+                throw MetalError.commandEncoderFailed
+            }
+            enc.setComputePipelineState(pso)
+            enc.setBuffer(x, offset: 0, index: 0)
+            enc.setBuffer(y, offset: 0, index: 1)
+            enc.setBytes(&addresses, length: addresses.count * 8, index: 2)
+            enc.setBuffer(work.buffer, offset: 0, index: 3)
+            var p = params
+            enc.setBytes(&p, length: p.count * 4, index: 4)
+            for view in binding.views { enc.useResource(view.buffer, usage: .read) }
+            enc.dispatchThreadgroups(
+                MTLSize(width: n / edge, height: work.count, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
+            enc.endEncoding()
+        }
     }
 
     private static func view(

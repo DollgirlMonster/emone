@@ -66,15 +66,19 @@ struct NgramTableReaderTests {
         var want: [UInt32] = (0..<500).map { UInt32(($0 * 37) % Int(Self.rowCount)) }
         want += [5, 5, 5] + (0..<Self.rowCount).reversed().map { UInt32($0) }
         var serial = [Float16](repeating: -1, count: want.count * Self.rowDim)
-        var concurrent = [Float16](repeating: -2, count: want.count * Self.rowDim)
         try serial.withUnsafeMutableBytes {
             try r.gather(rows: want, into: try #require($0.baseAddress))
         }
-        try concurrent.withUnsafeMutableBytes {
-            try r.gatherConcurrently(rows: want, into: try #require($0.baseAddress))
+        // Repeated rows are read once and copied, by any number of readers.
+        for threads in [1, 3, 128] {
+            var concurrent = [Float16](repeating: -2, count: want.count * Self.rowDim)
+            try concurrent.withUnsafeMutableBytes {
+                try r.gatherConcurrently(
+                    rows: want, into: try #require($0.baseAddress), threads: threads)
+            }
+            #expect(serial == concurrent, "threads \(threads)")
+            #expect(concurrent[3 * Self.rowDim] == Float16(want[3]))
         }
-        #expect(serial == concurrent)
-        #expect(concurrent[3 * Self.rowDim] == Float16(want[3]))
     }
 
     @Test("The concurrent gather refuses a bad row before reading any")

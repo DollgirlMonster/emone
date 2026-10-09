@@ -20,6 +20,35 @@ struct FrontierTrackerTests {
         #expect(tracker.captureTargets(render: render, resumeFrom: 0, held: []) == [36, 16, 8, 4])
     }
 
+    /// A render that edits an earlier message diverges at M; the next turn
+    /// edits the same place. The anchor goes to M itself, not the chunk rung
+    /// below it, so the next turn resumes at M instead of re-prefilling the
+    /// gap (Qwen3.8's 16K chunks put that rung up to a chunk short).
+    @Test func theAnchorGoesToTheDivergencePoint() {
+        var tracker = FrontierTracker(chunkTokens: 16_384)
+        tracker.observe(tokens(0..<30_000))
+        var next = tokens(0..<31_000)
+        next[25_000] = -1  // a memory log appended to the system prompt
+        tracker.observe(next)
+        let divergence = tracker.divergencePoint(in: next)
+        #expect(divergence == 25_000)
+        let anchor = FrontierTracker.anchor(
+            proven: 0, systemBlockEnd: 9_000, divergence: divergence)
+        #expect(anchor == 25_000)
+        let targets = tracker.captureTargets(
+            render: next, resumeFrom: 0, held: [], anchor: anchor)
+        #expect(targets.contains(25_000))
+        #expect(targets.contains(16_384))
+        // A render that reseeds the frontier (another client) has no
+        // divergence point to offer.
+        var other = FrontierTracker(chunkTokens: 16_384)
+        let foreign = tokens(0..<20_000, salt: 7)
+        other.observe(foreign)
+        #expect(other.divergencePoint(in: foreign) == 0)
+        // A small divergence still falls back to the system block.
+        #expect(FrontierTracker.anchor(proven: 0, systemBlockEnd: 9_000, divergence: 600) == 9_000)
+    }
+
     @Test func aBoundaryEqualToTheRenderLengthIsNeverATarget() {
         var tracker = FrontierTracker(chunkTokens: 4)
         let render = tokens(0..<16)

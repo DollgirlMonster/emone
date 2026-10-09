@@ -162,3 +162,45 @@ kernel void shared_int8_gate_up_act_simd(
         act[row] = half(int8_hidden_activation(gate_half) * up_half);
     }
 }
+
+// `dequant_int8_gemv_simd` for a one-row weight over many independent inputs:
+// one simdgroup per input row instead of one dispatch per input row (see
+// `bf16_gemv_simd_one_row_many_x`). Same loop and reduction per row, so every
+// output is the same bits.
+[[kernel, max_total_threads_per_threadgroup(256)]]
+kernel void dequant_int8_gemv_simd_one_row_many_x(
+    device const uint8_t* W       [[buffer(0)]],
+    device const bfloat*  scales  [[buffer(1)]],
+    device const bfloat*  biases  [[buffer(2)]],
+    device const half*    x       [[buffer(3)]],
+    device half*          y       [[buffer(4)]],
+    constant uint&        count   [[buffer(5)]],
+    constant uint&        N       [[buffer(6)]],
+    constant uint&        xStride [[buffer(7)]],
+    constant uint&        yStride [[buffer(8)]],
+    uint                  tg_idx  [[threadgroup_position_in_grid]],
+    uint                  sg_idx  [[simdgroup_index_in_threadgroup]],
+    uint                  lane    [[thread_index_in_simdgroup]]
+) {
+    const uint token = tg_idx * kRowsPerTGInt8 + sg_idx;
+    if (token >= count) return;
+    const uint n_groups = N / kInt8GroupSize;
+    device const half* xr = x + token * xStride;
+    float acc = 0.0f;
+    for (uint g = 0; g < n_groups; ++g) {
+        float s = float(scales[g]);
+        float b = float(biases[g]);
+        uint i0 = g * kInt8GroupSize + lane * 2;
+        uint i1 = i0 + 1;
+        float q0 = float(uint(W[i0]));
+        float q1 = float(uint(W[i1]));
+        float x0 = float(xr[i0]);
+        float x1 = float(xr[i1]);
+        float dot_qx = q0 * x0 + q1 * x1;
+        float sum_x  = x0 + x1;
+        acc = fma(s, dot_qx, acc);
+        acc = fma(b, sum_x,  acc);
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) y[token * yStride] = half(acc);
+}

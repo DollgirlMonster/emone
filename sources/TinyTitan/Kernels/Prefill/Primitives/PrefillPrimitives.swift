@@ -91,29 +91,37 @@ final class PrefillRMSNorm {
     }
 }
 
-/// `PrefillInt4QMM`'s product on the simdgroup matrix units: 32 x 32 output
-/// tiles, fp32 accumulation, weights dequantized in float
-/// (`prefill_affine_qmm_simdgroup`). One pipeline per weight width, so one
-/// instance serves the 4-bit and 8-bit tensors of a mixed install.
+/// A batched prefill projection on the simdgroup matrix units
+/// (`prefill_dense_qmm_<BM>x<BN>`): K in steps of 32 dequantized to half in
+/// threadgroup memory, fp32 accumulation, four simdgroups per output tile; the
+/// routed experts' QMM with one weight matrix. 64 x 64 tiles where N allows
+/// (~7.3 TFLOPS on an M1 Max at Qwen3.8's GDN shapes, where the MPP QMM runs
+/// ~4.1), 32 x 32 otherwise (~5.5). One pipeline per tile and weight width,
+/// so one instance serves the 4-bit and 8-bit tensors of a mixed install.
 final class PrefillAffineSimdgroupQMM {
-    static let tile = 32
     static let threads = 128
-    private let pipelines: [Int: MTLComputePipelineState]
+    /// Output tile edge for a width: 64 when N is whole 64-column tiles.
+    static func tile(n: Int) -> Int { n % 64 == 0 ? 64 : 32 }
+    private let pipelines: [Int: [Int: MTLComputePipelineState]]
 
     init(context: MetalContext) throws {
-        var made: [Int: MTLComputePipelineState] = [:]
+        var made: [Int: [Int: MTLComputePipelineState]] = [:]
         for bits in [4, 8] {
-            made[bits] = try context.pipeline(
-                "prefill_affine_qmm_simdgroup",
-                constants: [MetalFunctionConstant(index: 78, value: .uint32(UInt32(bits)))])
+            for edge in [32, 64] {
+                made[edge, default: [:]][bits] = try context.pipeline(
+                    "prefill_dense_qmm_\(edge)x\(edge)",
+                    constants: [MetalFunctionConstant(index: 78, value: .uint32(UInt32(bits)))])
+            }
         }
         self.pipelines = made
     }
 
-    /// Whether this kernel takes the shape: a whole number of quantization
-    /// groups along K and a width it was built for.
-    func accepts(bits: Int, k: Int) -> Bool {
-        pipelines[bits] != nil && k > 0 && k % Quantization.groupSize == 0
+    /// Whether this kernel takes the shape: whole 32-column output tiles, a
+    /// whole number of quantization groups along K, and a width it was built
+    /// for.
+    func accepts(bits: Int, n: Int, k: Int) -> Bool {
+        pipelines[32]?[bits] != nil && n > 0 && n % 32 == 0
+            && k > 0 && k % Quantization.groupSize == 0
     }
 
     func encode(
@@ -125,7 +133,8 @@ final class PrefillAffineSimdgroupQMM {
         y: MTLBuffer, yOffset: Int = 0,
         t: Int, n: Int, k: Int, bits: Int
     ) throws {
-        guard let pipeline = pipelines[bits], k % Quantization.groupSize == 0, t > 0, n > 0
+        let edge = Self.tile(n: n)
+        guard accepts(bits: bits, n: n, k: k), t > 0, let pipeline = pipelines[edge]?[bits]
         else {
             throw MetalError.commandEncoderFailed
         }
@@ -133,21 +142,17 @@ final class PrefillAffineSimdgroupQMM {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pipeline)
-        enc.setBuffer(weights, offset: weightsOffset, index: 0)
-        enc.setBuffer(scales, offset: scalesOffset, index: 1)
-        enc.setBuffer(biases, offset: biasesOffset, index: 2)
-        enc.setBuffer(x, offset: xOffset, index: 3)
-        enc.setBuffer(y, offset: yOffset, index: 4)
-        var tVar = UInt32(t)
-        var nVar = UInt32(n)
-        var kVar = UInt32(k)
-        enc.setBytes(&tVar, length: MemoryLayout<UInt32>.size, index: 5)
-        enc.setBytes(&nVar, length: MemoryLayout<UInt32>.size, index: 6)
-        enc.setBytes(&kVar, length: MemoryLayout<UInt32>.size, index: 7)
+        enc.setBuffer(x, offset: xOffset, index: 0)
+        enc.setBuffer(y, offset: yOffset, index: 1)
+        enc.setBuffer(weights, offset: weightsOffset, index: 2)
+        var m = UInt32(t)
+        enc.setBytes(&m, length: MemoryLayout<UInt32>.size, index: 3)
+        var params: [UInt32] = [UInt32(n), UInt32(k), 0, 0, 0, 0, 0, 0, UInt32(Quantization.groupSize)]
+        enc.setBytes(&params, length: params.count * 4, index: 4)
+        enc.setBuffer(scales, offset: scalesOffset, index: 5)
+        enc.setBuffer(biases, offset: biasesOffset, index: 6)
         enc.dispatchThreadgroups(
-            MTLSize(
-                width: (n + Self.tile - 1) / Self.tile,
-                height: (t + Self.tile - 1) / Self.tile, depth: 1),
+            MTLSize(width: n / edge, height: (t + edge - 1) / edge, depth: 1),
             threadsPerThreadgroup: MTLSize(width: Self.threads, height: 1, depth: 1))
         enc.endEncoding()
     }

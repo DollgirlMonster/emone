@@ -637,6 +637,253 @@ kernel void gdn_delta_step_prefill(
 }
 
 // ----------------------------------------------------------------------------
+// Chunked prefill: the same recurrence in WY form over 8-token chunks, on
+// 8x8 simdgroup matrices. A port of MLX's `gated_delta_fused_chunk`
+// (ml-explore/mlx, mlx/backend/metal/kernels/gated_delta_update.h, MIT),
+// reading this module's buffers directly: q/k/v from `conv_out` rows, and g
+// and beta computed from the a/b projections as `gdn_delta_step_prefill`
+// does, with log g taken as -exp(A_log) * softplus(a + dt_bias) instead of
+// the log of g.
+//
+// One simdgroup owns 8 value columns of one head and carries their state
+// slice S[Dk x 8] in registers across the chunks; four simdgroups per
+// threadgroup. Within a chunk, with Gamma the cumulative log-decay:
+//   T     = (I + strict_lower(beta k k^T))^-1   (exact: the series ends at P^7)
+//   W     = diag(exp Gamma) T diag(beta) K
+//   U     = (T * decay(i,j)) diag(beta) V
+//   delta = U - W S
+//   y     = (Q K^T * decay(i,j), lower incl. diag) delta + diag(exp Gamma) Q S
+//   S     = exp(Gamma_C) S + (K * exp(Gamma_C - Gamma_j))^T delta
+// Every product is FP32. Sums run in a different order from the sequential
+// kernel, so outputs agree by rounding, not bit for bit.
+// ----------------------------------------------------------------------------
+
+constant constexpr short kGdnChunk = 8;
+
+typedef simdgroup_matrix<float, 8, 8> gdnc_tile;
+
+// Element `i` (0 or 1) of the two this lane holds in an 8x8 tile, at
+// (fm, fn + i).
+#define GDNC_AT(TILE, I) TILE.thread_elements()[I]
+
+// One chunk of `valid` rows. Pointers are positioned at the chunk's first
+// row: q/k/v at their row-0 element (row stride `C`), a/b at this head's
+// row-0 element (row stride `Hv`), y at this simdgroup's row-0 element (row
+// stride `ys`).
+template <int Dk, bool Bounded>
+static inline void gdnc_process_chunk(
+    thread gdnc_tile (&S)[Dk / 8],
+    device const half* q, device const half* k, device const half* v,
+    device const half* a, device const half* b, device half* y,
+    uint C, uint Hv, uint ys, float expA, float dtb,
+    short valid, short fm, short fn, ushort lane,
+    threadgroup float* gamma)
+{
+    // Cumulative log decay over the chunk; lanes past `valid` add nothing.
+    const float logG = (lane < ushort(valid))
+        ? -expA * gdn_softplus(float(a[lane * Hv]) + dtb) : 0.0f;
+    const float cum = simd_prefix_inclusive_sum(logG);
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    if (lane < ushort(kGdnChunk)) gamma[lane] = cum;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+
+    const float gFm = exp(gamma[fm]);
+    const float gFmFn0 = exp(gamma[fm] - gamma[fn]);
+    const float gFmFn1 = exp(gamma[fm] - gamma[fn + 1]);
+    const float gCFn0 = exp(gamma[kGdnChunk - 1] - gamma[fn]);
+    const float gCFn1 = exp(gamma[kGdnChunk - 1] - gamma[fn + 1]);
+    const float gC = exp(gamma[kGdnChunk - 1]);
+    const float betaFm = (fm < valid)
+        ? 1.0f / (1.0f + exp(-float(b[fm * Hv]))) : 0.0f;
+
+    // Row-major load of an 8x8 block (rows = tokens), and its transpose.
+    #define GDNC_LOAD(M, SRC)                                                  \
+        GDNC_AT(M, 0) = (!Bounded || fm < valid) ? float((SRC)[fm * C + fn]) : 0.0f;     \
+        GDNC_AT(M, 1) = (!Bounded || fm < valid) ? float((SRC)[fm * C + fn + 1]) : 0.0f;
+    #define GDNC_LOAD_T(M, SRC)                                                \
+        GDNC_AT(M, 0) = (!Bounded || fn < valid) ? float((SRC)[fn * C + fm]) : 0.0f;     \
+        GDNC_AT(M, 1) = (!Bounded || fn + 1 < valid) ? float((SRC)[(fn + 1) * C + fm]) : 0.0f;
+
+    gdnc_tile kTile, ktTile, qTile, vTile, wTile, uTile, wsTile, delta, tmp, qkt, kd;
+
+    // A = strict_lower(beta k k^T); T = (I - A)(I + A^2)(I + A^4) = (I + A)^-1.
+    gdnc_tile kkt = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    _Pragma("clang loop unroll(full)")
+    for (int kk = 0; kk < Dk; kk += 8) {
+        GDNC_LOAD(kTile, k + kk)
+        GDNC_LOAD_T(ktTile, k + kk)
+        simdgroup_multiply_accumulate(kkt, kTile, ktTile, kkt);
+    }
+    gdnc_tile p, tinv;
+    GDNC_AT(p, 0) = fn >= fm ? 0.0f : GDNC_AT(kkt, 0) * betaFm;
+    GDNC_AT(p, 1) = fn + 1 >= fm ? 0.0f : GDNC_AT(kkt, 1) * betaFm;
+    GDNC_AT(tinv, 0) = (fm == fn ? 1.0f : 0.0f) - GDNC_AT(p, 0);
+    GDNC_AT(tinv, 1) = (fm == fn + 1 ? 1.0f : 0.0f) - GDNC_AT(p, 1);
+    _Pragma("clang loop unroll(full)")
+    for (int step = 1; (1 << step) < kGdnChunk; ++step) {
+        simdgroup_multiply(p, p, p);
+        simdgroup_multiply_accumulate(tinv, tinv, p, tinv);
+    }
+
+    // W S, with W = diag(exp Gamma) T diag(beta) K.
+    wsTile = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    _Pragma("clang loop unroll(full)")
+    for (int kk = 0; kk < Dk; kk += 8) {
+        GDNC_LOAD(kTile, k + kk)
+        GDNC_AT(kTile, 0) *= betaFm;
+        GDNC_AT(kTile, 1) *= betaFm;
+        simdgroup_multiply(wTile, tinv, kTile);
+        GDNC_AT(wTile, 0) *= gFm;
+        GDNC_AT(wTile, 1) *= gFm;
+        simdgroup_multiply_accumulate(wsTile, wTile, S[kk / 8], wsTile);
+    }
+
+    // delta = U - W S, with U = (T * decay) diag(beta) V.
+    GDNC_AT(tinv, 0) *= fn > fm ? 0.0f : gFmFn0;
+    GDNC_AT(tinv, 1) *= fn + 1 > fm ? 0.0f : gFmFn1;
+    GDNC_LOAD(vTile, v)
+    GDNC_AT(vTile, 0) *= betaFm;
+    GDNC_AT(vTile, 1) *= betaFm;
+    simdgroup_multiply(uTile, tinv, vTile);
+    GDNC_AT(delta, 0) = GDNC_AT(uTile, 0) - GDNC_AT(wsTile, 0);
+    GDNC_AT(delta, 1) = GDNC_AT(uTile, 1) - GDNC_AT(wsTile, 1);
+
+    // y = (Q K^T * decay) delta + diag(exp Gamma) Q S.
+    tmp = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    qkt = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    _Pragma("clang loop unroll(full)")
+    for (int kk = 0; kk < Dk; kk += 8) {
+        GDNC_LOAD(qTile, q + kk)
+        GDNC_LOAD_T(kTile, k + kk)
+        simdgroup_multiply_accumulate(qkt, qTile, kTile, qkt);
+        GDNC_AT(qTile, 0) *= gFm;
+        GDNC_AT(qTile, 1) *= gFm;
+        simdgroup_multiply_accumulate(tmp, qTile, S[kk / 8], tmp);
+    }
+    GDNC_AT(qkt, 0) *= fn > fm ? 0.0f : gFmFn0;
+    GDNC_AT(qkt, 1) *= fn + 1 > fm ? 0.0f : gFmFn1;
+    gdnc_tile out;
+    simdgroup_multiply_accumulate(out, qkt, delta, tmp);
+    if (fm < valid) {
+        y[fm * ys + fn] = half(GDNC_AT(out, 0));
+        y[fm * ys + fn + 1] = half(GDNC_AT(out, 1));
+    }
+
+    // S = exp(Gamma_C) S + (K * exp(Gamma_C - Gamma_j))^T delta.
+    _Pragma("clang loop unroll(full)")
+    for (int kk = 0; kk < Dk; kk += 8) {
+        GDNC_LOAD_T(kTile, k + kk)
+        GDNC_AT(kTile, 0) *= gCFn0;
+        GDNC_AT(kTile, 1) *= gCFn1;
+        simdgroup_multiply(kd, kTile, delta);
+        GDNC_AT(S[kk / 8], 0) = gC * GDNC_AT(S[kk / 8], 0) + GDNC_AT(kd, 0);
+        GDNC_AT(S[kk / 8], 1) = gC * GDNC_AT(S[kk / 8], 1) + GDNC_AT(kd, 1);
+    }
+    #undef GDNC_LOAD
+    #undef GDNC_LOAD_T
+}
+
+// Grid: threadgroups (1, Dv / 32, Hv) of (32, 4, 1) threads; simdgroup
+// `tpos.y` owns value columns [(tg.y * 4 + tpos.y) * 8, +8) of head tg.z.
+// Buffer bindings match gdn_delta_step_prefill (no checkpoint: the wrapper
+// takes the sequential kernel when a first-row checkpoint is asked for).
+template <int Dk>
+static inline void gdn_delta_chunk_prefill_body(
+    device const half*   conv_out,
+    device const half*   a_proj,
+    device const half*   b_proj,
+    device const bfloat* A_log,
+    device const bfloat* dt_bias,
+    device float*        state,
+    device half*         y,
+    uint Hk, uint Hv, uint Dv, uint T, uint C,
+    uint3 tg, uint3 tpos, ushort lane,
+    threadgroup float* gammaAll)
+{
+    const uint h = tg.z;
+    const uint dv0 = (tg.y * 4u + tpos.y) * 8u;
+    if (h >= Hv || dv0 >= Dv) return;
+    const uint hk = h / (Hv / Hk);
+
+    // Lane layout of an 8x8 simdgroup matrix (row fm, columns fn and fn + 1).
+    const short qid = short(lane / 4);
+    const short fm = (qid & 4) + short((lane / 2) % 4);
+    const short fn = (qid & 2) * 2 + short(lane % 2) * 2;
+
+    const float expA = exp(float(A_log[h]));
+    const float dtb = float(dt_bias[h]);
+    threadgroup float* gamma = gammaAll + tpos.y * kGdnChunk;
+
+    device const half* q = conv_out + hk * Dk;
+    device const half* k = conv_out + Hk * Dk + hk * Dk;
+    device const half* v = conv_out + 2u * Hk * Dk + h * Dv + dv0;
+    device const half* a = a_proj + h;
+    device const half* b = b_proj + h;
+    device half* yOut = y + h * Dv + dv0;
+    const uint ys = Hv * Dv;
+
+    // State rows dv0..dv0+7 of [Dv, Dk], loaded transposed: S[kk/8] holds
+    // the (k = kk.., v = dv0..) block.
+    device float* srow = state + (h * Dv + dv0) * Dk;
+    gdnc_tile S[Dk / 8];
+    _Pragma("clang loop unroll(full)")
+    for (int kk = 0; kk < Dk; kk += 8) {
+        simdgroup_load(S[kk / 8], srow + kk, Dk, ulong2(0, 0), true);
+    }
+
+    uint t = 0;
+    for (; t + uint(kGdnChunk) <= T; t += uint(kGdnChunk)) {
+        gdnc_process_chunk<Dk, false>(
+            S, q, k, v, a, b, yOut, C, Hv, ys, expA, dtb,
+            kGdnChunk, fm, fn, lane, gamma);
+        q += kGdnChunk * C; k += kGdnChunk * C; v += kGdnChunk * C;
+        a += kGdnChunk * Hv; b += kGdnChunk * Hv; yOut += kGdnChunk * ys;
+    }
+    if (t < T) {
+        gdnc_process_chunk<Dk, true>(
+            S, q, k, v, a, b, yOut, C, Hv, ys, expA, dtb,
+            short(T - t), fm, fn, lane, gamma);
+    }
+
+    _Pragma("clang loop unroll(full)")
+
+    for (int kk = 0; kk < Dk; kk += 8) {
+        simdgroup_store(S[kk / 8], srow + kk, Dk, ulong2(0, 0), true);
+    }
+}
+
+#define GDN_DELTA_CHUNK_PREFILL(DK)                                            \
+kernel void gdn_delta_chunk_prefill_dk##DK(                                    \
+    device const half*   conv_out [[buffer(0)]],                               \
+    device const half*   a_proj   [[buffer(1)]],                               \
+    device const half*   b_proj   [[buffer(2)]],                               \
+    device const bfloat* A_log    [[buffer(3)]],                               \
+    device const bfloat* dt_bias  [[buffer(4)]],                               \
+    device float*        state    [[buffer(5)]],                               \
+    device half*         y        [[buffer(6)]],                               \
+    constant uint&       kHeads   [[buffer(7)]],                               \
+    constant uint&       vHeads   [[buffer(8)]],                               \
+    constant uint&       keyDim   [[buffer(9)]],                               \
+    constant uint&       valueDim [[buffer(10)]],                              \
+    constant uint&       rows     [[buffer(11)]],                              \
+    constant uint&       rowStride [[buffer(12)]],                             \
+    uint3  tg   [[threadgroup_position_in_grid]],                              \
+    uint3  tpos [[thread_position_in_threadgroup]],                            \
+    ushort lane [[thread_index_in_simdgroup]])                                 \
+{                                                                              \
+    threadgroup float gammaAll[kGdnChunk * 4];                                 \
+    gdn_delta_chunk_prefill_body<DK>(                                          \
+        conv_out, a_proj, b_proj, A_log, dt_bias, state, y,                    \
+        kHeads, vHeads, valueDim, rows, rowStride, tg, tpos, lane, gammaAll);  \
+}
+
+GDN_DELTA_CHUNK_PREFILL(32)
+GDN_DELTA_CHUNK_PREFILL(64)
+GDN_DELTA_CHUNK_PREFILL(128)
+#undef GDN_DELTA_CHUNK_PREFILL
+#undef GDNC_AT
+
+// ----------------------------------------------------------------------------
 // Gated output norm: out = rmsnorm(y; weight, eps) * gate(z), per value head,
 // where gate is silu or sigmoid (FC_GDN_SIGMOID_GATE).
 // One threadgroup per (head, row), 128 threads. Norm statistics span one
