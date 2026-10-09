@@ -80,6 +80,7 @@ import Testing
         let q36four = ModelProfile.resolve(
             modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 4, environment: [:])
         #expect(q36four.expertCacheBudgetBytes == 17 << 30)
+        #expect(q36four.prefillChunkTokens == 16_384)
         // 64 GB holds the whole expert set: all 256 slots.
         #expect(
             RuntimeConfiguration.expertCacheSlots(

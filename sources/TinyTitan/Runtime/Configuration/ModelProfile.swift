@@ -168,8 +168,14 @@ public struct ModelProfile: Sendable, Equatable {
             // after 47,587 of context: Qwen 3.6 +0.002 nats (t +0.57), Ornith
             // 1.5 -0.001 (t -0.10), no measurable change. 4-bit rows only, as
             // above.
+            // Prefill chunk 16,384 (2026-10-09, M1 Max, ~16.9K-token prompt, two
+            // rounds, output byte-identical): Qwen 3.6 26.4 / 28.0 -> 20.3 / 20.3 s
+            // (-25%; 8,192 -21%, 32,768 -22% and noisier); Ornith 1.5 29.0 / 28.9
+            // -> 23.4 / 23.3 s (-19%). Decode and RSS unchanged. With the whole
+            // expert set resident the saving is per-chunk overhead, not expert
+            // reads (expert fetch + tiles 12.0 -> 6.7 s).
             Key("qwen3.6-35b-a3b", 4): (
-                17 << 30, 1, 4_096,
+                17 << 30, 1, 16_384,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
                 true, true, false, false, true, false, true, true, false, true, true, true, false,
@@ -187,7 +193,7 @@ public struct ModelProfile: Sendable, Equatable {
             // 8.69 / 9.12 vs 96 10.83 / 10.86, swap flat on every arm.
             // 4-bit: 17 GiB, the whole expert set, as Qwen 3.6 (same geometry).
             Key("ornith-1.5-35b-a3b", 4): (
-                17 << 30, 1, 4_096, GenerationDefaults.house,
+                17 << 30, 1, 16_384, GenerationDefaults.house,
                 true, true, false, false, true, false, true, true, false, true, true, true, false,
                 true, true
             ),
