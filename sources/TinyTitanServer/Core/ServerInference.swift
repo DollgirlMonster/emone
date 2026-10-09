@@ -1644,7 +1644,23 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         // stop ids and special tokens coincide across a loaded folder today,
         // which is why this looked harmless; it is not guaranteed, and the
         // generation loop is the wrong place to rely on it.
-        let result = try await runRawCompletion(
+        // Bank the checkpoints captured mid-prefill. Each is a pure prefix
+        // state, so it stands however the rest of this turn goes -- including
+        // when it ends in a cancellation or an error, which is why this also
+        // runs on the throwing path: a client that gives up mid-prefill (a
+        // timeout, a hedge to another model) keeps the chunks already paid for.
+        func bankFrontierCaptures() async {
+            let captures = state.frontierCaptures
+            state.frontierCaptures = []
+            for capture in captures {
+                await persistFrontierCheckpoint(
+                    tokens: Array(promptIDs.prefix(capture.position)),
+                    snapshot: capture.snapshot)
+            }
+        }
+        let result: RawDecodeResult
+        do {
+            result = try await runRawCompletion(
             producer: activeProducer,
             tokenizer: renderTokenizer,
             promptIds: activePromptIDs,
@@ -1692,6 +1708,10 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                     state.shouldStop = true
                 }
             })
+        } catch {
+            await bankFrontierCaptures()
+            throw error
+        }
         liveGeneration?.complete(
             promptTokens: result.prefillTokens, cachedTokens: result.cachedPromptTokens,
             newTokens: result.newTokens)
@@ -1700,14 +1720,7 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         let hiddenStates: HiddenStatesPayload? =
             request.hiddenStates == nil
             ? nil : HiddenStatesPayload(try runner.finishHiddenCapture())
-        // Bank the checkpoints captured mid-prefill. Each is a pure prefix
-        // state, so it stands however the rest of this turn goes.
-        let captures = state.frontierCaptures
-        state.frontierCaptures = []
-        for capture in captures {
-            await persistFrontierCheckpoint(
-                tokens: Array(promptIDs.prefix(capture.position)), snapshot: capture.snapshot)
-        }
+        await bankFrontierCaptures()
         emitGenerationDiagnostics(
             activeProducer: activeProducer,
             result: result,
