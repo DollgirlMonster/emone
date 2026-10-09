@@ -204,19 +204,38 @@ final class Attention {
         return max(1, min(defaultChunks, min(maxChunks, eff)))
     }
 
+    /// `TINYTITAN_ATTN_DECODE_LONG=1`: dense full attention past
+    /// `longDecodeMinKeys` takes the simdgroup pass 1 and one chunk per
+    /// `longDecodeChunkKeys` keys (up to `maxChunks`) instead of a fixed 16.
+    /// The serial pass 1 costs ~10 us per key per threadgroup, so at a fixed 16
+    /// chunks decode slows linearly with context: Qwen 3.6 35B-A3B 4-bit on an
+    /// M1 Max fell from ~23 tok/s near empty to ~3 tok/s at 95K. Off by default
+    /// until a surprisal A/B clears it: the simd kernel sums keys in another
+    /// order.
+    static let longDecodeEnabled =
+        ProcessInfo.processInfo.environment["TINYTITAN_ATTN_DECODE_LONG"] == "1"
+    static let longDecodeMinKeys = 4_096
+    static let longDecodeChunkKeys = 1_024
+
     static func splitGeometry(
         numQHeads: UInt32,
         numKVHeads: UInt32,
         seqLen: UInt32,
         kvStart: UInt32,
-        preferGQASWA: Bool
+        preferGQASWA: Bool,
+        longDecode: Bool = false
     ) -> AttentionSplitGeometry {
         let qPerKV = Int(numQHeads / numKVHeads)
         let useSWAGQAPartial = preferGQASWA && qPerKV <= 2
         let effectiveLength = Int(seqLen) - Int(kvStart)
-        let baseChunks = Self.chunkCount(
+        var baseChunks = Self.chunkCount(
             effLen: effectiveLength,
             preferGQASWA: useSWAGQAPartial)
+        if longDecode, !useSWAGQAPartial, effectiveLength >= Self.longDecodeMinKeys {
+            let byLength =
+                (effectiveLength + Self.longDecodeChunkKeys - 1) / Self.longDecodeChunkKeys
+            baseChunks = max(baseChunks, min(Self.maxChunks, byLength))
+        }
         let numChunks =
             useSWAGQAPartial
             ? max(baseChunks, min(Self.maxChunks, baseChunks * qPerKV))
@@ -358,8 +377,12 @@ final class Attention {
             numKVHeads: numKVHeads,
             seqLen: seqLen,
             kvStart: kvStart,
-            preferGQASWA: preferGQASWA)
+            preferGQASWA: preferGQASWA,
+            longDecode: Self.longDecodeEnabled && keepMask == nil && ringCapacity == 0)
         let useSWAGQAPartial = geometry.useSWAGroupedPartial
+        let longDense =
+            Self.longDecodeEnabled && keepMask == nil
+            && geometry.effectiveLength >= Self.longDecodeMinKeys
         let nChunks = geometry.numChunks
         let chunkLen = geometry.chunkLength
         var partialPSO = partialPipeline(
@@ -369,7 +392,8 @@ final class Attention {
             numChunks: nChunks,
             useGQAPartial: useSWAGQAPartial,
             ringCapacity: ringCapacity)
-        if keepMask != nil, !useSWAGQAPartial, ringCapacity == 0, headDim % 32 == 0, headDim <= 256,
+        if keepMask != nil || longDense, !useSWAGQAPartial, ringCapacity == 0, headDim % 32 == 0,
+            headDim <= 256,
             simdPartialEnabled,
             let simd = simdPartialPipeline(
                 headDim: headDim, numQHeads: numQHeads,

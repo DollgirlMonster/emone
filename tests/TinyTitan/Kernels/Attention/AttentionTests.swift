@@ -49,6 +49,22 @@ import TinyTitanValidationSupport
         #expect(!full.useSWAGroupedPartial)
     }
 
+    @Test func attentionSplitGeometry_longDecodeScalesChunksWithContext() throws {
+        func chunks(_ seqLen: UInt32, long: Bool) -> Int {
+            Attention.splitGeometry(
+                numQHeads: 16, numKVHeads: 2, seqLen: seqLen, kvStart: 0,
+                preferGQASWA: false, longDecode: long
+            ).numChunks
+        }
+        // Below the threshold, or switched off, the fixed 16 stands.
+        #expect(chunks(4_000, long: true) == 16)
+        #expect(chunks(95_000, long: false) == 16)
+        // One chunk per 1,024 keys, never fewer than 16 nor more than the scratch holds.
+        #expect(chunks(16_384, long: true) == 16)
+        #expect(chunks(40_000, long: true) == 40)
+        #expect(chunks(95_000, long: true) == Attention.maxChunks)
+    }
+
     // MARK: - scale=1.0 path
 
     /// Verify the kernel honours the runtime `scale` argument by computing
