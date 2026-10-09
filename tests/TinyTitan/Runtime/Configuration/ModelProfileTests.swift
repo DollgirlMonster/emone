@@ -119,6 +119,7 @@ import Testing
             #expect(row.gdnChunked == measured, name)
             #expect(row.denseQMM == measured, name)
             #expect(row.denseFlash == measured, name)
+            #expect(row.decodeLong == hybrids.contains(key), name)
         }
         let fallback = ModelProfile.resolve(
             modelID: "unknown", family: .qwen36, weightBits: 4, environment: [:])
@@ -128,6 +129,11 @@ import Testing
         #expect(!fallback.prefillDenseQMM && !fallback.prefillDenseFlash)
         #expect(!fallback.prefillQSAPacked)
         #expect(!fallback.prefillRouterLogits)
+        #expect(!fallback.decodeLong)
+        let longOff = ModelProfile.resolve(
+            modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 4,
+            environment: ["TINYTITAN_ATTN_DECODE_LONG": "0"])
+        #expect(!longOff.decodeLong)
         let forcedOff = ModelProfile.resolve(
             modelID: "qwen3.8-flash-next", family: .qwen38flash, weightBits: 4,
             environment: ["TINYTITAN_PREFILL_ROUTER_LOGITS": "0"])

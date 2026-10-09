@@ -214,6 +214,10 @@ final class Attention {
     /// order.
     static let longDecodeEnabled =
         ProcessInfo.processInfo.environment["TINYTITAN_ATTN_DECODE_LONG"] == "1"
+    /// Set from `ModelProfile.decodeLong` by the runner, which has already
+    /// applied the environment; nil (tests, other callers) reads it here.
+    var longDecodeOverride: Bool?
+    private var longDecodeOn: Bool { longDecodeOverride ?? Self.longDecodeEnabled }
     static let longDecodeMinKeys = 4_096
     static let longDecodeChunkKeys = 1_024
 
@@ -378,10 +382,10 @@ final class Attention {
             seqLen: seqLen,
             kvStart: kvStart,
             preferGQASWA: preferGQASWA,
-            longDecode: Self.longDecodeEnabled && keepMask == nil && ringCapacity == 0)
+            longDecode: longDecodeOn && keepMask == nil && ringCapacity == 0)
         let useSWAGQAPartial = geometry.useSWAGroupedPartial
         let longDense =
-            Self.longDecodeEnabled && keepMask == nil
+            longDecodeOn && keepMask == nil
             && geometry.effectiveLength >= Self.longDecodeMinKeys
         let nChunks = geometry.numChunks
         let chunkLen = geometry.chunkLength

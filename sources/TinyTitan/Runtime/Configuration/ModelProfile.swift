@@ -91,6 +91,12 @@ public struct ModelProfile: Sendable, Equatable {
     /// top-k pass (`prefill_router_topk_logits`), instead of the fused scalar
     /// router. `TINYTITAN_PREFILL_ROUTER_LOGITS` overrides.
     public var prefillRouterLogits: Bool
+    /// Decode attention past 4,096 keys with no selection on the simdgroup
+    /// pass 1, one chunk per 1,024 keys (`Attention.longDecodeEnabled`),
+    /// instead of the serial pass 1 at a fixed 16 chunks, whose cost grows
+    /// with context. Same rule as the prefill switches;
+    /// `TINYTITAN_ATTN_DECODE_LONG` overrides.
+    public var decodeLong: Bool
 
     /// The shipped entries. Measured values, each on its own install.
     public static let table:
@@ -101,7 +107,7 @@ public struct ModelProfile: Sendable, Equatable {
             hcFused: Bool, qsaSelect: Bool, keepWired: Bool,
             wideMPP: Bool, routedMPP: Bool, gdnChunked: Bool, qsaFlash: Bool,
             routedQMM: Bool, denseQMM: Bool, denseFlash: Bool, qsaPacked: Bool,
-            routerLogits: Bool
+            routerLogits: Bool, decodeLong: Bool
         )] = [
             // The 35B rows take prefetch depth 1 and hold the expert cache wired
             // through prefill (2026-09-05, on the repaired ring). Measured per
@@ -156,17 +162,25 @@ public struct ModelProfile: Sendable, Equatable {
             // RAM there. 512 tokens after 2,092: 20.3 / 21.7 tok/s at 160 slots
             // (96.8% hit) -> 23.1 / 24.3 (99.8%). A 24 GB machine is still cut
             // to 8 GiB by `affordableExpertCacheBudget`.
+            // Long-context decode attention (2026-10-09, M1 Max): decode no
+            // longer falls with context -- live on Qwen 3.6, 33K 24.8 tok/s and
+            // 57K 21.3, against ~6.5 and ~4.5 before. Surprisal, 512 tokens
+            // after 47,587 of context: Qwen 3.6 +0.002 nats (t +0.57), Ornith
+            // 1.5 -0.001 (t -0.10), no measurable change. 4-bit rows only, as
+            // above.
             Key("qwen3.6-35b-a3b", 4): (
                 17 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, true, true, false, true, true, true, false, true
+                true, true, false, false, true, false, true, true, false, true, true, true, false,
+                true, true
             ),
             Key("qwen3.6-35b-a3b", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false, false, false, false, false, false, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false,
+                false, false, false
             ),
             // Ornith 1.5, same geometry, measured on its own 2026-09-05: 4-bit
             // 128 slots 19.91 / 20.41 vs 160 20.84 / 21.02; 8-bit 64 slots
@@ -174,11 +188,13 @@ public struct ModelProfile: Sendable, Equatable {
             // 4-bit: 17 GiB, the whole expert set, as Qwen 3.6 (same geometry).
             Key("ornith-1.5-35b-a3b", 4): (
                 17 << 30, 1, 4_096, GenerationDefaults.house,
-                true, true, false, false, true, false, true, true, false, true, true, true, false, true
+                true, true, false, false, true, false, true, true, false, true, true, true, false,
+                true, true
             ),
             Key("ornith-1.5-35b-a3b", 8): (
                 12 << 30, 1, 4_096, GenerationDefaults.house,
-                true, true, false, false, true, false, false, false, false, false, false, false, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false,
+                false, false, false
             ),
             // AgentWorld, measured on its own 2026-09-05: 4-bit 128 slots 20.52 /
             // 20.50 vs 160 21.11 / 20.92; 8-bit 64 slots 9.31 / 9.25 vs 96
@@ -190,13 +206,15 @@ public struct ModelProfile: Sendable, Equatable {
                 10 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false, false, false, false, false, false, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false,
+                false, false, false
             ),
             Key("qwen-agentworld", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 0.6, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false, false, false, false, false, false, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false,
+                false, false, false
             ),
             // KAT-Coder-V2.5-Dev: a Qwen3.6-35B-A3B fine-tune with the same
             // geometry, so the cache budget, prefetch depth and wired cache are
@@ -211,13 +229,15 @@ public struct ModelProfile: Sendable, Equatable {
                 10 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 1.0, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false, false, false, false, false, false, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false,
+                false, false, false
             ),
             Key("kat-coder-v2.5", 8): (
                 12 << 30, 1, 4_096,
                 GenerationDefaults.Sampling(
                     temperature: 1.0, topK: GenerationDefaults.topK, topP: 0.95),
-                true, true, false, false, true, false, false, false, false, false, false, false, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false,
+                false, false, false
             ),
             // Qwen3.8-Flash-Next: 96 slots (12 GiB) still climbing; its card
             // specifies temperature 1.0 / top-p 0.95. The fused hyper-connection
@@ -299,7 +319,8 @@ public struct ModelProfile: Sendable, Equatable {
             Key("qwen3.8-flash-next", 4): (
                 16 << 30, 1, 32_768,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, true, true, true, true, true, true, true, true, true, true
+                true, true, false, false, true, true, true, true, true, true, true, true, true,
+                true, false
             ),
             // 8-bit: 32 slots (8 GiB) 2.05 / 2.06 tok/s; 40 slots (9.5 GiB) 2.18 /
             // 2.27 with swap falling; 48 (13 GiB) 2.24-2.33 but ~1 GB of swap
@@ -313,7 +334,8 @@ public struct ModelProfile: Sendable, Equatable {
             Key("qwen3.8-flash-next", 8): (
                 Int(9.5 * Double(1 << 30)), 1, 4_096,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, true, false, false, false, false, false, false, false, false, false
+                true, true, false, false, true, false, false, false, false, false, false, false,
+                false, false, false
             ),
             // Qwen3.8-27B: the Qwen3.8 generation's dense model, served by the
             // Qwen 3.5 dense family (same `qwen3_5_text` architecture). Dense,
@@ -332,12 +354,14 @@ public struct ModelProfile: Sendable, Equatable {
             Key("qwen3.8-27b", 4): (
                 RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, false, false, false, true, false, false, true, true, false, false
+                true, true, false, false, false, false, false, true, false, false, true, true,
+                false, false, false
             ),
             Key("qwen3.8-27b", 8): (
                 RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
                 GenerationDefaults.qwen38Thinking,
-                true, true, false, false, false, false, false, false, false, false, false, false, false, false
+                true, true, false, false, false, false, false, false, false, false, false, false,
+                false, false, false
             ),
         ]
 
@@ -361,7 +385,7 @@ public struct ModelProfile: Sendable, Equatable {
             prefillWideMPP: false, prefillRoutedMPP: false,
             prefillGDNChunked: false, prefillQSAFlash: false,
             prefillRoutedQMM: false, prefillDenseQMM: false, prefillDenseFlash: false,
-            prefillQSAPacked: false, prefillRouterLogits: false)
+            prefillQSAPacked: false, prefillRouterLogits: false, decodeLong: false)
         if let row = table[profile.key] {
             profile.expertCacheBudgetBytes = row.budget
             profile.prefetchDepth = row.prefetch
@@ -381,6 +405,7 @@ public struct ModelProfile: Sendable, Equatable {
             profile.prefillDenseFlash = row.denseFlash
             profile.prefillQSAPacked = row.qsaPacked
             profile.prefillRouterLogits = row.routerLogits
+            profile.decodeLong = row.decodeLong
         }
         if let v = env["TINYTITAN_ROUTER_TOPK_SIMD"] { profile.routerTopKSimd = v != "0" }
         if let v = env["TINYTITAN_ATTN_SIMD_PARTIAL"] { profile.attentionSimdPartial = v != "0" }
@@ -397,6 +422,7 @@ public struct ModelProfile: Sendable, Equatable {
         if let v = env["TINYTITAN_PREFILL_DENSE_FLASH"] { profile.prefillDenseFlash = v == "1" }
         if let v = env["TINYTITAN_PREFILL_QSA_PACKED"] { profile.prefillQSAPacked = v == "1" }
         if let v = env["TINYTITAN_PREFILL_ROUTER_LOGITS"] { profile.prefillRouterLogits = v == "1" }
+        if let v = env["TINYTITAN_ATTN_DECODE_LONG"] { profile.decodeLong = v == "1" }
         if let v = env["TINYTITAN_PREDICTIVE_PREFETCH"] {
             profile.prefetchDepth = v == "1" ? max(1, profile.prefetchDepth) : 0
         }
@@ -439,6 +465,6 @@ public struct ModelProfile: Sendable, Equatable {
             + "gdn_chunk=\(prefillGDNChunked) qsa_flash=\(prefillQSAFlash) "
             + "routed_qmm=\(prefillRoutedQMM) dense_qmm=\(prefillDenseQMM) "
             + "dense_flash=\(prefillDenseFlash) qsa_packed=\(prefillQSAPacked) "
-            + "router_logits=\(prefillRouterLogits)"
+            + "router_logits=\(prefillRouterLogits) decode_long=\(decodeLong)"
     }
 }
