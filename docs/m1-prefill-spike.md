@@ -848,3 +848,34 @@ prefill it keeps ~1.39 TFLOPS, but the GPU's busy time goes 55.2 -> 83.2 s
 budget -- the same pattern as the Neural Engine on this chip. A short overlap
 (the first ~15 s of prefill) showed no slowdown, so the contention builds
 with sustained load. Not pursued.
+
+## Spike 25 (2026-10-09): decode at long context on Qwen 3.6 35B-A3B
+
+Not prefill, but found on the same machine while serving September. Decode fell
+with context on every build: ~23-24 tok/s near empty, 8 at 18K, 5 at 44K, ~3
+at 95K (`server-live-trace.log`). Dense full attention ran the serial
+`attention_decode_partial` (~10 us per key per threadgroup) at a fixed 16
+chunks per query head; the simdgroup pass 1 was only selected under a QSA keep
+mask, so no dense model ever reached it.
+
+`TINYTITAN_ATTN_DECODE_LONG=1` (7ab3a824) takes the simd pass 1 past 4,096 keys
+and one chunk per 1,024 keys, up to 64. Live, same conversation:
+
+| context | before | after |
+| ---: | ---: | ---: |
+| 33K | ~6.5 | 24.8 |
+| 57K | ~4.5 | 21.3 |
+
+From 33K to 57K the per-token cost now rises ~7 ms, so attention is a small
+share of decode at these lengths.
+
+**A GQA variant did not help** (`benchmark/patches/decode-gqa-simd-v1.patch`):
+one threadgroup per (KV head, chunk), each key's K and V loaded once for its 8
+query heads. Correct (int8 KV byte-identical at equal chunking, within
+rounding otherwise), but at 8,000 keys 1,089-1,265 us against the per-head
+simd kernel's 206-313 us, at the same threadgroup count. The per-key compute
+does not shrink -- each head still needs its own dot, `simd_sum`, two `exp`
+and V update -- only the loads do, and the 8 heads' state (64 float
+accumulators plus 64 half query values per lane) costs the occupancy. With
+attention already this small a share of decode, the ceiling did not justify a
+matrix-unit rewrite (8 query heads as the M dimension of an 8 x 8 tile).

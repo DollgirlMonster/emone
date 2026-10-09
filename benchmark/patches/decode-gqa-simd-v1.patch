@@ -1,0 +1,508 @@
+diff --git a/sources/TinyTitan/Kernels/Attention/Attention.swift b/sources/TinyTitan/Kernels/Attention/Attention.swift
+index f5a674c1..0b3ecffe 100644
+--- a/sources/TinyTitan/Kernels/Attention/Attention.swift
++++ b/sources/TinyTitan/Kernels/Attention/Attention.swift
+@@ -7,6 +7,9 @@ struct AttentionSplitGeometry: Sendable, Equatable {
+     let chunkLength: Int
+     let partialThreadgroups: Int
+     let useSWAGroupedPartial: Bool
++    /// One threadgroup per (KV head, chunk) on the long dense path:
++    /// `attention_decode_partial_simd_gqa`.
++    var useDenseGQA = false
+ }
+ 
+ /// Swift wrapper for sliding-window and full-causal decode attention.
+@@ -51,6 +54,11 @@ final class Attention {
+     static let maxQHeads = 32
+     static let maxHeadDim = 512
+     static let maxChunks = 64
++    /// The GQA decode kernel runs one threadgroup per KV head and chunk, so it
++    /// needs `group` times the chunks to fill the GPU; its scratch is sized for
++    /// this many chunks at head_dim <= 256 (`kAttnSimdMaxHeadDim`).
++    static let gqaMaxChunks = 256
++    private static let gqaMaxHeadDim = 256
+     /// Full attention uses 16 base chunks by default.
+     private static let defaultFullChunks = 16
+     private static let defaultGQASWAChunks = 8
+@@ -125,7 +133,8 @@ final class Attention {
+             numQHeads: 16,
+             numKVHeads: 2,
+             numChunks: 16)
+-        let md = Self.maxQHeads * Self.maxChunks
++        let md = Self.maxQHeads * max(Self.maxChunks, Self.gqaMaxChunks)
++        let oPerHead = max(Self.maxChunks * Self.maxHeadDim, Self.gqaMaxChunks * Self.gqaMaxHeadDim)
+         guard
+             let m = context.device.makeBuffer(
+                 length: md * MemoryLayout<Float>.size,
+@@ -134,7 +143,7 @@ final class Attention {
+                 length: md * MemoryLayout<Float>.size,
+                 options: .storageModeShared),
+             let o = context.device.makeBuffer(
+-                length: md * Self.maxHeadDim * MemoryLayout<Float>.size,
++                length: Self.maxQHeads * oPerHead * MemoryLayout<Float>.size,
+                 options: .storageModeShared)
+         else {
+             throw MetalError.bufferAllocationFailed("attention split-KV scratch")
+@@ -174,16 +183,28 @@ final class Attention {
+     private static let simdPartialDefault =
+         ProcessInfo.processInfo.environment["TINYTITAN_ATTN_SIMD_PARTIAL"] != "0"
+     private var simdPartialEnabled: Bool { simdPartialOverride ?? Self.simdPartialDefault }
++    /// Under `TINYTITAN_ATTN_DECODE_LONG`, the long dense path runs
++    /// `attention_decode_partial_simd_gqa` (one threadgroup per KV head and
++    /// chunk, K/V read once for its query heads) unless
++    /// `TINYTITAN_ATTN_DECODE_GQA=0`. Byte-identical to the per-head simd
++    /// kernel by construction; `AttentionDecodeGQATests` holds it to that.
++    var gqaPartialOverride: Bool?
++    private static let gqaPartialDefault =
++        ProcessInfo.processInfo.environment["TINYTITAN_ATTN_DECODE_GQA"] != "0"
++    private var gqaPartialEnabled: Bool { gqaPartialOverride ?? Self.gqaPartialDefault }
++    /// Largest query-head group the GQA kernel's registers hold (`kAttnGQAMaxG`).
++    static let gqaMaxGroup = 8
+     private func simdPartialPipeline(
+         headDim: UInt32, numQHeads: UInt32,
+-        numKVHeads: UInt32, numChunks: Int
++        numKVHeads: UInt32, numChunks: Int,
++        name: String = "attention_decode_partial_simd"
+     ) -> MTLComputePipelineState? {
+-        let key = "\(headDim)/\(numQHeads)/\(numKVHeads)/\(numChunks)"
++        let key = "\(name)/\(headDim)/\(numQHeads)/\(numKVHeads)/\(numChunks)"
+         if let pso = simdPartialCache[key] { return pso }
+         let specializedChunks = numChunks == 16 ? Optional(UInt32(numChunks)) : nil
+         guard
+             let pso = try? Self.specializedPipeline(
+-                ctx, "attention_decode_partial_simd",
++                ctx, name,
+                 headDim: headDim, numQHeads: numQHeads,
+                 numKVHeads: numKVHeads,
+                 numChunks: specializedChunks)
+@@ -214,6 +235,9 @@ final class Attention {
+     /// order.
+     static let longDecodeEnabled =
+         ProcessInfo.processInfo.environment["TINYTITAN_ATTN_DECODE_LONG"] == "1"
++    /// Test hook: forces the long-context dense path on or off.
++    var longDecodeOverride: Bool?
++    private var longDecodeOn: Bool { longDecodeOverride ?? Self.longDecodeEnabled }
+     static let longDecodeMinKeys = 4_096
+     static let longDecodeChunkKeys = 1_024
+ 
+@@ -223,7 +247,8 @@ final class Attention {
+         seqLen: UInt32,
+         kvStart: UInt32,
+         preferGQASWA: Bool,
+-        longDecode: Bool = false
++        longDecode: Bool = false,
++        denseGroup: Int = 1
+     ) -> AttentionSplitGeometry {
+         let qPerKV = Int(numQHeads / numKVHeads)
+         let useSWAGQAPartial = preferGQASWA && qPerKV <= 2
+@@ -231,23 +256,30 @@ final class Attention {
+         var baseChunks = Self.chunkCount(
+             effLen: effectiveLength,
+             preferGQASWA: useSWAGQAPartial)
++        // A dense GQA dispatch covers `denseGroup` query heads per threadgroup,
++        // so it takes that many times the chunks for the same threadgroup count.
++        let denseGQA =
++            longDecode && !useSWAGQAPartial && denseGroup > 1
++            && effectiveLength >= Self.longDecodeMinKeys
+         if longDecode, !useSWAGQAPartial, effectiveLength >= Self.longDecodeMinKeys {
+-            let byLength =
+-                (effectiveLength + Self.longDecodeChunkKeys - 1) / Self.longDecodeChunkKeys
+-            baseChunks = max(baseChunks, min(Self.maxChunks, byLength))
++            let keysPerChunk = denseGQA ? max(1, Self.longDecodeChunkKeys / denseGroup) : Self.longDecodeChunkKeys
++            let cap = denseGQA ? Self.gqaMaxChunks : Self.maxChunks
++            let byLength = (effectiveLength + keysPerChunk - 1) / keysPerChunk
++            baseChunks = max(baseChunks, min(cap, byLength))
+         }
+         let numChunks =
+             useSWAGQAPartial
+             ? max(baseChunks, min(Self.maxChunks, baseChunks * qPerKV))
+             : baseChunks
+         let chunkLength = (max(1, effectiveLength) + numChunks - 1) / numChunks
+-        let partialHeadGroups = useSWAGQAPartial ? Int(numKVHeads) : Int(numQHeads)
++        let partialHeadGroups = useSWAGQAPartial || denseGQA ? Int(numKVHeads) : Int(numQHeads)
+         return AttentionSplitGeometry(
+             effectiveLength: effectiveLength,
+             numChunks: numChunks,
+             chunkLength: chunkLength,
+             partialThreadgroups: partialHeadGroups * numChunks,
+-            useSWAGroupedPartial: useSWAGQAPartial)
++            useSWAGroupedPartial: useSWAGQAPartial,
++            useDenseGQA: denseGQA)
+     }
+ 
+     /// Sliding-window attention. `window` caps the K/V positions to the most
+@@ -372,16 +404,23 @@ final class Attention {
+                 "encodeSplit re-entered while the previous split-KV pass was in flight; attention must encode serially per layer"
+             )
+         }
++        let group = Int(numQHeads / numKVHeads)
++        let longDecode = longDecodeOn && keepMask == nil && ringCapacity == 0
++        let gqaEligible =
++            longDecode && gqaPartialEnabled && simdPartialEnabled
++            && headDim % 32 == 0 && headDim <= UInt32(Self.gqaMaxHeadDim)
++            && group > 1 && group <= Self.gqaMaxGroup
+         let geometry = Self.splitGeometry(
+             numQHeads: numQHeads,
+             numKVHeads: numKVHeads,
+             seqLen: seqLen,
+             kvStart: kvStart,
+             preferGQASWA: preferGQASWA,
+-            longDecode: Self.longDecodeEnabled && keepMask == nil && ringCapacity == 0)
++            longDecode: longDecode,
++            denseGroup: gqaEligible ? group : 1)
+         let useSWAGQAPartial = geometry.useSWAGroupedPartial
+         let longDense =
+-            Self.longDecodeEnabled && keepMask == nil
++            longDecodeOn && keepMask == nil
+             && geometry.effectiveLength >= Self.longDecodeMinKeys
+         let nChunks = geometry.numChunks
+         let chunkLen = geometry.chunkLength
+@@ -401,6 +440,19 @@ final class Attention {
+         {
+             partialPSO = simd
+         }
++        if geometry.useDenseGQA {
++            // The dispatch is already counted per KV head; another kernel here
++            // would leave most query heads unwritten.
++            guard
++                let gqa = simdPartialPipeline(
++                    headDim: headDim, numQHeads: numQHeads,
++                    numKVHeads: numKVHeads, numChunks: nChunks,
++                    name: "attention_decode_partial_simd_gqa")
++            else {
++                preconditionFailure("failed to build attention_decode_partial_simd_gqa")
++            }
++            partialPSO = gqa
++        }
+         let tgWidth = min(Self.threadsPerGroup, Int(partialPSO.maxTotalThreadsPerThreadgroup))
+ 
+         guard let p1 = commandBuffer.makeComputeCommandEncoder() else {
+@@ -440,9 +492,8 @@ final class Attention {
+         var useKeep = UInt32(keepMask == nil ? 0 : 1)
+         p1.setBuffer(keepMask ?? emptyKeepMask, offset: 0, index: 18)
+         p1.setBytes(&useKeep, length: MemoryLayout<UInt32>.size, index: 19)
+-        let partialGroups = geometry.partialThreadgroups
+         p1.dispatchThreadgroups(
+-            MTLSize(width: partialGroups, height: 1, depth: 1),
++            MTLSize(width: geometry.partialThreadgroups, height: 1, depth: 1),
+             threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
+         p1.endEncoding()
+ 
+diff --git a/sources/TinyTitan/Metal/Attention/attention.metal b/sources/TinyTitan/Metal/Attention/attention.metal
+index 5637d758..27e6b54e 100644
+--- a/sources/TinyTitan/Metal/Attention/attention.metal
++++ b/sources/TinyTitan/Metal/Attention/attention.metal
+@@ -608,3 +608,186 @@ void attention_decode_partial_simd(
+     }
+     if (lane == 0) { m_out[base] = m_g; d_out[base] = d_g; }
+ }
++
++// ============================================================================
++// Split-KV pass 1, simdgroup-per-key, one threadgroup per (KV head, chunk)
++// (attention_decode_partial_simd_gqa).
++//
++// attention_decode_partial_simd runs one threadgroup per (Q head, chunk), so
++// the G = num_q_heads / num_kv_heads query heads of a KV head each load and
++// dequantize the same K and V rows: 8x on Qwen 3.6 (16 Q heads, 2 KV heads).
++// Here a simdgroup loads a key's K and V once and applies them to all G heads.
++// Per head, every value goes through the same expressions in the same order as
++// attention_decode_partial_simd -- the same key interleave across simdgroups,
++// the same simd_sum, the same merge -- so its partials are meant to be
++// byte-identical, and attention_decode_combine is unchanged. The merge runs
++// one head at a time through the single-head o_sg buffer, keeping threadgroup
++// memory at the simd kernel's 8 KB. Requires head_dim % 32 == 0,
++// head_dim <= 256 and G <= kAttnGQAMaxG.
++// ============================================================================
++constant constexpr uint kAttnGQAMaxG = 8u;
++
++[[kernel, max_total_threads_per_threadgroup(kAttnThreads)]]
++void attention_decode_partial_simd_gqa(
++    device const half*  Q             [[buffer(0)]],
++    device const uchar* K             [[buffer(1)]],
++    device const uchar* V             [[buffer(2)]],
++    device       float* m_out         [[buffer(3)]],
++    device       float* d_out         [[buffer(4)]],
++    device       float* o_out         [[buffer(5)]],
++    constant     uint&  head_dim      [[buffer(6)]],
++    constant     uint&  num_q_heads   [[buffer(7)]],
++    constant     uint&  num_kv_heads  [[buffer(8)]],
++    constant     uint&  seq_len       [[buffer(9)]],
++    constant     uint&  kv_start      [[buffer(10)]],
++    constant     uint&  chunk_len     [[buffer(11)]],
++    constant     uint&  num_chunks    [[buffer(12)]],
++    constant     float& scale         [[buffer(13)]],
++    constant     uint&  kv_bits       [[buffer(14)]],
++    constant     uint&  kv_stride     [[buffer(15)]],
++    constant     uint&  kv_value_bytes [[buffer(16)]],
++    constant     uint&  kv_group_size [[buffer(17)]],
++    device const uchar* keep          [[buffer(18)]],
++    constant     uint&  use_keep      [[buffer(19)]],
++    uint tg_id           [[threadgroup_position_in_grid]],
++    uint lid             [[thread_position_in_threadgroup]],
++    uint lsize           [[threads_per_threadgroup]],
++    uint lane            [[thread_index_in_simdgroup]],
++    uint sg              [[simdgroup_index_in_threadgroup]],
++    uint simdgroups      [[simdgroups_per_threadgroup]]
++) {
++    threadgroup float m_sg[kAttnMaxSimdGroups * kAttnGQAMaxG];
++    threadgroup float d_sg[kAttnMaxSimdGroups * kAttnGQAMaxG];
++    threadgroup float o_sg[kAttnMaxSimdGroups * kAttnSimdMaxHeadDim];
++    const uint HD = attn_fc_head_dim(head_dim);
++    const uint NQ = attn_fc_num_q_heads(num_q_heads);
++    const uint NKV = attn_fc_num_kv_heads(num_kv_heads);
++    const uint NC = attn_fc_num_chunks(num_chunks);
++    const uint G = NQ / NKV;
++    const uint kv_head = tg_id / NC;
++    const uint chunk  = tg_id % NC;
++    const uint p_start = kv_start + chunk * chunk_len;
++    uint p_end = p_start + chunk_len;
++    if (p_end > seq_len) { p_end = seq_len; }
++    const uint dpl = HD / 32u;
++    const uint d0 = lane * dpl;
++    // Q is FP16 in memory, so holding it as half is exact and halves the
++    // registers the G heads need.
++    half q_reg[kAttnGQAMaxG][kAttnSimdMaxDimsPerLane];
++    float o_reg[kAttnGQAMaxG][kAttnSimdMaxDimsPerLane];
++    float m_run[kAttnGQAMaxG];
++    float d_run[kAttnGQAMaxG];
++    #pragma unroll
++    for (uint g = 0; g < kAttnGQAMaxG; ++g) {
++        device const half* Q_row = Q + (kv_head * G + g) * HD;
++        for (uint j = 0; j < kAttnSimdMaxDimsPerLane; ++j) {
++            q_reg[g][j] = (g < G && j < dpl) ? Q_row[d0 + j] : 0.0h;
++            o_reg[g][j] = 0.0f;
++        }
++        m_run[g] = -INFINITY;
++        d_run[g] = 0.0f;
++    }
++    const uint row_elems = NKV * HD;
++    const uint flat0 = kv_head * HD + d0;
++    const float sc = attn_fc_scale(scale);
++    const bool fast8 = (kv_bits == 8u) && (kv_group_size % dpl == 0u);
++    const uint groups = (row_elems + kv_group_size - 1u) / kv_group_size;
++    const uint grp = flat0 / kv_group_size;
++    for (uint p = p_start + sg; p < p_end; p += simdgroups) {
++        if (use_keep != 0u && keep[p] == 0u) { continue; }
++        const uint phys_p = attn_ring_slot(p);
++        float kval[kAttnSimdMaxDimsPerLane];
++        float vval[kAttnSimdMaxDimsPerLane];
++        if (fast8) {
++            device const uchar* krow = K + phys_p * kv_stride;
++            device const half* ks = reinterpret_cast<device const half*>(krow + kv_value_bytes);
++            const float kscale = float(ks[grp]);
++            const float kbias = float(ks[groups + grp]);
++            device const uchar* vrow = V + phys_p * kv_stride;
++            device const half* vs = reinterpret_cast<device const half*>(vrow + kv_value_bytes);
++            const float vscale = float(vs[grp]);
++            const float vbias = float(vs[groups + grp]);
++            for (uint j = 0; j < kAttnSimdMaxDimsPerLane; ++j) {
++                kval[j] = (j < dpl) ? float(krow[flat0 + j]) * kscale + kbias : 0.0f;
++                vval[j] = (j < dpl) ? float(vrow[flat0 + j]) * vscale + vbias : 0.0f;
++            }
++        } else {
++            for (uint j = 0; j < kAttnSimdMaxDimsPerLane; ++j) {
++                kval[j] = (j < dpl)
++                    ? attn_load_kv(K, phys_p, flat0 + j, row_elems, kv_bits, kv_stride,
++                                   kv_value_bytes, kv_group_size)
++                    : 0.0f;
++                vval[j] = (j < dpl)
++                    ? attn_load_kv(V, phys_p, flat0 + j, row_elems, kv_bits, kv_stride,
++                                   kv_value_bytes, kv_group_size)
++                    : 0.0f;
++            }
++        }
++        // Constant bounds, fully unrolled: a runtime bound would index the
++        // [g][j] register arrays dynamically and spill them to memory.
++        #pragma unroll
++        for (uint g = 0; g < kAttnGQAMaxG; ++g) {
++            if (g >= G) continue;
++            float partial = 0.0f;
++            for (uint j = 0; j < kAttnSimdMaxDimsPerLane; ++j) {
++                if (j < dpl) partial = fma(float(q_reg[g][j]), kval[j], partial);
++            }
++            const float s = simd_sum(partial) * sc;
++            const float m_new = max(m_run[g], s);
++            const float alpha = attn_softmax_exp(m_run[g] - m_new);
++            const float p_exp = attn_softmax_exp(s - m_new);
++            d_run[g] = d_run[g] * alpha + p_exp;
++            for (uint j = 0; j < kAttnSimdMaxDimsPerLane; ++j) {
++                if (j < dpl) o_reg[g][j] = o_reg[g][j] * alpha + p_exp * vval[j];
++            }
++            m_run[g] = m_new;
++        }
++    }
++    if (lane == 0) {
++        #pragma unroll
++        for (uint g = 0; g < kAttnGQAMaxG; ++g) {
++            if (g < G) {
++                m_sg[sg * kAttnGQAMaxG + g] = m_run[g];
++                d_sg[sg * kAttnGQAMaxG + g] = d_run[g];
++            }
++        }
++    }
++    // One head at a time through o_sg; every simdgroup reaches both barriers.
++    #pragma unroll
++    for (uint g = 0; g < kAttnGQAMaxG; ++g) {
++        if (g >= G) continue;
++        for (uint j = 0; j < kAttnSimdMaxDimsPerLane; ++j) {
++            if (j < dpl) o_sg[sg * HD + d0 + j] = o_reg[g][j];
++        }
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++        if (sg == 0) {
++            float m_g = -INFINITY;
++            for (uint c = 0; c < simdgroups; ++c) m_g = max(m_g, m_sg[c * kAttnGQAMaxG + g]);
++            const uint base = (kv_head * G + g) * NC + chunk;
++            device float* o_row = o_out + base * HD;
++            if (m_g == -INFINITY) {
++                if (lane == 0) { m_out[base] = -INFINITY; d_out[base] = 0.0f; }
++                for (uint j = 0; j < kAttnSimdMaxDimsPerLane; ++j) {
++                    if (j < dpl) o_row[d0 + j] = 0.0f;
++                }
++            } else {
++                float d_g = 0.0f;
++                float w[kAttnMaxSimdGroups];
++                for (uint c = 0; c < kAttnMaxSimdGroups; ++c) {
++                    const float mc = (c < simdgroups) ? m_sg[c * kAttnGQAMaxG + g] : -INFINITY;
++                    w[c] = (c < simdgroups && mc != -INFINITY) ? attn_softmax_exp(mc - m_g) : 0.0f;
++                    if (c < simdgroups) d_g += d_sg[c * kAttnGQAMaxG + g] * w[c];
++                }
++                for (uint j = 0; j < kAttnSimdMaxDimsPerLane; ++j) {
++                    if (j < dpl) {
++                        float acc = 0.0f;
++                        for (uint c = 0; c < simdgroups; ++c) acc += o_sg[c * HD + d0 + j] * w[c];
++                        o_row[d0 + j] = acc;
++                    }
++                }
++                if (lane == 0) { m_out[base] = m_g; d_out[base] = d_g; }
++            }
++        }
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++    }
++}
+diff --git a/tests/TinyTitan/Kernels/Attention/AttentionDecodeGQATests.swift b/tests/TinyTitan/Kernels/Attention/AttentionDecodeGQATests.swift
+new file mode 100644
+index 00000000..262766be
+--- /dev/null
++++ b/tests/TinyTitan/Kernels/Attention/AttentionDecodeGQATests.swift
+@@ -0,0 +1,121 @@
++import Metal
++import Testing
++import TinyTitanValidationSupport
++
++@testable import TinyTitan
++
++/// attention_decode_partial_simd_gqa (one threadgroup per KV head and chunk)
++/// against attention_decode_partial_simd (one per Q head and chunk) on the
++/// long-context dense path, `TINYTITAN_ATTN_DECODE_LONG`. Per head the two run
++/// the same expressions in the same order, so the outputs must be
++/// byte-identical, not merely close. Qwen 3.6 35B-A3B's full-attention
++/// geometry: 16 Q heads, 2 KV heads (8 per group), head_dim 256.
++@Suite(.serialized) struct AttentionDecodeGQATests {
++
++    private static func run(seqLen: Int, precision: KVCachePrecision, seed: UInt64)
++        throws -> (gqa: [Float], perHead: [Float], reference: [Float])
++    {
++        let config = ArchConfig.qwen36_35B_A3B
++        let headDim = config.fullHeadDim
++        let numQHeads = config.numHeads
++        let numKVHeads = config.numFullKVHeads
++        let qCount = numQHeads * headDim
++        let rowElements = numKVHeads * headDim
++        let kvCount = seqLen * rowElements
++        var rng = SeedTree(seed).key("decode-gqa-\(seqLen)-\(precision.rawValue)")
++        let q = (0..<qCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
++        let k = (0..<kvCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
++        let v = (0..<kvCount).map { _ in Float16(rng.uniform(0.0, 1.0)) }
++
++        let context = try MetalContext()
++        let cache = try KVCacheManager(
++            device: context.device, config: config,
++            maxContext: seqLen, precision: precision)
++        let quantizer = try KVCacheQuantizer(context: context)
++        let attention = try Attention(context: context)
++        attention.longDecodeOverride = true
++        attention.simdPartialOverride = true
++        guard let qBuffer = Fp16Buffer.make(context.device, halves: q),
++            let kBuffer = Fp16Buffer.make(context.device, halves: k),
++            let vBuffer = Fp16Buffer.make(context.device, halves: v),
++            let outGQA = Fp16Buffer.make(context.device, count: qCount),
++            let outPerHead = Fp16Buffer.make(context.device, count: qCount)
++        else {
++            throw MetalError.bufferAllocationFailed("test buffers")
++        }
++        let layer = try #require(config.fullAttentionLayerMask.firstIndex(of: 1))
++        let keyView = cache.keyView(layer: layer, validTokenCount: seqLen)
++        let valueView = cache.valueView(layer: layer, validTokenCount: seqLen)
++        print("DBG view layer=\(layer) prec=\(keyView.precision) stride=\(keyView.stride) vb=\(keyView.valueBytes) gs=\(keyView.groupSize) kb=\(keyView.buffer.length) off=\(keyView.offset)")
++        guard let fill = context.queue.makeCommandBuffer() else {
++            throw MetalError.commandEncoderFailed
++        }
++        try quantizer.encode(
++            commandBuffer: fill, source: kBuffer,
++            sourceTokenStrideElements: rowElements,
++            destination: keyView, tokenCount: seqLen,
++            elementCount: rowElements)
++        try quantizer.encode(
++            commandBuffer: fill, source: vBuffer,
++            sourceTokenStrideElements: rowElements,
++            destination: valueView, tokenCount: seqLen,
++            elementCount: rowElements)
++        fill.commit()
++        fill.waitUntilCompleted()
++
++        for (useGQA, out) in [(true, outGQA), (false, outPerHead)] {
++            attention.gqaPartialOverride = useGQA
++            for pass in 0..<2 {
++                guard let cb = context.queue.makeCommandBuffer() else {
++                    throw MetalError.commandEncoderFailed
++                }
++                let reps = pass == 0 ? 1 : 10
++                for _ in 0..<reps {
++                    try attention.encodeFull(
++                        commandBuffer: cb, q: qBuffer,
++                        k: keyView.buffer, v: valueView.buffer,
++                        out: out,
++                        headDim: UInt32(headDim),
++                        numQHeads: UInt32(numQHeads),
++                        numKVHeads: UInt32(numKVHeads),
++                        seqLen: UInt32(seqLen),
++                        kvFormat: keyView)
++                }
++                cb.commit()
++                cb.waitUntilCompleted()
++                #expect(cb.error == nil)
++                if pass == 1 {
++                    let us = (cb.gpuEndTime - cb.gpuStartTime) * 1_000_000 / Double(reps)
++                    print(
++                        "decode_gqa_timing seqLen=\(seqLen) kv=\(precision.label) gqa=\(useGQA) per_call_us=\(Int(us))"
++                    )
++                }
++            }
++        }
++
++        let reference = AttentionRef.apply(
++            q: q.map(Float.init), k: k.map(Float.init), v: v.map(Float.init),
++            headDim: headDim, numQHeads: numQHeads,
++            numKVHeads: numKVHeads, seqLen: seqLen)
++        return (
++            Fp16Buffer.read(outGQA, count: qCount),
++            Fp16Buffer.read(outPerHead, count: qCount),
++            reference
++        )
++    }
++
++    @Test(arguments: [KVCachePrecision.int8, .int4])
++    func gqaMatchesPerHeadExactly(precision: KVCachePrecision) throws {
++        // 8,000 keys: past the 4,096 threshold, 8 chunks of 1,000.
++        let r = try Self.run(seqLen: 8_000, precision: precision, seed: 0x6A0A)
++        let rel = RelError.compute(actual: r.gqa, reference: r.reference)
++        for h in 0..<16 {
++            let s = Array(r.gqa[(h * 256)..<(h * 256 + 256)])
++            let p = Array(r.perHead[(h * 256)..<(h * 256 + 256)])
++            print("DBG head=\(h) nan=\(s.filter { $0.isNaN }.count) g0=\(s[0]) p0=\(p[0]) g255=\(s[255]) p255=\(p[255])")
++        }
++        #expect(r.gqa == r.perHead, "gqa differs from the per-head simd kernel")
++        #expect(rel < 0.02, "gqa vs reference rel=\(rel)")
++        #expect(!r.gqa.contains { $0.isNaN }, "NaN in gqa output")
++    }
++}
