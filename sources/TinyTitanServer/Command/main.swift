@@ -98,15 +98,19 @@ do {
             initialModelID: initial.id,
             reasoning: arguments.requestedReasoningLevel,
             maximumContext: arguments.maxContext,
-            loader: ModelRouter.standardLoader(arguments: arguments))
-        if !arguments.lazyLoad {
+            loader: ModelRouter.standardLoader(arguments: arguments),
+            idleTimeout: arguments.idleUnloadSeconds > 0
+                ? .seconds(arguments.idleUnloadSeconds) : nil)
+        // Idle unloading implies deferring the first load, as on the
+        // single-model path.
+        if !arguments.managesResidency {
             try await routing.preload()
         }
         let gpu = catalog.entries.filter { $0.backend == .gpu }.count
         print(
             "catalog: \(catalog.entries.count) models (\(gpu) gpu, "
                 + "\(catalog.entries.count - gpu) cpu) in \(catalog.directory.path); "
-                + (arguments.lazyLoad
+                + (arguments.managesResidency
                     ? "\(initial.id) loads on the first request" : "loaded \(initial.id)"))
         router = routing
         backend = routing

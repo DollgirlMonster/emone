@@ -539,10 +539,6 @@ public struct ServerArguments: Equatable, Sendable {
                 (modelIDOverride != nil, "--model-id: every catalog model keeps its own id"),
                 (mtpModel != nil, "--mtp-model: a draft head belongs to one model"),
                 (cpu, "--cpu: the catalog knows which engine each model uses"),
-                (
-                    idleUnloadSeconds > 0,
-                    "--idle-unload-seconds: POST /v1/models/unload releases the resident model"
-                ),
             ]
             if let conflict = conflicts.first(where: \.present) {
                 throw ServerArgumentError.invalid(

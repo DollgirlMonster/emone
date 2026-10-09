@@ -151,6 +151,10 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
     private nonisolated let choices: [String: ReasoningChoice]
     private let loader: Loader
     private let counter: Counter
+    /// Release the resident model after this long with no request, or nil to
+    /// keep it until a request names another. Same policy as
+    /// `ManagedModelBackend`'s, applied to whichever model is resident.
+    private let idleTimeout: Duration?
 
     /// The protocol's single-model view, answered for the model loaded first.
     /// The HTTP layer asks `servedModel(named:)` instead once it routes.
@@ -177,6 +181,14 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
     /// the in-flight count above zero forever.
     private var pendingSwitches = 0
     private var waiters: [Waiter] = []
+    private var lastActivity = ContinuousClock.now
+    private var reaper: Task<Void, Never>?
+
+    /// What the reaper should do next; see `ManagedModelBackend.ReaperStep`.
+    enum ReaperStep: Equatable {
+        case sleep(Duration)
+        case stop
+    }
 
     public init(
         catalog: ModelCatalog,
@@ -184,7 +196,8 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         reasoning: ReasoningLevel,
         maximumContext: Int,
         loader: @escaping Loader,
-        counter: @escaping Counter = ModelRouter.standardCounter
+        counter: @escaping Counter = ModelRouter.standardCounter,
+        idleTimeout: Duration? = nil
     ) throws {
         var served: [ServedModel] = []
         var choices: [String: ReasoningChoice] = [:]
@@ -240,6 +253,7 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         self.choices = choices
         self.loader = loader
         self.counter = counter
+        self.idleTimeout = idleTimeout
     }
 
     /// Mirrors `CPUModelBackend`'s own clamp, so validation bounds max_tokens
@@ -327,6 +341,8 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
     }
 
     public func shutdown() {
+        reaper?.cancel()
+        reaper = nil
         resident = nil
     }
 
@@ -346,6 +362,7 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
             try Task.checkCancellation()
             if let resident, resident.id == target, !switching, pendingSwitches == 0 {
                 inFlight += 1
+                lastActivity = .now
                 return resident.backend
             }
             if resident?.id != target, !switching, inFlight == 0 {
@@ -395,6 +412,8 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         }
         resident = Resident(id: entry.id, backend: loaded)
         inFlight += 1
+        lastActivity = .now
+        startReaper()
         let fitted =
             choice.effective == choice.requested
             ? "" : " (server level \(choice.requested.rawValue))"
@@ -407,7 +426,53 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
 
     private func release() {
         inFlight -= 1
+        // Measured from when a request finished, so a long generation does not
+        // count against the idle window.
+        lastActivity = .now
         if inFlight == 0 { wakeWaiters() }
+    }
+
+    /// Decides the reaper's next action. Split out so the policy is testable
+    /// without waiting on real time.
+    func reaperStep(now: ContinuousClock.Instant = .now) -> ReaperStep {
+        guard let idleTimeout, resident != nil else { return .stop }
+        // A request in flight or a load in progress: the idle clock is not
+        // running, so check again no sooner than a full timeout from now.
+        guard inFlight == 0, !switching else { return .sleep(idleTimeout) }
+        let idleFor = now - lastActivity
+        guard idleFor >= idleTimeout else { return .sleep(idleTimeout - idleFor) }
+        return .stop
+    }
+
+    private func startReaper() {
+        guard idleTimeout != nil, reaper == nil else { return }
+        reaper = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                switch await self.reaperStep() {
+                case .sleep(let duration):
+                    try? await Task.sleep(for: duration)
+                case .stop:
+                    await self.unloadIfIdle()
+                    return
+                }
+            }
+        }
+    }
+
+    /// Releases the resident model if it is still idle. Re-checks under actor
+    /// isolation because the reaper's decision was made before its sleep.
+    private func unloadIfIdle() {
+        reaper = nil
+        // A manual unload or a shutdown already released it; restarting the
+        // countdown would spawn a reaper that finds nothing and respawns.
+        guard let released = resident else { return }
+        guard case .stop = reaperStep() else {
+            startReaper()
+            return
+        }
+        resident = nil
+        ServerLog.residency("unloaded \(released.id)")
     }
 
     private func waitForTurn() async {
@@ -446,6 +511,13 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
 
     var inFlightCount: Int { inFlight }
     var waiterCount: Int { waiters.count }
+    var hasReaper: Bool { reaper != nil }
+
+    /// Pretend the last activity happened `duration` ago, so idle policy can be
+    /// tested without sleeping.
+    func backdateActivity(by duration: Duration) {
+        lastActivity = .now - duration
+    }
 }
 
 extension ModelRouter {
