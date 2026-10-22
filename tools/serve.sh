@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Serve one installed model on 127.0.0.1, tuned by its own profile row.
 #
-#   tools/serve.sh                     # the default install, below
+#   tools/serve.sh                     # every install in <checkout>/models
+#   tools/serve.sh /Volumes/Chai/TinyTitan/models          # any models folder
 #   tools/serve.sh /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
 #   TINYTITAN_MODEL=/path/to/install tools/serve.sh --idle 600
 #   tools/serve.sh <install> --reasoning xhigh -- --kv-bits 4
@@ -23,10 +24,13 @@
 # a Qwen3.8 snapshot at 40K tokens is ~2.8 GB, so the server's own 8 GiB
 # default keeps only about three conversations.
 #
-# With no install named, it serves TINYTITAN_DEFAULT_MODEL (Qwen 3.6 35B-A3B
-# 4-bit on the external drive). The install's own directory is passed as
-# --models-dir, so a request naming another model there switches to it, and
-# on a terminal the live trace view (--live-trace) is on.
+# With no install named, it serves the catalog <checkout>/models (or
+# TINYTITAN_MODELS_DIR); a folder of installs may be named instead of one
+# install. A request naming any install in the catalog switches to it; one
+# naming no model gets TINYTITAN_DEFAULT_MODEL (an install's name or path,
+# default qwen3.6_35B_A3B_4Bit), or the catalog's first install when that is
+# not there. Naming one install serves its own directory as the catalog. On a
+# terminal the live trace view (--live-trace) is on.
 #
 # Nothing here downloads or installs a model, and nothing is killed: another
 # model process, or an install without its receipt, stops it.
@@ -35,7 +39,7 @@ trap 'echo "serve: stopped at line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEFAULT_MODEL="${TINYTITAN_DEFAULT_MODEL:-/Volumes/Chai/TinyTitan/models/qwen3.6_35B_A3B_4Bit}"
+DEFAULT_MODEL="${TINYTITAN_DEFAULT_MODEL:-qwen3.6_35B_A3B_4Bit}"
 MODEL="${TINYTITAN_MODEL:-}"
 MODELS_DIR=""
 CATALOG=1
@@ -52,8 +56,9 @@ usage() {
   sed -n '2,/^set -/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
   cat <<'USAGE'
 Options:
-  <install>            model directory (or TINYTITAN_MODEL; default
-                       TINYTITAN_DEFAULT_MODEL, Qwen 3.6 35B-A3B 4-bit)
+  <install or folder>  model directory, or a folder of them to serve as the
+                       catalog (or TINYTITAN_MODEL; default: the catalog
+                       <checkout>/models, or TINYTITAN_MODELS_DIR)
   --models-dir <dir>   catalog for model switching (default: the install's
                        own directory)
   --no-catalog         serve the one install only, no --models-dir
@@ -92,12 +97,39 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$MODEL" ] || MODEL="$DEFAULT_MODEL"
-case "$MODEL" in
-  /*) ;;
-  *) MODEL="$PWD/$MODEL" ;;
-esac
-MODEL="${MODEL%/}"
+absolute() {
+  case "$1" in
+    /*) printf '%s\n' "${1%/}" ;;
+    *) printf '%s\n' "$PWD/${1%/}" ;;
+  esac
+}
+
+# No install named, or a folder of installs named: serve that folder as the
+# catalog and pick the install a request without a model name gets.
+if [ -z "$MODEL" ] || { [ -d "$MODEL" ] && [ ! -f "$MODEL/verified-install.json" ]; }; then
+  if [ -n "$MODEL" ]; then
+    MODELS_DIR="$MODEL"
+  elif [ -z "$MODELS_DIR" ]; then
+    MODELS_DIR="${TINYTITAN_MODELS_DIR:-$ROOT/models}"
+  fi
+  MODELS_DIR="$(absolute "$MODELS_DIR")"
+  [ -d "$MODELS_DIR" ] || die "$MODELS_DIR is not a directory (is the drive mounted?)"
+  case "$DEFAULT_MODEL" in
+    */*) MODEL="$DEFAULT_MODEL" ;;
+    *) MODEL="$MODELS_DIR/$DEFAULT_MODEL" ;;
+  esac
+  if [ ! -f "$MODEL/verified-install.json" ]; then
+    MODEL=""
+    for candidate in "$MODELS_DIR"/*/; do
+      if [ -f "${candidate}verified-install.json" ]; then
+        MODEL="${candidate%/}"
+        break
+      fi
+    done
+    [ -n "$MODEL" ] || die "$MODELS_DIR holds no completed install (no verified-install.json in any folder)"
+  fi
+fi
+MODEL="$(absolute "$MODEL")"
 case "$PORT$IDLE$DISK_GIB" in
   *[!0-9]*) die "--port, --idle and --disk-cache-gib take whole numbers" ;;
 esac
