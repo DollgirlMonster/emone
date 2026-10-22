@@ -418,12 +418,20 @@ struct DynamicServingArgumentTests {
 
     @Test func singleModelFlagsAreRefusedWithACatalog() {
         for flags in [
-            ["--model-id", "x"], ["--cpu"], ["--mtp-model", "/d"], ["--idle-unload-seconds", "60"],
+            ["--model-id", "x"], ["--cpu"], ["--mtp-model", "/d"],
         ] {
             #expect(throws: ServerArgumentError.self) {
                 try parse(["--models-dir", "/models", "--model", "a"] + flags)
             }
         }
+    }
+
+    @Test func idleUnloadComposesWithACatalog() throws {
+        let arguments = try parse([
+            "--models-dir", "/models", "--model", "a", "--idle-unload-seconds", "60",
+        ])
+        #expect(arguments.idleUnloadSeconds == 60)
+        #expect(arguments.managesResidency)
     }
 
     /// One active plus `queueLimit` queued: the default must admit four

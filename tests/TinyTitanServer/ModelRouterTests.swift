@@ -225,6 +225,48 @@ struct ModelRouterTests {
             _ = try await router.generate(Fixture.request("\(Fixture.alpha.id)@cpu")) { _ in }
         }
     }
+
+    // MARK: - Idle unload
+
+    @Test func idleUnloadReleasesWhicheverModelIsResident() async throws {
+        let log = RoutingEventLog()
+        let router = try Fixture.router(log: log, idleTimeout: .seconds(60))
+        _ = try await router.generate(Fixture.request(Fixture.small.id)) { _ in }
+        #expect(await router.hasReaper)
+
+        // Recent activity: the reaper sleeps for what is left of the window.
+        guard case .sleep = await router.reaperStep() else {
+            Issue.record("expected the reaper to keep waiting")
+            return
+        }
+        await router.backdateActivity(by: .seconds(61))
+        #expect(await router.reaperStep() == .stop)
+    }
+
+    @Test func idleUnloadWaitsForAnInFlightGeneration() async throws {
+        let log = RoutingEventLog()
+        let gate = RoutingGate()
+        let router = try Fixture.router(
+            log: log, gates: [Fixture.alpha.id: gate], idleTimeout: .seconds(60))
+        try await router.preload()
+        let running = Task { try await router.generate(Fixture.request(Fixture.alpha.id)) { _ in } }
+        await Fixture.eventually("alpha to start generating") { await gate.isWaiting }
+
+        await router.backdateActivity(by: .seconds(600))
+        guard case .sleep = await router.reaperStep() else {
+            Issue.record("a generation in flight must hold the model")
+            return
+        }
+        await gate.open()
+        _ = try await running.value
+    }
+
+    @Test func withoutAnIdleTimeoutThereIsNoReaper() async throws {
+        let router = try Fixture.router(log: RoutingEventLog())
+        try await router.preload()
+        #expect(!(await router.hasReaper))
+        #expect(await router.reaperStep() == .stop)
+    }
 }
 
 @Suite("Reasoning fallback")

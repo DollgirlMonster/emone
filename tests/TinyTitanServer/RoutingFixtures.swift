@@ -133,7 +133,8 @@ enum RoutingFixture {
         log: RoutingEventLog,
         gates: [String: RoutingGate] = [:],
         failing: Set<String> = [],
-        delay: Duration? = nil
+        delay: Duration? = nil,
+        idleTimeout: Duration? = nil
     ) throws -> ModelRouter {
         try ModelRouter(
             catalog: catalog, initialModelID: initial, reasoning: reasoning,
@@ -149,7 +150,8 @@ enum RoutingFixture {
             counter: { entry, _, _ in
                 log.append("tokenize \(entry.id)")
                 return 5
-            })
+            },
+            idleTimeout: idleTimeout)
     }
 
     static func request(_ model: String?) -> ValidatedChatRequest {
