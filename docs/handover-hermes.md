@@ -69,9 +69,8 @@ removing it.
    comment, because the Mac's zsh does not treat `#` as a comment:
    `curl -s 127.0.0.1:8089/v1/models | jq -r '.data[].id'`
 3. **Write `~/.hermes/config.yaml`** from the template below.
-4. **Time a swap.** With the 125B loaded, time a one-token request to the little
-   id, then one back to the big id. The two times together are the swap cost.
-5. **Choose where compression runs** (the reasoning is in the next section).
+4. ~~Time a swap~~: done, about 16 s per swap pair (next section).
+5. Compression runs on the 35B (decided from that measurement).
 
 ## Hermes config template
 
@@ -122,9 +121,21 @@ because the compression prompt is laid out differently from the chat.
 - On the 35B: 55 s + 85 s, **about 2.3 min**, plus two swaps.
 
 So the little model wins unless the two swaps together take over about 5 min.
-The weights are memory-mapped. The only measured switches are 1.5-5 s, on dense
-models, and nothing has been recorded for the MoE models on this Mac. After a
-swap, the 125B's 16 GiB expert cache starts cold.
+**Measured on this Mac (2026-10-22):** one-token requests (`"hi"`,
+`max_tokens: 1`) with each request swapping the resident model, total request
+time from curl:
+
+| request | time |
+| --- | ---: |
+| load 125B (first request, not counted) | 5.70 s |
+| 125B -> 35B | 4.57 s |
+| 35B -> 125B | 11.57 s |
+
+So a swap pair costs **about 16 s**, against about 5 min saved per compression.
+**Compression stays on the 35B.** This does not capture the 125B's 16 GiB expert
+cache starting cold after the reload, which costs some decode speed on the next
+turns; it is unmeasured. For short side tasks the swap pair (~16 s) is about
+twice the ~8 s the 125B needs, so keep those on the resident model.
 
 **Short, frequent side tasks** (titles, small checks) favour the opposite. A
 1K-token prompt with a 30-token answer is about 8 s on the 125B, which is
