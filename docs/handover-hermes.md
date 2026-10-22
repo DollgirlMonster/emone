@@ -5,9 +5,9 @@
 > Continue setting up emone (this checkout) as the local model server for Hermes
 > Agent. Read `AGENTS.md`, then `docs/handover-hermes.md`. The Mac's checkout is at
 > `/Volumes/Chai/TinyTitan`, on branch `claude/practical-hypatia-o9a22c`, which
-> carries the `tools/serve.sh` catalog change. The server has **not been started
-> yet**, so the three model ids are not known. Next: start the server, read
-> `/v1/models`, fill the ids into `~/.hermes/config.yaml` (template below), and
+> carries the `tools/serve.sh` catalog change. The server starts and serves all
+> three installs (ids below). Next: confirm `~/.hermes/config.yaml` (below) works
+> with `hermes doctor`, and
 > time a model swap to settle where Hermes's compression runs. Separately, review
 > the uncommitted work that was parked on the local-only branch
 > `wip/local-server-changes` before anything is merged or deleted.
@@ -34,8 +34,9 @@ between the three installed models from inside Hermes.
   - A request naming no model gets `TINYTITAN_DEFAULT_MODEL` (default
     `qwen3.6_35B_A3B_4Bit`), else the first completed install.
   - `benchmark/test_serve_catalog.py` pins the cases with `--dry-run`. It passed
-    on Linux; it has not run on the Mac, and the server has not been started
-    with the change.
+    on Linux. On the Mac the server started with it and `/v1/models` listed
+    `ornith-1.5-35b-a3b_4-Bit`, `qwen3.6-35b-a3b_4-Bit` and
+    `qwen3.8-flash-next_4-Bit`.
 - **The branch switch on the Mac succeeded** after the local edits were parked
   (next section).
 
@@ -79,7 +80,7 @@ model:
   provider: custom
   base_url: http://127.0.0.1:8089/v1
   api_key: local-no-auth
-  default: <little-qwen id>
+  default: qwen3.6-35b-a3b_4-Bit
   context_length: 65536            # equal to serve.sh --max-context
 
 providers:
@@ -87,15 +88,15 @@ providers:
     api: http://127.0.0.1:8089/v1
     transport: chat_completions
     models:
-      <little-qwen id>: { context_length: 65536 }
-      <big-qwen id>:    { context_length: 65536 }
-      <ornith id>:      { context_length: 65536 }
+      qwen3.6-35b-a3b_4-Bit: { context_length: 65536 }
+      qwen3.8-flash-next_4-Bit: { context_length: 65536 }
+      ornith-1.5-35b-a3b_4-Bit: { context_length: 65536 }
 
 auxiliary:
   compression:
     provider: custom
     base_url: http://127.0.0.1:8089/v1
-    model: <little-qwen id>
+    model: qwen3.6-35b-a3b_4-Bit
 ```
 
 Switch in a session with `/model custom:emone:<id>`. The key names come from
