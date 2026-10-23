@@ -296,7 +296,8 @@ struct LiveTraceByteQueue: Sendable {
 /// - when it is not a terminal (a `2>run.log` redirect) the bytes are passed
 ///   straight through, unchanged, by a separate writer thread;
 /// - when a `fileSinkFD` is given (the server's log file) they are appended to it
-///   by that same writer thread;
+///   by that same writer thread, as well as passed through to a destination that
+///   is not a terminal;
 /// - otherwise (a terminal, no file) they are held, bounded, and written back
 ///   when the view closes, because writing them live would tear the display.
 ///
@@ -312,9 +313,9 @@ final class LiveTraceStderrCapture: @unchecked Sendable {
     private var readFD: Int32 = -1
     private let log: LiveTraceLogTail
     private let passthrough: Bool
-    /// Where the writer thread sends bytes: the log file, or the original
-    /// descriptor. Meaningful only when `passthrough`.
-    private var sinkFD: Int32 = -1
+    /// Where the writer thread sends bytes: the original descriptor when it is
+    /// not a terminal, then the log file. Meaningful only when `passthrough`.
+    private var sinkFDs: [Int32] = []
     private let queue: Mutex<LiveTraceByteQueue>
     private let writerWake = DispatchSemaphore(value: 0)
     private let readerDone = DispatchSemaphore(value: 0)
@@ -345,13 +346,15 @@ final class LiveTraceStderrCapture: @unchecked Sendable {
             close(saved)
             return nil
         }
-        let passthrough = fileSinkFD != nil || isatty(saved) == 0
+        var sinks: [Int32] = isatty(saved) == 0 ? [saved] : []
+        if let fileSinkFD { sinks.append(fileSinkFD) }
+        let passthrough = !sinks.isEmpty
         let capture = LiveTraceStderrCapture(
             targetFD: targetFD, log: log, passthrough: passthrough,
             limit: passthrough ? 8 << 20 : 1 << 20)
         capture.savedFD = saved
         capture.readFD = fds[0]
-        capture.sinkFD = fileSinkFD ?? saved
+        capture.sinkFDs = sinks
         guard dup2(fds[1], targetFD) >= 0 else {
             close(saved)
             close(fds[0])
@@ -404,7 +407,9 @@ final class LiveTraceStderrCapture: @unchecked Sendable {
         while true {
             writerWake.wait()
             let chunks = queue.withLock { $0.takeAll() }
-            for chunk in chunks { liveTraceWriteAll(sinkFD, chunk) }
+            for chunk in chunks {
+                for sink in sinkFDs { liveTraceWriteAll(sink, chunk) }
+            }
             if closing.load(ordering: .acquiring) && queue.withLock({ $0.chunks.isEmpty }) {
                 break
             }

@@ -428,9 +428,8 @@ public final class LiveTraceServerView: @unchecked Sendable {
         resources.withLock { resources in
             guard resources == nil else { return true }
             let logPath = options.logPath ?? Self.defaultLogPath
-            // The file is needed for stdout always (it is the terminal) and for
-            // stderr when that is the terminal too; a stderr the operator
-            // redirected keeps going there untouched.
+            // The file is the full server log, so both streams go to it; a
+            // stderr the operator redirected also keeps going there untouched.
             let logFile = LiveTraceLogFile.open(path: logPath)
             if logFile == nil {
                 note(
@@ -446,7 +445,7 @@ public final class LiveTraceServerView: @unchecked Sendable {
             guard
                 let stderrCapture = LiveTraceStderrCapture.start(
                     targetFD: stderrFD, log: log,
-                    fileSinkFD: isatty(stderrFD) != 0 ? logFile?.fd : nil)
+                    fileSinkFD: logFile?.fd)
             else {
                 note("note: --live-trace is off: could not capture stderr")
                 logFile?.close()

@@ -16,6 +16,13 @@ struct PseudoTerminal {
         var slave: Int32 = -1
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         guard openpty(&master, &slave, nil, nil, &size) == 0 else { return nil }
+        // No output processing, so the master reads back exactly the bytes
+        // written to the slave (a real terminal turns "\n" into "\r\n").
+        var attributes = termios()
+        if tcgetattr(slave, &attributes) == 0 {
+            attributes.c_oflag &= ~tcflag_t(OPOST)
+            _ = tcsetattr(slave, TCSANOW, &attributes)
+        }
         self.master = master
         self.slave = slave
     }
