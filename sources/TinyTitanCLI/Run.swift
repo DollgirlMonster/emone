@@ -264,7 +264,9 @@ public func run(
             rdadvisePolicy: loadRuntime.rdadvisePolicy,
             prefillChunkTokens: prefillChunkTokens,
             prefillAttentionPath: loadRuntime.prefillAttentionPath,
-            forceLogitsHead: !config.isPureGreedy,
+            // The same rule as the load: scoring reads the whole distribution,
+            // which the fused greedy head never writes.
+            forceLogitsHead: loadRuntime.headPath == .logits,
             decodeExpertExecution: loadRuntime.decodeExpertExecution,
             expertIOSynchronization: loadRuntime.expertIOSynchronization,
             expertIOSubmission: loadRuntime.expertIOSubmission,
