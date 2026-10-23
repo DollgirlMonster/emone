@@ -47,6 +47,10 @@ public struct Args: Equatable, Sendable {
     public var scoreTokens: Int?
     /// One negative log-likelihood per scored token, one per line.
     public var scoreOutput: String?
+    /// `--verify-probe n`: greedy-decode n tokens, then walk them through the
+    /// MTP verify pass and report where the two paths pick differently
+    /// (`probeVerifyPairAgreement`).
+    public var verifyProbe: Int?
     /// `--live-trace`: draw the live expert-grid view while decoding, when
     /// stdout is a terminal. Off by default; changes no output byte or number.
     public var liveTrace: Bool = false
@@ -193,7 +197,13 @@ extension Args {
                                     the prompt's last n tokens, then report the
                                     mean surprisal (NLL) of those n by teacher
                                     forcing. Compares prefill paths on one text.
-          --score-out <file>        One NLL per scored token (needs --score).
+          --score-out <file>        One NLL per scored token (needs --score), or
+                                    one row per position (with --verify-probe).
+          --verify-probe <n>        Greedy-decode n tokens, then feed the same
+                                    tokens through the MTP verify pass and report
+                                    each position where it predicts a different
+                                    token, with both paths' top-1/top-2 margins.
+                                    Needs no MTP sidecar.
           --live-trace              Draw a live view of decode on the terminal: the
                                     expert grid of the layer in flight (router
                                     picks green = cache hit, red = SSD read), a
@@ -256,6 +266,7 @@ extension Args {
         var ropeScalingMode: RuntimeRoPEScalingMode = .none
         var scoreTokens: Int?
         var scoreOutput: String?
+        var verifyProbe: Int?
 
         var index = 0
         while index < argv.count {
@@ -399,6 +410,12 @@ extension Args {
                 scoreTokens = parsed
             case "--score-out":
                 scoreOutput = try takeValue(argv, &index, flag: flag)
+            case "--verify-probe":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = Int(value), parsed >= 2 else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                verifyProbe = parsed
             case "--kv-bits":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let bits = Int(value),
@@ -419,8 +436,14 @@ extension Args {
             throw ArgsError.mutuallyExclusive("--prompt", "--messages-file")
         }
         if prompt == nil && messagesFile == nil { throw ArgsError.modeMissing }
-        if scoreOutput != nil && scoreTokens == nil {
+        if scoreOutput != nil && scoreTokens == nil && verifyProbe == nil {
             throw ArgsError.requiredMissing("--score")
+        }
+        if verifyProbe != nil && scoreTokens != nil {
+            throw ArgsError.mutuallyExclusive("--verify-probe", "--score")
+        }
+        if liveTrace && verifyProbe != nil {
+            throw ArgsError.mutuallyExclusive("--live-trace", "--verify-probe")
         }
         if liveTrace && scoreTokens != nil {
             throw ArgsError.mutuallyExclusive("--live-trace", "--score")
@@ -477,6 +500,7 @@ extension Args {
             scoreOutput: scoreOutput)
         parsed.ignoreEOS = ignoreEOS
         parsed.liveTrace = liveTrace
+        parsed.verifyProbe = verifyProbe
         return parsed
     }
 

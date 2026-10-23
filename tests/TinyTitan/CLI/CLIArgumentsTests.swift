@@ -88,6 +88,30 @@ import TinyTitan
         }
     }
 
+    @Test func verifyProbeParsesTakesTheRowFileAndExcludesScoring() throws {
+        let probed = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi", "--verify-probe", "256", "--score-out",
+            "p.tsv",
+        ])
+        #expect(probed.verifyProbe == 256)
+        #expect(probed.scoreOutput == "p.tsv")
+        #expect(try Args.parse(["--model", "m.gturbo", "--prompt", "hi"]).verifyProbe == nil)
+        // A pair needs two tokens.
+        #expect(throws: ArgsError.invalidValue(flag: "--verify-probe", value: "1")) {
+            _ = try Args.parse(["--model", "m.gturbo", "--prompt", "hi", "--verify-probe", "1"])
+        }
+        #expect(throws: ArgsError.mutuallyExclusive("--verify-probe", "--score")) {
+            _ = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi", "--verify-probe", "8", "--score", "8",
+            ])
+        }
+        #expect(throws: ArgsError.mutuallyExclusive("--live-trace", "--verify-probe")) {
+            _ = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi", "--verify-probe", "8", "--live-trace",
+            ])
+        }
+    }
+
     @Test func generationOptionsParseAndStopsRepeat() throws {
         let arguments = try Args.parse([
             "--model", "m.gturbo", "--prompt", "hi",
@@ -223,7 +247,7 @@ import TinyTitan
             "--seed", "--stop", "--quiet", "--help", "--ignore-eos",
             "--rdadvise", "--expert-cache-slots", "--prefill-chunk", "--concise",
             "--kv-bits", "--rope-scaling", "--thinking", "--reasoning-effort",
-            "--score", "--score-out", "--live-trace",
+            "--score", "--score-out", "--verify-probe", "--live-trace",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
         let options = Set(words.map(String.init).filter { $0.hasPrefix("--") })

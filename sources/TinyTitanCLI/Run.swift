@@ -184,7 +184,8 @@ public func run(
             rdadvisePolicy: RDAdvicePolicyMode.parse(args.rdadvise),
             // Scoring reads the whole distribution, which the fused greedy
             // head never writes.
-            forceLogitsHead: !config.isPureGreedy || args.scoreTokens != nil,
+            forceLogitsHead: !config.isPureGreedy || args.scoreTokens != nil
+                || args.verifyProbe != nil,
             decodeExpertExecution: try RuntimeDecodeExpertExecution.environmentValue(),
             expertIOSynchronization: try RuntimeExpertIOSynchronization.environmentValue(),
             expertIOSubmission: try RuntimeExpertIOSubmission.environmentValue())
@@ -264,8 +265,8 @@ public func run(
             rdadvisePolicy: loadRuntime.rdadvisePolicy,
             prefillChunkTokens: prefillChunkTokens,
             prefillAttentionPath: loadRuntime.prefillAttentionPath,
-            // The same rule as the load: scoring reads the whole distribution,
-            // which the fused greedy head never writes.
+            // The same rule as the load: scoring and the probe read the whole
+            // distribution, which the fused greedy head never writes.
             forceLogitsHead: loadRuntime.headPath == .logits,
             decodeExpertExecution: loadRuntime.decodeExpertExecution,
             expertIOSynchronization: loadRuntime.expertIOSynchronization,
@@ -278,7 +279,10 @@ public func run(
             model: model,
             context: context,
             maxContext: args.maxContext,
-            runtimeConfiguration: runtime)
+            runtimeConfiguration: runtime,
+            // The probe rolls the verify pass back after every pair, which
+            // needs the recurrent-state checkpoint an MTP runner carries.
+            enableSpeculativeGDN: args.verifyProbe != nil)
         let scratch = try RawCompletionScratch(
             context: context,
             vocab: model.config.vocabSize,
@@ -288,6 +292,11 @@ public func run(
                 args: args, scored: scored, promptIds: promptIds, runner: runner,
                 scratch: scratch, prefillConfig: runtime.prefillConfig,
                 softcap: Float(model.config.finalLogitSoftcap), stdout: stdout, stderr: stderr)
+        }
+        if let count = args.verifyProbe {
+            return try await runVerifyProbe(
+                args: args, count: count, promptIds: promptIds, runner: runner,
+                scratch: scratch, prefillConfig: runtime.prefillConfig, stdout: stdout)
         }
         // `--live-trace`: nil unless asked for and the terminal can show it. Its
         // `finish` runs when this scope exits, after the footer below, so the
@@ -398,6 +407,48 @@ public func run(
 private func errored(_ stderr: FileHandle, _ message: String, _ code: Int32) -> RunResult {
     stderr.write(Data("error: \(message)\n".utf8))
     return RunResult(exitCode: code)
+}
+
+/// `--verify-probe n`: where does the MTP verify pass pick a different token
+/// than scalar greedy decode, and how close was each path's call there?
+private func runVerifyProbe(
+    args: Args, count: Int, promptIds: [Int32], runner: RealForwardRunner,
+    scratch: RawCompletionScratch, prefillConfig: PrefillRuntimeConfig, stdout: FileHandle
+) async throws -> RunResult {
+    let started = Date()
+    let probe = try await runner.probeVerifyPairAgreement(
+        context: promptIds, count: count, prefillConfig: prefillConfig, scratch: scratch)
+    let mismatches = probe.mismatches
+    let first = mismatches.first.map(String.init) ?? "none"
+    let margins = mismatches.prefix(8).map {
+        String(format: "%d:%.3f/%.3f", $0, probe.rows[$0].decodeMargin, probe.rows[$0].verifyMargin)
+    }
+    stdout.write(
+        Data(
+            String(
+                format:
+                    "[verify-probe context=%d positions=%d mismatches=%d first=%@ seconds=%.1f]\n",
+                probe.contextTokens, probe.rows.count, mismatches.count, first,
+                Date().timeIntervalSince(started)
+            ).utf8))
+    if !margins.isEmpty {
+        stdout.write(
+            Data(
+                "[verify-probe decode/verify margins at mismatches: \(margins.joined(separator: " "))]\n"
+                    .utf8))
+    }
+    if let path = args.scoreOutput {
+        let lines = probe.rows.enumerated().map { index, row in
+            String(
+                format: "%d\t%d\t%.4f\t%d\t%.4f", index, row.decodeToken, row.decodeMargin,
+                row.verifyToken, row.verifyMargin)
+        }
+        try Data(
+            ("position\tdecode_token\tdecode_margin\tverify_token\tverify_margin\n"
+                + lines.joined(separator: "\n") + "\n").utf8
+        ).write(to: URL(fileURLWithPath: path))
+    }
+    return RunResult(exitCode: 0)
 }
 
 /// `--score n`: prefill all but the prompt's last `n` tokens, then teacher-force
