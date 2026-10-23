@@ -31,7 +31,8 @@ private let mppAvailableForSharedExpert: Bool = {
     private static func buffer<T>(_ ctx: MetalContext, _ values: [T]) throws -> MTLBuffer {
         let made = values.withUnsafeBytes { raw -> MTLBuffer? in
             guard let base = raw.baseAddress else { return nil }
-            return ctx.device.makeBuffer(bytes: base, length: raw.count, options: .storageModeShared)
+            return ctx.device.makeBuffer(
+                bytes: base, length: raw.count, options: .storageModeShared)
         }
         guard let made else { throw MetalError.commandEncoderFailed }
         return made
@@ -53,7 +54,8 @@ private let mppAvailableForSharedExpert: Bool = {
         let groups = rows * cols / Quantization.groupSize
         return SharedExpertProjection(
             weights: try buffer(ctx, (0..<(rows * cols / 2)).map { _ in UInt8(rng.next() & 0xFF) }),
-            scales: try buffer(ctx, (0..<groups).map { _ in bf16(0.002 + abs(rng.unit()) * 0.004) }),
+            scales: try buffer(
+                ctx, (0..<groups).map { _ in bf16(0.002 + abs(rng.unit()) * 0.004) }),
             biases: try buffer(ctx, (0..<groups).map { _ in bf16(-0.015 + rng.unit() * 0.002) }),
             rows: UInt32(rows), cols: UInt32(cols))
     }
@@ -88,7 +90,8 @@ private let mppAvailableForSharedExpert: Bool = {
         let down = try Self.projection(ctx, rows: d, cols: intermediate, rng: &rng)
         let x = try Self.buffer(ctx, (0..<(tokens * d)).map { _ in Float16(rng.unit()) })
         let half = MemoryLayout<Float16>.stride
-        let scratch = (0..<3).map { _ in try? Self.zeroed(ctx, bytes: tokens * intermediate * half) }
+        let scratch = (0..<3).map { _ in try? Self.zeroed(ctx, bytes: tokens * intermediate * half)
+        }
         guard let sg = scratch[0], let su = scratch[1], let sa = scratch[2] else {
             Issue.record("scratch allocation failed")
             return

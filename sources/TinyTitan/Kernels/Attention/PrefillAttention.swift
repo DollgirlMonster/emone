@@ -312,6 +312,11 @@ final class PrefillAttention {
     /// those tiles, one threadgroup per (8 rows, KV head) with a simdgroup per
     /// query head. `keepRowOffset` (a multiple of 8) places this dispatch's
     /// rows in the chunk's mask and its flags in the chunk's flag buffer.
+    ///
+    /// lint:allow-long one dispatch's encoder sequence: the block-list or
+    /// tile-flag pass, the Q packing pass and the attention all bind the same
+    /// stride, mask offset and tile arithmetic, so splitting the passes out
+    /// would thread a dozen derived values through each helper.
     private func encodeMaskedFlash(
         commandBuffer: MTLCommandBuffer,
         pipeline: MTLComputePipelineState,
@@ -409,10 +414,12 @@ final class PrefillAttention {
             // One 8-row tile's fragments for every query head, per row tile.
             let halves = rowTiles * Self.flashRows * Int(params.numQHeads) * Int(params.headDim)
             if (packedQ?.length ?? 0) < halves * 2 {
-                packedQ = context.device.makeBuffer(length: halves * 2, options: .storageModePrivate)
+                packedQ = context.device.makeBuffer(
+                    length: halves * 2, options: .storageModePrivate)
                 packedQ?.label = "prefillAttention.qsaFlash.packedQ"
             }
-            guard let packed = packedQ, let packEnc = commandBuffer.makeComputeCommandEncoder() else {
+            guard let packed = packedQ, let packEnc = commandBuffer.makeComputeCommandEncoder()
+            else {
                 throw PrefillAttentionError.commandEncoderFailed
             }
             packEnc.setComputePipelineState(packPSO)

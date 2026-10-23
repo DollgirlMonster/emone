@@ -287,7 +287,8 @@ struct HiddenStateReadoutTests {
     }
 
     private func post(_ port: Int, _ json: String) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: try #require(URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")))
+        var request = URLRequest(
+            url: try #require(URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = Data(json.utf8)

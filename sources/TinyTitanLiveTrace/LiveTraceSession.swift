@@ -47,9 +47,11 @@ public final class LiveTraceSession: @unchecked Sendable {
             // A routed model on a terminal too small for the grid gets the
             // compact view; say so, or the missing grid looks like a bug.
             if case .compact = plan, let full = LiveTraceViewPlan.fullHeight(shape: shape) {
-                stderr.write(Data((
-                    "note: --live-trace grid hidden: the terminal is \(probe.cols)x\(probe.rows); "
-                    + "the grid needs at least \(LiveTraceViewPlan.fullWidth)x\(full + 1)\n").utf8))
+                stderr.write(
+                    Data(
+                        ("note: --live-trace grid hidden: the terminal is \(probe.cols)x\(probe.rows); "
+                            + "the grid needs at least \(LiveTraceViewPlan.fullWidth)x\(full + 1)\n")
+                            .utf8))
             }
             let log = LiveTraceLogTail()
             guard let capture = LiveTraceStderrCapture.start(log: log) else {

@@ -129,7 +129,9 @@ import TinyTitanValidationSupport
             let buffers = try Self.makeBuffers(
                 ctx: ctx, weights: weights, hidden: hidden,
                 effectiveScale: effectiveScale, perExpertScale: perExpertScale, rows: rows)
-            guard let cb = ctx.queue.makeCommandBuffer() else { throw RouterTestError.allocationFailed }
+            guard let cb = ctx.queue.makeCommandBuffer() else {
+                throw RouterTestError.allocationFailed
+            }
             try prefill.encodeBlock(
                 commandBuffer: cb, weights: buffers.weights, scales: buffers.scales,
                 biases: buffers.biases, hidden: buffers.hidden,
@@ -172,13 +174,17 @@ import TinyTitanValidationSupport
             let pes = perExpertScale.map { Quantization.bf16Bits($0) }
             let ones = [UInt16](repeating: Quantization.bf16Bits(1), count: Self.d)
             func make(_ bytes: UnsafeRawPointer, _ length: Int) throws -> MTLBuffer {
-                guard let b = ctx.device.makeBuffer(bytes: bytes, length: length, options: .storageModeShared)
+                guard
+                    let b = ctx.device.makeBuffer(
+                        bytes: bytes, length: length, options: .storageModeShared)
                 else { throw RouterTestError.allocationFailed }
                 return b
             }
             guard
-                let idx = ctx.device.makeBuffer(length: rows * Self.topK * 4, options: .storageModeShared),
-                let wt = ctx.device.makeBuffer(length: rows * Self.topK * 2, options: .storageModeShared)
+                let idx = ctx.device.makeBuffer(
+                    length: rows * Self.topK * 4, options: .storageModeShared),
+                let wt = ctx.device.makeBuffer(
+                    length: rows * Self.topK * 2, options: .storageModeShared)
             else { throw RouterTestError.allocationFailed }
             return RouterBuffers(
                 weights: try make(packed.packed, packed.packed.count),

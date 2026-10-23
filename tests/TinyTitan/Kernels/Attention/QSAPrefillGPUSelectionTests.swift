@@ -54,7 +54,8 @@ import Testing
         guard
             let scoreBuf = ctx.device.makeBuffer(
                 bytes: scores, length: scores.count * 4, options: .storageModeShared),
-            let keepBuf = ctx.device.makeBuffer(length: tokens * stride, options: .storageModeShared),
+            let keepBuf = ctx.device.makeBuffer(
+                length: tokens * stride, options: .storageModeShared),
             let cb = ctx.queue.makeCommandBuffer(),
             let enc = cb.makeComputeCommandEncoder()
         else { throw MetalError.commandEncoderFailed }
@@ -85,7 +86,8 @@ import Testing
         }
         #expect(
             firstBad == nil,
-            "start \(startPosition) tokens \(tokens): first differing byte row \((firstBad ?? 0) / stride) key \((firstBad ?? 0) % stride)")
+            "start \(startPosition) tokens \(tokens): first differing byte row \((firstBad ?? 0) / stride) key \((firstBad ?? 0) % stride)"
+        )
         #expect(hostKeep.contains(0) && hostKeep.contains(1), "the fixture selects nothing")
     }
 

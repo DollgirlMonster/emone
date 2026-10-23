@@ -697,7 +697,8 @@ extension RealForwardRunner {
                 pleContext.removeLast(pleContext.count - hash.ngramSize)
             }
             let tokenRows = hash.rows(context: pleContext)
-            precondition(tokenRows.count == hash.headCount, "PLE hash returned \(tokenRows.count) rows")
+            precondition(
+                tokenRows.count == hash.headCount, "PLE hash returned \(tokenRows.count) rows")
             rows += tokenRows
         }
         try table.gatherConcurrently(rows: rows, into: ple.embedding.contents())

@@ -14,7 +14,8 @@ import TinyTitan
     static let compact = LiveTraceViewPlan.compact(width: 78, height: 9)
 
     static func status(
-        client: String? = nil, waiting: Int = 0, running: Int = 0, last: LiveTraceServerStatus.Last? = nil
+        client: String? = nil, waiting: Int = 0, running: Int = 0,
+        last: LiveTraceServerStatus.Last? = nil
     ) -> LiveTraceServerStatus {
         var status = LiveTraceServerStatus()
         status.residency = .loaded
@@ -196,9 +197,13 @@ import TinyTitan
             feed.tokens = 7
             feed.textTail = "hello there"
             let lines = LiveTraceFrame.compose(
-                Self.input(status: Self.status(client: "gpt-5", running: 1), feed: feed, plan: plan))
+                Self.input(status: Self.status(client: "gpt-5", running: 1), feed: feed, plan: plan)
+            )
             #expect(lines.count == 9)
-            #expect(lines.allSatisfy { LiveTraceText.width(of: LiveTraceFrameTests.stripANSI($0)) <= width })
+            #expect(
+                lines.allSatisfy {
+                    LiveTraceText.width(of: LiveTraceFrameTests.stripANSI($0)) <= width
+                })
         }
     }
 }

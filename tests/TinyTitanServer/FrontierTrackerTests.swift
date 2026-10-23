@@ -87,7 +87,8 @@ struct FrontierTrackerTests {
         let render = tokens(0..<40)
         tracker.observe(render)
         // Resumed at 6 (a message-shaped hit): every target is 6 + k*4.
-        #expect(tracker.captureTargets(render: render, resumeFrom: 6, held: []) == [38, 22, 14, 10])
+        #expect(
+            tracker.captureTargets(render: render, resumeFrom: 6, held: []) == [38, 22, 14, 10])
         #expect(
             tracker.captureTargets(render: render, resumeFrom: 6, held: [38, 14])
                 == [22, 10])
@@ -124,7 +125,8 @@ struct FrontierTrackerTests {
         tracker.observe(render)
         let plain = tracker.captureTargets(render: render, resumeFrom: 0, held: [])
         // 9211 is 123 past the aligned 9088: not worth an extra pass.
-        #expect(tracker.captureTargets(render: render, resumeFrom: 0, held: [], anchor: 9_211) == plain)
+        #expect(
+            tracker.captureTargets(render: render, resumeFrom: 0, held: [], anchor: 9_211) == plain)
 
         var big = FrontierTracker(chunkTokens: 16_384)
         big.observe(render)
@@ -132,7 +134,8 @@ struct FrontierTrackerTests {
             big.captureTargets(render: render, resumeFrom: 0, held: [9_211], anchor: 9_211)
                 .isEmpty)
         // Not past the resume point, or not strictly inside the render.
-        #expect(big.captureTargets(render: render, resumeFrom: 9_211, held: [], anchor: 9_211).isEmpty)
+        #expect(
+            big.captureTargets(render: render, resumeFrom: 9_211, held: [], anchor: 9_211).isEmpty)
         #expect(big.captureTargets(render: render, resumeFrom: 0, held: [], anchor: 9_300).isEmpty)
     }
 
@@ -150,8 +153,12 @@ struct FrontierTrackerTests {
         }
         #expect(anchor == 4)
         // No leading system block, or nothing after it: no anchor.
-        #expect(ServerModelSession.guidanceAnchor(promptIDs: full, messages: [user]) { _ in [1] } == nil)
-        #expect(ServerModelSession.guidanceAnchor(promptIDs: full, messages: [system]) { _ in [1] } == nil)
+        #expect(
+            ServerModelSession.guidanceAnchor(promptIDs: full, messages: [user]) { _ in [1] } == nil
+        )
+        #expect(
+            ServerModelSession.guidanceAnchor(promptIDs: full, messages: [system]) { _ in [1] }
+                == nil)
         // A render that fails only means no checkpoint.
         struct Boom: Error {}
         #expect(

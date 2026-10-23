@@ -801,7 +801,8 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             frontierPrefixEntries = loaded.filter(Self.isFrontierEntry)
             if frontierPrefixEntries.count > Self.frontierMaximumEntries {
                 store.remove(
-                    entryIDs: frontierPrefixEntries
+                    entryIDs:
+                        frontierPrefixEntries
                         .dropLast(Self.frontierMaximumEntries)
                         .map(\.id))
                 frontierPrefixEntries = Array(
@@ -1391,13 +1392,16 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         let saved = await store.save(entry: entry, snapshot: snapshot)
         if let diskError = saved.diskError {
             FileHandle.standardError.write(
-                Data(("TinyTitan prompt_cache frontier disk_write_failed error=\(diskError)\n").utf8))
+                Data(
+                    ("TinyTitan prompt_cache frontier disk_write_failed error=\(diskError)\n").utf8)
+            )
         }
         guard store.contains(entry.id) else { return }  // evicted on arrival
         frontierClock += 1
         frontierEntries.append(FrontierEntry(tokens: tokens, id: entry.id, lastUse: frontierClock))
         if frontierEntries.count > Self.frontierMaximumEntries {
-            let overflow = frontierEntries
+            let overflow =
+                frontierEntries
                 .sorted { $0.lastUse < $1.lastUse }
                 .prefix(frontierEntries.count - Self.frontierMaximumEntries)
                 .map(\.id)
@@ -1662,53 +1666,53 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         let result: RawDecodeResult
         do {
             result = try await runRawCompletion(
-            producer: activeProducer,
-            tokenizer: renderTokenizer,
-            promptIds: activePromptIDs,
-            config: config,
-            context: context,
-            scratch: scratches[slot],
-            prefillConfig: prefillConfig,
-            start: activeStart,
-            slot: slot,
-            captureBoundaries: captureBoundaries,
-            captureAnchor: resolved.captureAnchor,
-            captureMaxBytes: min(
-                Self.frontierCheckpointMaxBytes,
-                promptStateStore?.maximumSnapshotBytes ?? 0),
-            // Always passed: with no boundaries `runRawCompletion` never calls
-            // it. (A `cond ? nil : { ... }` here types the literal before the
-            // annotation and loses `@Sendable`.)
-            onCapture: { @Sendable (position: Int, snapshot: InferenceStateSnapshot) in
-                state.frontierCaptures.append(
-                    FrontierCapture(position: position, snapshot: snapshot))
-            },
-            // A watchdog stop is polled here, between tokens, alongside the
-            // stop-string matcher's own flag.
-            shouldStop: { @Sendable in state.shouldStop || watchdogs.wantsStop },
-            onProgress: { @Sendable progress in
-                liveGeneration?.handle(progress)
-                if case .prefill(let done, let total) = progress {
-                    PrefillProgressMonitor.prefill(
-                        done: done, total: total, generation: progressGeneration)
-                } else {
-                    PrefillProgressMonitor.decoding(generation: progressGeneration)
-                }
-                guard state.decodingError == nil else { return }
-                do {
-                    switch progress {
-                    case .prefill:
-                        break
-                    case .token(_, let tokenID, let delta):
-                        publish(try state.decoder.consume(tokenID: tokenID, delta: delta), true)
-                    case .tail(let text):
-                        publish(try state.decoder.consumeTail(text), false)
+                producer: activeProducer,
+                tokenizer: renderTokenizer,
+                promptIds: activePromptIDs,
+                config: config,
+                context: context,
+                scratch: scratches[slot],
+                prefillConfig: prefillConfig,
+                start: activeStart,
+                slot: slot,
+                captureBoundaries: captureBoundaries,
+                captureAnchor: resolved.captureAnchor,
+                captureMaxBytes: min(
+                    Self.frontierCheckpointMaxBytes,
+                    promptStateStore?.maximumSnapshotBytes ?? 0),
+                // Always passed: with no boundaries `runRawCompletion` never calls
+                // it. (A `cond ? nil : { ... }` here types the literal before the
+                // annotation and loses `@Sendable`.)
+                onCapture: { @Sendable (position: Int, snapshot: InferenceStateSnapshot) in
+                    state.frontierCaptures.append(
+                        FrontierCapture(position: position, snapshot: snapshot))
+                },
+                // A watchdog stop is polled here, between tokens, alongside the
+                // stop-string matcher's own flag.
+                shouldStop: { @Sendable in state.shouldStop || watchdogs.wantsStop },
+                onProgress: { @Sendable progress in
+                    liveGeneration?.handle(progress)
+                    if case .prefill(let done, let total) = progress {
+                        PrefillProgressMonitor.prefill(
+                            done: done, total: total, generation: progressGeneration)
+                    } else {
+                        PrefillProgressMonitor.decoding(generation: progressGeneration)
                     }
-                } catch {
-                    state.decodingError = error
-                    state.shouldStop = true
-                }
-            })
+                    guard state.decodingError == nil else { return }
+                    do {
+                        switch progress {
+                        case .prefill:
+                            break
+                        case .token(_, let tokenID, let delta):
+                            publish(try state.decoder.consume(tokenID: tokenID, delta: delta), true)
+                        case .tail(let text):
+                            publish(try state.decoder.consumeTail(text), false)
+                        }
+                    } catch {
+                        state.decodingError = error
+                        state.shouldStop = true
+                    }
+                })
         } catch {
             await bankFrontierCaptures()
             throw error

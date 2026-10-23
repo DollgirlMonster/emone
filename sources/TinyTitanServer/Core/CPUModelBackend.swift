@@ -184,19 +184,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         let budget = min(request.maximumCompletionTokens, context - prompt.count)
         var configuration = request.generationConfig
         if let node = request.jsonSchema {
-            // One local for the table: the force unwrap here used to be the
-            // only thing standing between a nil cache and a crash.
-            let table: JSONTokenTable
-            if let existing = jsonTokenTable {
-                table = existing
-            } else {
-                let made = JSONTokenTable(tokenizer: tokenizer)
-                jsonTokenTable = made
-                table = made
-            }
-            configuration.constraint = JSONConstraint(
-                table: table, node: node,
-                vocab: model.configuration.vocabulary)
+            configuration.constraint = jsonConstraint(for: node)
         }
         let sampler = CPUSampler(
             temperature: configuration.temperature,
@@ -225,20 +213,9 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         let decoder = StructuredAssistantDecoder.forGeneration(
             tokenizer: renderTokenizer, promptIDs: promptIDs, allowedTools: nil)
         var detokenizer = GFDetokenizer(tokenizer: renderTokenizer)
-        // The view shows the reply as it is written, thought and answer alike.
-        let deliver: @Sendable (ServerInferenceEvent) -> Void =
-            liveGeneration.map { generation in
-                { @Sendable event in
-                    switch event {
-                    case .content(let text), .reasoning(let text):
-                        generation.handle(.tail(text))
-                    case .toolCall:
-                        break
-                    }
-                    onEvent(event)
-                }
-            } ?? onEvent
-        var output = AssistantOutput(stops: configuration.stopStrings, onEvent: deliver)
+        var output = AssistantOutput(
+            stops: configuration.stopStrings,
+            onEvent: Self.delivering(onEvent, to: liveGeneration))
         var produced = 0
         var reason = "length"
         while produced < budget {
@@ -294,6 +271,40 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
             // thought that arrived with thinking off is reported as one.
             unrequestedReasoning: renderTokenizer.thinkingMode.isEnabled
                 ? 0 : output.reasoning.count)
+    }
+
+    /// The grammar constraint for a JSON-schema request, over the token table
+    /// built once per backend.
+    private func jsonConstraint(for node: JSONSchemaNode) -> JSONConstraint {
+        // One local for the table: the force unwrap here used to be the
+        // only thing standing between a nil cache and a crash.
+        let table: JSONTokenTable
+        if let existing = jsonTokenTable {
+            table = existing
+        } else {
+            let made = JSONTokenTable(tokenizer: tokenizer)
+            jsonTokenTable = made
+            table = made
+        }
+        return JSONConstraint(table: table, node: node, vocab: model.configuration.vocabulary)
+    }
+
+    /// `onEvent`, also feeding the live view the reply as it is written,
+    /// thought and answer alike.
+    private static func delivering(
+        _ onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void,
+        to liveGeneration: LiveTraceGeneration?
+    ) -> @Sendable (ServerInferenceEvent) -> Void {
+        guard let liveGeneration else { return onEvent }
+        return { event in
+            switch event {
+            case .content(let text), .reasoning(let text):
+                liveGeneration.handle(.tail(text))
+            case .toolCall:
+                break
+            }
+            onEvent(event)
+        }
     }
 
     /// One sampled token as decoder events.

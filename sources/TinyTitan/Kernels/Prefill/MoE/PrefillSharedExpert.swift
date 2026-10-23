@@ -31,7 +31,8 @@ final class PrefillSharedExpert {
         let activation = siluActivation ? "silu_mul_fp16" : "gelu_mul_fp16"
         if batchedSimdgroup, [4, 8].contains(weightBits) {
             self.batched = (
-                BatchedGEMM.simdgroup(try PrefillAffineSimdgroupQMM(context: context), bits: weightBits),
+                BatchedGEMM.simdgroup(
+                    try PrefillAffineSimdgroupQMM(context: context), bits: weightBits),
                 try context.pipeline(activation)
             )
         } else if batchedMPP, [4, 8].contains(weightBits) {

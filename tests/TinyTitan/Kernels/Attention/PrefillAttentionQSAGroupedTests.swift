@@ -24,7 +24,8 @@ import Testing
     private static func buffer<T>(_ ctx: MetalContext, _ values: [T]) throws -> MTLBuffer {
         let made = values.withUnsafeBytes { raw -> MTLBuffer? in
             guard let base = raw.baseAddress else { return nil }
-            return ctx.device.makeBuffer(bytes: base, length: raw.count, options: .storageModeShared)
+            return ctx.device.makeBuffer(
+                bytes: base, length: raw.count, options: .storageModeShared)
         }
         guard let made else { throw MetalError.commandEncoderFailed }
         return made
@@ -90,7 +91,8 @@ import Testing
         let vCache = try kvCache(
             ctx, bits: kvBits, rows: valid, elementsPerRow: kvHeads * headDim,
             groupSize: groupSize, rng: &rng)
-        let q = try buffer(ctx, (0..<(queries * qHeads * headDim)).map { _ in Float16(rng.unit() * 0.5) })
+        let q = try buffer(
+            ctx, (0..<(queries * qHeads * headDim)).map { _ in Float16(rng.unit() * 0.5) })
 
         // A sparse selection per query -- about a third of its visible keys,
         // ~100 of them, so each row spans two tiles of the grouped kernel --
@@ -101,7 +103,8 @@ import Testing
         var counts = [UInt32](repeating: 0, count: queries)
         for t in 0..<queries {
             var n = 0
-            for key in 0...(startPosition + t) where rng.next() % 3 == 0 || key == startPosition + t {
+            for key in 0...(startPosition + t) where rng.next() % 3 == 0 || key == startPosition + t
+            {
                 mask[t * keepStride + key] = 1
                 indices[t * valid + n] = UInt32(key)
                 n += 1
@@ -186,7 +189,8 @@ import Testing
         #expect(maxRef > 0.05, "the per-head output is too small to prove anything")
         #expect(
             worst <= 1,
-            "matrix units vs per-head: worst element \(worst)x its allowance, \(changed) differ, max |ref| \(maxRef)")
+            "matrix units vs per-head: worst element \(worst)x its allowance, \(changed) differ, max |ref| \(maxRef)"
+        )
     }
 
     /// Compiled strictly here, so a Metal compiler error names itself instead

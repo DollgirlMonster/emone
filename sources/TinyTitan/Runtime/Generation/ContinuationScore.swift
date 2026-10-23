@@ -55,7 +55,8 @@ public enum ContinuationScoreError: Error, CustomStringConvertible, Equatable {
     public var description: String {
         switch self {
         case .emptyText(let context, let continuation):
-            return "scoring needs a context and a continuation; got \(context) and \(continuation) tokens"
+            return
+                "scoring needs a context and a continuation; got \(context) and \(continuation) tokens"
         case .tokenOutOfVocabulary(let token):
             return "token \(token) is outside the model's vocabulary"
         }

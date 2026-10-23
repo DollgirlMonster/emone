@@ -147,7 +147,9 @@ final class PrefillAffineSimdgroupQMM {
         enc.setBuffer(weights, offset: weightsOffset, index: 2)
         var m = UInt32(t)
         enc.setBytes(&m, length: MemoryLayout<UInt32>.size, index: 3)
-        var params: [UInt32] = [UInt32(n), UInt32(k), 0, 0, 0, 0, 0, 0, UInt32(Quantization.groupSize)]
+        var params: [UInt32] = [
+            UInt32(n), UInt32(k), 0, 0, 0, 0, 0, 0, UInt32(Quantization.groupSize),
+        ]
         enc.setBytes(&params, length: params.count * 4, index: 4)
         enc.setBuffer(scales, offset: scalesOffset, index: 5)
         enc.setBuffer(biases, offset: biasesOffset, index: 6)

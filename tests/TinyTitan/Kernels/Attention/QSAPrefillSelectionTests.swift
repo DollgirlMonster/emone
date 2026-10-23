@@ -95,7 +95,9 @@ import Testing
             let visible = g.startPosition + row + 1
             #expect(out.counts[row] == UInt32(visible))
             #expect(out.keep[(row * g.stride)..<(row * g.stride + visible)].allSatisfy { $0 == 1 })
-            #expect(out.keep[(row * g.stride + visible)..<((row + 1) * g.stride)].allSatisfy { $0 == 0 })
+            #expect(
+                out.keep[(row * g.stride + visible)..<((row + 1) * g.stride)].allSatisfy { $0 == 0 }
+            )
         }
     }
 }

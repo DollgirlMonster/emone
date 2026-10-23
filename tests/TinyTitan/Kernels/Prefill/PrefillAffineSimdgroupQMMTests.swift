@@ -26,7 +26,8 @@ import Testing
     private static func buffer<T>(_ ctx: MetalContext, _ values: [T]) throws -> MTLBuffer {
         let made = values.withUnsafeBytes { raw -> MTLBuffer? in
             guard let base = raw.baseAddress else { return nil }
-            return ctx.device.makeBuffer(bytes: base, length: raw.count, options: .storageModeShared)
+            return ctx.device.makeBuffer(
+                bytes: base, length: raw.count, options: .storageModeShared)
         }
         guard let made else { throw MetalError.commandEncoderFailed }
         return made
@@ -57,7 +58,8 @@ import Testing
             ctx, (0..<(shape.n * rowBytes)).map { _ in UInt8(rng.next() & 0xFF) })
         let scaleSize: Float = shape.bits == 4 ? 0.02 : 0.002
         let scales = try Self.buffer(
-            ctx, (0..<(shape.n * groups)).map { _ in Self.bf16(scaleSize * (0.5 + abs(rng.unit()))) })
+            ctx,
+            (0..<(shape.n * groups)).map { _ in Self.bf16(scaleSize * (0.5 + abs(rng.unit()))) })
         let biases = try Self.buffer(
             ctx, (0..<(shape.n * groups)).map { _ in Self.bf16(rng.unit() * 0.1) })
         let x = try Self.buffer(

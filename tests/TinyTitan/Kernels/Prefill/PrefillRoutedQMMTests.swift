@@ -45,13 +45,16 @@ import Testing
         let groups = k / 64
         var w = [Float](repeating: 0, count: n * k)
         let p = bytes + base
-        for i in 0..<packedBytes { p.storeBytes(of: UInt8(rng.next() & 0xFF), toByteOffset: i, as: UInt8.self) }
+        for i in 0..<packedBytes {
+            p.storeBytes(of: UInt8(rng.next() & 0xFF), toByteOffset: i, as: UInt8.self)
+        }
         let maxQ: Float = bits == 4 ? 15 : 255
         for row in 0..<n {
             for g in 0..<groups {
                 let scale = bf16((0.02 + abs(rng.unit()) * 0.02) * 15 / maxQ)
                 let bias = bf16(-0.3 + rng.unit() * 0.05)
-                p.storeBytes(of: scale, toByteOffset: packedBytes + (row * groups + g) * 2, as: UInt16.self)
+                p.storeBytes(
+                    of: scale, toByteOffset: packedBytes + (row * groups + g) * 2, as: UInt16.self)
                 p.storeBytes(
                     of: bias, toByteOffset: packedBytes + n * groups * 2 + (row * groups + g) * 2,
                     as: UInt16.self)
@@ -80,12 +83,13 @@ import Testing
 
     static func fixture(
         bits: Int, d: Int, f: Int, rowsPerExpert: [Int], reference: Bool, edge: Int = 32
-    ) throws -> Fixture
-    {
+    ) throws -> Fixture {
         let ctx = try MetalContext()
         let layout = Layout(d: d, f: f, bits: bits)
         let experts = rowsPerExpert.count
-        guard let blob = ctx.device.makeBuffer(length: experts * layout.total, options: .storageModeShared),
+        guard
+            let blob = ctx.device.makeBuffer(
+                length: experts * layout.total, options: .storageModeShared),
             let args = ctx.device.makeBuffer(length: 16 * 8, options: .storageModeShared)
         else { throw MetalError.commandEncoderFailed }
         var rng = LCG(state: UInt64(bits * 1000 + d))
@@ -93,13 +97,22 @@ import Testing
         for e in 0..<experts {
             let base = e * layout.total
             if reference {
-                gate.append(writeProjection(blob.contents(), base: base + layout.gate, n: f, k: d, bits: bits, rng: &rng))
-                up.append(writeProjection(blob.contents(), base: base + layout.up, n: f, k: d, bits: bits, rng: &rng))
-                down.append(writeProjection(blob.contents(), base: base + layout.down, n: d, k: f, bits: bits, rng: &rng))
+                gate.append(
+                    writeProjection(
+                        blob.contents(), base: base + layout.gate, n: f, k: d, bits: bits, rng: &rng
+                    ))
+                up.append(
+                    writeProjection(
+                        blob.contents(), base: base + layout.up, n: f, k: d, bits: bits, rng: &rng))
+                down.append(
+                    writeProjection(
+                        blob.contents(), base: base + layout.down, n: d, k: f, bits: bits, rng: &rng
+                    ))
             } else {
                 memset(blob.contents() + base, 0x5A, layout.total)
             }
-            args.contents().storeBytes(of: blob.gpuAddress + UInt64(base), toByteOffset: e * 8, as: UInt64.self)
+            args.contents().storeBytes(
+                of: blob.gpuAddress + UInt64(base), toByteOffset: e * 8, as: UInt64.self)
         }
         var work: [UInt32] = []
         var rowExpert: [Int] = []
@@ -111,7 +124,9 @@ import Testing
             rowExpert += Array(repeating: e, count: count)
             row += count
         }
-        guard let workBuf = ctx.device.makeBuffer(bytes: work, length: work.count * 4, options: .storageModeShared)
+        guard
+            let workBuf = ctx.device.makeBuffer(
+                bytes: work, length: work.count * 4, options: .storageModeShared)
         else { throw MetalError.commandEncoderFailed }
         return Fixture(
             ctx: ctx, blob: blob, args: args, work: workBuf, workCount: work.count / 4,
@@ -122,21 +137,29 @@ import Testing
         let l = fx.layout
         if down {
             let o = l.down
-            return [UInt32(l.d), UInt32(l.f), UInt32(o), UInt32(o + l.packed(l.d, l.f)),
-                    UInt32(o + l.packed(l.d, l.f) + l.groups(l.d, l.f)), 0, 0, 0, 64]
+            return [
+                UInt32(l.d), UInt32(l.f), UInt32(o), UInt32(o + l.packed(l.d, l.f)),
+                UInt32(o + l.packed(l.d, l.f) + l.groups(l.d, l.f)), 0, 0, 0, 64,
+            ]
         }
         let g = l.gate, u = l.up
-        return [UInt32(l.f), UInt32(l.d),
-                UInt32(g), UInt32(g + l.packed(l.f, l.d)), UInt32(g + l.packed(l.f, l.d) + l.groups(l.f, l.d)),
-                UInt32(u), UInt32(u + l.packed(l.f, l.d)), UInt32(u + l.packed(l.f, l.d) + l.groups(l.f, l.d)),
-                64]
+        return [
+            UInt32(l.f), UInt32(l.d),
+            UInt32(g), UInt32(g + l.packed(l.f, l.d)),
+            UInt32(g + l.packed(l.f, l.d) + l.groups(l.f, l.d)),
+            UInt32(u), UInt32(u + l.packed(l.f, l.d)),
+            UInt32(u + l.packed(l.f, l.d) + l.groups(l.f, l.d)),
+            64,
+        ]
     }
 
     static func encode(
         _ fx: Fixture, _ cb: MTLCommandBuffer, pso: MTLComputePipelineState,
         x: MTLBuffer, y: MTLBuffer, params: [UInt32], n: Int, edge: Int = 32
     ) throws {
-        guard let enc = cb.makeComputeCommandEncoder() else { throw MetalError.commandEncoderFailed }
+        guard let enc = cb.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
         enc.setComputePipelineState(pso)
         enc.setBuffer(x, offset: 0, index: 0)
         enc.setBuffer(y, offset: 0, index: 1)
@@ -172,15 +195,21 @@ import Testing
         let (gateUp, down) = try Self.pipelines(fx.ctx, bits: bits, edge: edge)
         var rng = LCG(state: 9)
         let xs = (0..<(fx.rows * d)).map { _ in Float16(rng.unit()) }
-        guard let x = fx.ctx.device.makeBuffer(bytes: xs, length: xs.count * 2, options: .storageModeShared),
-            let act = fx.ctx.device.makeBuffer(length: fx.rows * f * 2, options: .storageModeShared),
-            let out = fx.ctx.device.makeBuffer(length: fx.rows * d * 2, options: .storageModeShared),
+        guard
+            let x = fx.ctx.device.makeBuffer(
+                bytes: xs, length: xs.count * 2, options: .storageModeShared),
+            let act = fx.ctx.device.makeBuffer(
+                length: fx.rows * f * 2, options: .storageModeShared),
+            let out = fx.ctx.device.makeBuffer(
+                length: fx.rows * d * 2, options: .storageModeShared),
             let cb = fx.ctx.queue.makeCommandBuffer()
         else { throw MetalError.commandEncoderFailed }
         try Self.encode(
-            fx, cb, pso: gateUp, x: x, y: act, params: Self.params(fx, down: false), n: f, edge: edge)
+            fx, cb, pso: gateUp, x: x, y: act, params: Self.params(fx, down: false), n: f,
+            edge: edge)
         try Self.encode(
-            fx, cb, pso: down, x: act, y: out, params: Self.params(fx, down: true), n: d, edge: edge)
+            fx, cb, pso: down, x: act, y: out, params: Self.params(fx, down: true), n: d, edge: edge
+        )
         cb.commit()
         cb.waitUntilCompleted()
         #expect(cb.error == nil)
@@ -226,8 +255,11 @@ import Testing
                     MetalFunctionConstant(index: 77, value: .bool(true)),
                     MetalFunctionConstant(index: 78, value: .uint32(4)),
                 ])
-            guard let x = fx.ctx.device.makeBuffer(length: fx.rows * d * 2, options: .storageModePrivate),
-                let act = fx.ctx.device.makeBuffer(length: fx.rows * f * 2, options: .storageModePrivate)
+            guard
+                let x = fx.ctx.device.makeBuffer(
+                    length: fx.rows * d * 2, options: .storageModePrivate),
+                let act = fx.ctx.device.makeBuffer(
+                    length: fx.rows * f * 2, options: .storageModePrivate)
             else { throw MetalError.commandEncoderFailed }
             var best = Double.infinity
             for _ in 0..<3 {
@@ -251,7 +283,10 @@ import Testing
                 best = min(best, cb.gpuEndTime - cb.gpuStartTime)
             }
             let flops = Double(fx.rows * d * f * 4)
-            print(String(format: "[gate-up-bench] %dx%d %.2f ms %.2f TFLOP/s", bm, bn, best * 1000, flops / best / 1e12))
+            print(
+                String(
+                    format: "[gate-up-bench] %dx%d %.2f ms %.2f TFLOP/s", bm, bn, best * 1000,
+                    flops / best / 1e12))
         }
     }
 
@@ -259,27 +294,37 @@ import Testing
     func benchmark() throws {
         let (d, f) = (2_560, 640)
         for edge in [32, 64] {
-        let fx = try Self.fixture(
-            bits: 4, d: d, f: f, rowsPerExpert: Array(repeating: 352, count: 16), reference: false,
-            edge: edge)
-        let (gateUp, down) = try Self.pipelines(fx.ctx, bits: 4, edge: edge)
-        guard let x = fx.ctx.device.makeBuffer(length: fx.rows * d * 2, options: .storageModePrivate),
-            let act = fx.ctx.device.makeBuffer(length: fx.rows * f * 2, options: .storageModePrivate),
-            let out = fx.ctx.device.makeBuffer(length: fx.rows * d * 2, options: .storageModePrivate)
-        else { throw MetalError.commandEncoderFailed }
-        for _ in 0..<3 {
-            for (name, pso, isDown) in [("gate_up", gateUp, false), ("down", down, true)] {
-                guard let cb = fx.ctx.queue.makeCommandBuffer() else { throw MetalError.commandEncoderFailed }
-                try Self.encode(
-                    fx, cb, pso: pso, x: isDown ? act : x, y: isDown ? out : act,
-                    params: Self.params(fx, down: isDown), n: isDown ? d : f, edge: edge)
-                cb.commit()
-                cb.waitUntilCompleted()
-                let seconds = cb.gpuEndTime - cb.gpuStartTime
-                let flops = Double(fx.rows * d * f * 2) * (isDown ? 1 : 2)
-                print(String(format: "[routed-qmm-bench] %dx%d %@ %.2f ms %.2f TFLOP/s", edge, edge, name, seconds * 1000, flops / seconds / 1e12))
+            let fx = try Self.fixture(
+                bits: 4, d: d, f: f, rowsPerExpert: Array(repeating: 352, count: 16),
+                reference: false,
+                edge: edge)
+            let (gateUp, down) = try Self.pipelines(fx.ctx, bits: 4, edge: edge)
+            guard
+                let x = fx.ctx.device.makeBuffer(
+                    length: fx.rows * d * 2, options: .storageModePrivate),
+                let act = fx.ctx.device.makeBuffer(
+                    length: fx.rows * f * 2, options: .storageModePrivate),
+                let out = fx.ctx.device.makeBuffer(
+                    length: fx.rows * d * 2, options: .storageModePrivate)
+            else { throw MetalError.commandEncoderFailed }
+            for _ in 0..<3 {
+                for (name, pso, isDown) in [("gate_up", gateUp, false), ("down", down, true)] {
+                    guard let cb = fx.ctx.queue.makeCommandBuffer() else {
+                        throw MetalError.commandEncoderFailed
+                    }
+                    try Self.encode(
+                        fx, cb, pso: pso, x: isDown ? act : x, y: isDown ? out : act,
+                        params: Self.params(fx, down: isDown), n: isDown ? d : f, edge: edge)
+                    cb.commit()
+                    cb.waitUntilCompleted()
+                    let seconds = cb.gpuEndTime - cb.gpuStartTime
+                    let flops = Double(fx.rows * d * f * 2) * (isDown ? 1 : 2)
+                    print(
+                        String(
+                            format: "[routed-qmm-bench] %dx%d %@ %.2f ms %.2f TFLOP/s", edge, edge,
+                            name, seconds * 1000, flops / seconds / 1e12))
+                }
             }
-        }
         }
     }
 
@@ -296,11 +341,14 @@ import Testing
         var rng = LCG(state: UInt64(n))
         let packed = n * k / 2
         let groups = n * (k / 64)
-        guard let w = ctx.device.makeBuffer(length: packed + 4 * groups, options: .storageModeShared)
+        guard
+            let w = ctx.device.makeBuffer(length: packed + 4 * groups, options: .storageModeShared)
         else { throw MetalError.commandEncoderFailed }
         _ = Self.writeProjection(w.contents(), base: 0, n: n, k: k, bits: 4, rng: &rng)
         let xs = (0..<(m * k)).map { _ in Float16(rng.unit()) }
-        guard let x = ctx.device.makeBuffer(bytes: xs, length: xs.count * 2, options: .storageModeShared),
+        guard
+            let x = ctx.device.makeBuffer(
+                bytes: xs, length: xs.count * 2, options: .storageModeShared),
             let y1 = ctx.device.makeBuffer(length: m * n * 2, options: .storageModeShared),
             let y2 = ctx.device.makeBuffer(length: m * n * 2, options: .storageModeShared)
         else { throw MetalError.commandEncoderFailed }
@@ -308,7 +356,9 @@ import Testing
         func timed(_ encode: (MTLCommandBuffer) throws -> Void) throws -> Double {
             var best = Double.infinity
             for _ in 0..<(bench ? 3 : 1) {
-                guard let cb = ctx.queue.makeCommandBuffer() else { throw MetalError.commandEncoderFailed }
+                guard let cb = ctx.queue.makeCommandBuffer() else {
+                    throw MetalError.commandEncoderFailed
+                }
                 try encode(cb)
                 cb.commit()
                 cb.waitUntilCompleted()
@@ -323,7 +373,10 @@ import Testing
                 required: true)
         }
         if bench {
-            print(String(format: "[dense-qmm-bench] m%d n%d k%d mpp %.2f ms %.2f TF", m, n, k, mppTime * 1000, flops / mppTime / 1e12))
+            print(
+                String(
+                    format: "[dense-qmm-bench] m%d n%d k%d mpp %.2f ms %.2f TF", m, n, k,
+                    mppTime * 1000, flops / mppTime / 1e12))
         }
         for (bm, bn) in [(32, 32), (64, 32), (32, 64), (64, 64)] {
             let pso = try ctx.pipeline(
@@ -331,7 +384,9 @@ import Testing
                 constants: [MetalFunctionConstant(index: 78, value: .uint32(4))])
             memset(y2.contents(), 0, m * n * 2)
             let t = try timed { cb in
-                guard let enc = cb.makeComputeCommandEncoder() else { throw MetalError.commandEncoderFailed }
+                guard let enc = cb.makeComputeCommandEncoder() else {
+                    throw MetalError.commandEncoderFailed
+                }
                 enc.setComputePipelineState(pso)
                 enc.setBuffer(x, offset: 0, index: 0)
                 enc.setBuffer(y2, offset: 0, index: 1)
@@ -348,7 +403,10 @@ import Testing
                 enc.endEncoding()
             }
             if bench {
-                print(String(format: "[dense-qmm-bench] m%d n%d k%d tiled %dx%d %.2f ms %.2f TF", m, n, k, bm, bn, t * 1000, flops / t / 1e12))
+                print(
+                    String(
+                        format: "[dense-qmm-bench] m%d n%d k%d tiled %dx%d %.2f ms %.2f TF", m, n,
+                        k, bm, bn, t * 1000, flops / t / 1e12))
             }
             let a = y1.contents().bindMemory(to: Float16.self, capacity: m * n)
             let b = y2.contents().bindMemory(to: Float16.self, capacity: m * n)

@@ -66,6 +66,23 @@ extension ServerHTTPHandler {
         }
     }
 
+    /// A chat or compaction request that never reached the engine, in the
+    /// OpenAI envelope: a request error as itself (404 for an unknown model),
+    /// anything else as a body that did not decode.
+    func writeOpenAIDecodeFailure(_ context: ChannelHandlerContext, _ error: Error) {
+        if let error = error as? ServerRequestError {
+            writeError(
+                context, status: error == .unknownModel ? .notFound : .badRequest,
+                error.envelope)
+        } else {
+            writeError(
+                context, status: .badRequest,
+                OpenAIErrorEnvelope(
+                    message: "malformed JSON request",
+                    code: "invalid_json"))
+        }
+    }
+
     func writeJSON(
         _ context: ChannelHandlerContext,
         status: HTTPResponseStatus,

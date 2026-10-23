@@ -22,7 +22,8 @@ import Testing
     private static func buffer<T>(_ ctx: MetalContext, _ values: [T]) throws -> MTLBuffer {
         let made = values.withUnsafeBytes { raw -> MTLBuffer? in
             guard let base = raw.baseAddress else { return nil }
-            return ctx.device.makeBuffer(bytes: base, length: raw.count, options: .storageModeShared)
+            return ctx.device.makeBuffer(
+                bytes: base, length: raw.count, options: .storageModeShared)
         }
         guard let made else { throw MetalError.commandEncoderFailed }
         return made
@@ -33,7 +34,9 @@ import Testing
         var testDescription: String { "T\(tokens) blocks \(blocks)" }
     }
 
-    @Test(arguments: [Shape(tokens: 37, blocks: 70), Shape(tokens: 64, blocks: 64), Shape(tokens: 5, blocks: 33)])
+    @Test(arguments: [
+        Shape(tokens: 37, blocks: 70), Shape(tokens: 64, blocks: 64), Shape(tokens: 5, blocks: 33),
+    ])
     func matrixUnitScoresMatchTheScalarKernel(_ shape: Shape) throws {
         let ctx = try MetalContext()
         let (heads, dim) = (4, 128)
@@ -53,9 +56,13 @@ import Testing
         var h = UInt32(heads)
         var b = UInt32(shape.blocks)
         var t = UInt32(shape.tokens)
-        for (name, out) in [("qsa_block_scores_rows", reference), ("qsa_block_scores_rows_mma", candidate)] {
+        for (name, out) in [
+            ("qsa_block_scores_rows", reference), ("qsa_block_scores_rows_mma", candidate),
+        ] {
             let pipeline = try ctx.pipeline(name)
-            guard let enc = cb.makeComputeCommandEncoder() else { throw MetalError.commandEncoderFailed }
+            guard let enc = cb.makeComputeCommandEncoder() else {
+                throw MetalError.commandEncoderFailed
+            }
             enc.setComputePipelineState(pipeline)
             enc.setBuffer(query, offset: 0, index: 0)
             enc.setBuffer(pooled, offset: 0, index: 1)
@@ -66,7 +73,8 @@ import Testing
             enc.setBytes(&t, length: 4, index: 6)
             if name.hasSuffix("_mma") {
                 enc.dispatchThreadgroups(
-                    MTLSize(width: (shape.blocks + 31) / 32, height: (shape.tokens + 31) / 32, depth: 1),
+                    MTLSize(
+                        width: (shape.blocks + 31) / 32, height: (shape.tokens + 31) / 32, depth: 1),
                     threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
             } else {
                 enc.dispatchThreads(

@@ -27,7 +27,8 @@ import Testing
     private static func buffer<T>(_ ctx: MetalContext, _ values: [T]) throws -> MTLBuffer {
         let made = values.withUnsafeBytes { raw -> MTLBuffer? in
             guard let base = raw.baseAddress else { return nil }
-            return ctx.device.makeBuffer(bytes: base, length: raw.count, options: .storageModeShared)
+            return ctx.device.makeBuffer(
+                bytes: base, length: raw.count, options: .storageModeShared)
         }
         guard let made else { throw MetalError.commandEncoderFailed }
         return made
@@ -64,7 +65,8 @@ import Testing
         var rng = LCG(state: seed)
         let groups = m * n / Quantization.groupSize
         return Operands(
-            weights: try buffer(ctx, (0..<(m * weightBytesPerRow)).map { _ in UInt8(rng.next() & 0xFF) }),
+            weights: try buffer(
+                ctx, (0..<(m * weightBytesPerRow)).map { _ in UInt8(rng.next() & 0xFF) }),
             scales: try buffer(ctx, (0..<groups).map { _ in bf16(0.01 + abs(rng.unit()) * 0.05) }),
             biases: try buffer(ctx, (0..<groups).map { _ in bf16(rng.unit() * 0.1) }),
             x: try buffer(ctx, (0..<(tokens * n)).map { _ in Float16(rng.unit()) }))
@@ -74,7 +76,8 @@ import Testing
         let ctx = try MetalContext()
         let gemv = try DequantInt4GEMV(context: ctx)
         let (m, n, tokens) = (48, 256, 37)
-        let ops = try Self.operands(ctx, m: m, n: n, tokens: tokens, weightBytesPerRow: n / 2, seed: 4)
+        let ops = try Self.operands(
+            ctx, m: m, n: n, tokens: tokens, weightBytesPerRow: n / 2, seed: 4)
         let half = MemoryLayout<Float16>.stride
         let perRow = try Self.zeroed(ctx, bytes: tokens * m * half)
         let coalesced = try Self.zeroed(ctx, bytes: tokens * m * half)
@@ -89,7 +92,8 @@ import Testing
                 commandBuffer: cb, weights: ops.weights, scales: ops.scales, biases: ops.biases,
                 x: ops.x, y: coalesced,
                 rows: GEMVRows(
-                    xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: m * half, count: tokens),
+                    xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: m * half,
+                    count: tokens),
                 m: UInt32(m), n: UInt32(n))
         }
         #expect(Self.same(perRow, coalesced, bytes: tokens * m * half))
@@ -115,7 +119,8 @@ import Testing
             try gemv.encodeRows(
                 commandBuffer: cb, weights: ops.weights, scales: ops.scales, biases: ops.biases,
                 x: ops.x, y: coalesced,
-                rows: GEMVRows(xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: half, count: tokens),
+                rows: GEMVRows(
+                    xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: half, count: tokens),
                 m: 1, n: UInt32(n))
         }
         #expect(Self.same(perRow, coalesced, bytes: tokens * half))
@@ -141,7 +146,8 @@ import Testing
             }
             try gemv.encodeRows(
                 commandBuffer: cb, weights: weights, x: x, y: coalesced,
-                rows: GEMVRows(xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: half, count: tokens),
+                rows: GEMVRows(
+                    xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: half, count: tokens),
                 m: 1, n: UInt32(n))
         }
         #expect(Self.same(perRow, coalesced, bytes: tokens * half))

@@ -95,7 +95,8 @@ import Testing
         let b = whole.layers[0].values
         let scale = max(b.map { abs($0) }.max() ?? 1, 1e-3)
         let worst = zip(a, b).map { abs($0 - $1) }.max() ?? 0
-        #expect(worst <= 0.05 * scale, "chunked and single-chunk rows disagree: \(worst) vs \(scale)")
+        #expect(
+            worst <= 0.05 * scale, "chunked and single-chunk rows disagree: \(worst) vs \(scale)")
     }
 
     @Test func theRunnerIsResetAndAnOrdinaryPrefillIsUnchangedAfterwards() async throws {

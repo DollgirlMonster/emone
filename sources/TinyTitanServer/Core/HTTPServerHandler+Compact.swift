@@ -83,16 +83,8 @@ extension ServerHTTPHandler {
                         streamState: StreamState(), surface: .responses)
                 }
             }
-        } catch let error as ServerRequestError {
-            writeError(
-                context, status: error == .unknownModel ? .notFound : .badRequest,
-                error.envelope)
         } catch {
-            writeError(
-                context, status: .badRequest,
-                OpenAIErrorEnvelope(
-                    message: "malformed JSON request",
-                    code: "invalid_json"))
+            writeOpenAIDecodeFailure(context, error)
         }
     }
 

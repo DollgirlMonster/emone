@@ -71,7 +71,9 @@ final class PrefillRoutedExpertGEMM {
         guard pairs > capacityPairs else { return }
         let half = MemoryLayout<Float16>.stride
         func make(_ elements: Int, _ label: String) throws -> MTLBuffer {
-            guard let made = device.makeBuffer(length: max(1, elements * half), options: .storageModePrivate)
+            guard
+                let made = device.makeBuffer(
+                    length: max(1, elements * half), options: .storageModePrivate)
             else { throw MetalError.bufferAllocationFailed(label) }
             made.label = label
             return made

@@ -197,7 +197,9 @@ struct ChatMLTemplateTests {
             tools: [])
         #expect(ids.first == tok.endOfTurnID)
         let text = tok.decode(ids, skipSpecialTokens: false)
-        #expect(text.hasPrefix("<|im_end|>\n<|im_start|>user\n<tool_response>\n42\n</tool_response><|im_end|>\n"))
+        #expect(
+            text.hasPrefix(
+                "<|im_end|>\n<|im_start|>user\n<tool_response>\n42\n</tool_response><|im_end|>\n"))
         #expect(text.contains("<|im_start|>assistant\n"))
     }
 

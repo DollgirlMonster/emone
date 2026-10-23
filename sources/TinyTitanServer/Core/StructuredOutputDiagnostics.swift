@@ -254,7 +254,8 @@ struct StructuredOutputFailure: Error, CustomDebugStringConvertible, Sendable {
     var clientMessage: String {
         var message = "structured output failed: \(kind.rawValue), \(cause.rawValue)"
         if let toolName {
-            message += "; the model called a tool that is not in this request's tools: "
+            message +=
+                "; the model called a tool that is not in this request's tools: "
                 + String(reflecting: String(toolName.prefix(200)))
         }
         return message

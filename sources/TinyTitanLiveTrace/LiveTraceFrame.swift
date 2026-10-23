@@ -539,7 +539,9 @@ enum LiveTraceFrame {
             case .loading: tail = ["loading the model for the next request"]
             case .none: tail = ["no model resident: the next request loads one"]
             case .loaded:
-                tail = [server.waiting > 0 ? "request waiting for the model" : "waiting for a request"]
+                tail = [
+                    server.waiting > 0 ? "request waiting for the model" : "waiting for a request"
+                ]
             }
         }
         while tail.count < LiveTraceViewPlan.outputLines { tail.append("") }

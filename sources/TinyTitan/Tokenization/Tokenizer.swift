@@ -801,7 +801,8 @@ public struct GFTokenizer: @unchecked Sendable {
     ) throws -> [Int32] {
         let continuation = Array(incomingMessages.dropFirst(cachedMessages.count + 1))
         guard !continuation.isEmpty else {
-            throw GFTokenizerError.invalidChatTemplate("tool-result continuation needs tool results")
+            throw GFTokenizerError.invalidChatTemplate(
+                "tool-result continuation needs tool results")
         }
         let anchor = [
             Message(role: .user, content: "."),

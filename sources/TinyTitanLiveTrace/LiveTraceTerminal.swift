@@ -113,7 +113,9 @@ extension LiveTraceGate {
     /// view, so this passes exactly when the compact view fits, and the
     /// per-model choice between that and the grid is made when a model loads.
     static func decideForServer(requested: Bool, probe: TerminalProbe) -> LiveTraceDecision {
-        decide(requested: requested, probe: probe, shape: LiveTraceModelInfo.placeholderShape(name: ""))
+        decide(
+            requested: requested, probe: probe, shape: LiveTraceModelInfo.placeholderShape(name: "")
+        )
     }
 }
 

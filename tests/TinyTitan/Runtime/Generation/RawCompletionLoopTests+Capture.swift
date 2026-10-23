@@ -41,12 +41,14 @@ struct RawCompletionCaptureTests {
             + [count]
         {
             spans += PrefillChunkPlanner.spans(
-                tokenCount: boundary - position, startPosition: position, chunkTokens: chunk)
-                .map { [$0.startPosition, $0.tokenCount] }
+                tokenCount: boundary - position, startPosition: position, chunkTokens: chunk
+            )
+            .map { [$0.startPosition, $0.tokenCount] }
             position = boundary
         }
         // Whole chunks to the anchor, one partial chunk, whole chunks after.
-        #expect(spans == [[0, 4], [4, 3], [7, 4], [11, 4], [15, 4], [19, 4], [23, 4], [27, 3]])
+        #expect(
+            spans == [[0, 4], [4, 3], [7, 4], [11, 4], [15, 4], [19, 4], [23, 4], [27, 3]])
     }
 
     struct SplitCase: Sendable, CustomTestStringConvertible {
@@ -67,8 +69,9 @@ struct RawCompletionCaptureTests {
         let promptCount = split.promptCount
         let chunk = split.chunk
         let single = PrefillChunkPlanner.spans(
-            tokenCount: promptCount - start, startPosition: start, chunkTokens: chunk)
-            .map { [$0.startPosition, $0.tokenCount] }
+            tokenCount: promptCount - start, startPosition: start, chunkTokens: chunk
+        )
+        .map { [$0.startPosition, $0.tokenCount] }
 
         let everyBoundary = Array(stride(from: start + chunk, to: promptCount, by: chunk))
         var spans: [[Int]] = []
@@ -78,8 +81,9 @@ struct RawCompletionCaptureTests {
             + [promptCount]
         {
             spans += PrefillChunkPlanner.spans(
-                tokenCount: boundary - position, startPosition: position, chunkTokens: chunk)
-                .map { [$0.startPosition, $0.tokenCount] }
+                tokenCount: boundary - position, startPosition: position, chunkTokens: chunk
+            )
+            .map { [$0.startPosition, $0.tokenCount] }
             position = boundary
         }
         #expect(spans == single)

@@ -22,8 +22,11 @@ import Testing
         let blockOut = (0..<(tokens * d)).map { _ in Float16(next()) }
         let inject = (0..<(tokens * streams)).map { _ in Float16(next() * 4) }
         func buffer<T>(_ v: [T]) throws -> MTLBuffer {
-            guard let b = v.withUnsafeBytes({ ctx.device.makeBuffer(
-                bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared) })
+            guard
+                let b = v.withUnsafeBytes({
+                    ctx.device.makeBuffer(
+                        bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+                })
             else { throw MetalError.commandEncoderFailed }
             return b
         }
@@ -74,8 +77,10 @@ import Testing
         // 4-bit weights, bf16 scales and biases (0x3C3C is a small positive bf16).
         func gate(rows: Int, cols: Int) throws -> (MTLBuffer, MTLBuffer, MTLBuffer) {
             let groups = rows * cols / 64
-            return (try buffer(rows * cols / 2, fill: 0x5A), try buffer(groups * 2, fill: 0x3B),
-                try buffer(groups * 2, fill: 0x00))
+            return (
+                try buffer(rows * cols / 2, fill: 0x5A), try buffer(groups * 2, fill: 0x3B),
+                try buffer(groups * 2, fill: 0x00)
+            )
         }
         let streamsBuf = try buffer(t * wide * 2, fill: 0x2C)
         let normWeight = try buffer(wide * 2, fill: 0x3F)
@@ -88,17 +93,24 @@ import Testing
         let up = try gate(rows: wide, cols: lowRank)
         let inject = try gate(rows: streams, cols: wide)
 
-        func time(_ label: String, bytes: Double, flop: Double = 0, _ body: (MTLCommandBuffer) throws -> Void) throws {
+        func time(
+            _ label: String, bytes: Double, flop: Double = 0,
+            _ body: (MTLCommandBuffer) throws -> Void
+        ) throws {
             var best = Double.infinity
             for _ in 0..<4 {
-                guard let cb = ctx.queue.makeCommandBuffer() else { throw MetalError.commandEncoderFailed }
+                guard let cb = ctx.queue.makeCommandBuffer() else {
+                    throw MetalError.commandEncoderFailed
+                }
                 try body(cb)
                 cb.commit()
                 cb.waitUntilCompleted()
                 best = min(best, cb.gpuEndTime - cb.gpuStartTime)
             }
-            print(String(format: "[hc-bench] %-14@ %7.2f ms  %6.0f GB/s  %5.2f TFLOP/s",
-                label as NSString, best * 1000, bytes / best / 1e9, flop / best / 1e12))
+            print(
+                String(
+                    format: "[hc-bench] %-14@ %7.2f ms  %6.0f GB/s  %5.2f TFLOP/s",
+                    label as NSString, best * 1000, bytes / best / 1e9, flop / best / 1e12))
         }
         let h = Double(t) * 2
         try time("rms", bytes: h * Double(wide) * 2) { cb in
@@ -106,15 +118,18 @@ import Testing
                 commandBuffer: cb, x: streamsBuf, weight: normWeight, out: normed,
                 groupDim: UInt32(dim), numGroups: streams, eps: 1e-6, tokens: t)
         }
-        try time("down", bytes: h * Double(wide + lowRank), flop: 2 * Double(t * wide * lowRank)) { cb in
+        try time("down", bytes: h * Double(wide + lowRank), flop: 2 * Double(t * wide * lowRank)) {
+            cb in
             try dense.encode(
                 commandBuffer: cb, weights: down.0, scales: down.1, biases: down.2,
                 x: normed, y: low, t: t, n: lowRank, k: wide, bits: 4)
         }
         try time("silu", bytes: h * Double(lowRank) * 2) { cb in
-            try elementwise.encodeSilu(commandBuffer: cb, x: low, out: low, count: lowRank * t, inScale: 1)
+            try elementwise.encodeSilu(
+                commandBuffer: cb, x: low, out: low, count: lowRank * t, inScale: 1)
         }
-        try time("up", bytes: h * Double(wide + lowRank), flop: 2 * Double(t * wide * lowRank)) { cb in
+        try time("up", bytes: h * Double(wide + lowRank), flop: 2 * Double(t * wide * lowRank)) {
+            cb in
             try dense.encode(
                 commandBuffer: cb, weights: up.0, scales: up.1, biases: up.2,
                 x: low, y: mix, t: t, n: wide, k: lowRank, bits: 4)
@@ -124,7 +139,8 @@ import Testing
                 commandBuffer: cb, mix: mix, normed: normed, out: blockInput,
                 dim: dim, streams: streams, tokens: t, inScale: 1)
         }
-        try time("inject_proj", bytes: h * Double(wide), flop: 2 * Double(t * wide * streams)) { cb in
+        try time("inject_proj", bytes: h * Double(wide), flop: 2 * Double(t * wide * streams)) {
+            cb in
             try scalarQMM.encode(
                 commandBuffer: cb, weights: inject.0, scales: inject.1, biases: inject.2,
                 x: normed, y: injectOut, t: t, n: streams, k: wide)

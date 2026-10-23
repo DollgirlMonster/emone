@@ -36,7 +36,8 @@ extension PrefillGroupedRoutedMoETests {
 
         let ctx = try MetalContext()
         let gemm = try #require(
-            try PrefillRoutedExpertGEMM(context: ctx, weightBits: weightBits, siluActivation: false))
+            try PrefillRoutedExpertGEMM(context: ctx, weightBits: weightBits, siluActivation: false)
+        )
         guard let hiddenBuffer = Fp16Buffer.make(ctx.device, halves: hidden),
             let pairBuffer = ctx.device.makeBuffer(
                 bytes: routes.sortedPairs,

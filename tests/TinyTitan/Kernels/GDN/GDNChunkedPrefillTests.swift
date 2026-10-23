@@ -69,7 +69,9 @@ import TinyTitanValidationSupport
             state: (0..<stateCount).map { sPtr[$0] })
     }
 
-    private static func compare(cfg: LinearAttentionConfig, rows: Int, warmState: Bool, seed: UInt64)
+    private static func compare(
+        cfg: LinearAttentionConfig, rows: Int, warmState: Bool, seed: UInt64
+    )
         throws
     {
         var rng = LCG(s: seed)

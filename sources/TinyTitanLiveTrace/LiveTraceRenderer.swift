@@ -247,11 +247,12 @@ final class LiveTraceRenderer: @unchecked Sendable {
     }
 
     private func applyPendingScene() {
-        guard let next = pending.withLock({ pending -> LiveTraceScene? in
-            let value = pending
-            pending = nil
-            return value
-        })
+        guard
+            let next = pending.withLock({ pending -> LiveTraceScene? in
+                let value = pending
+                pending = nil
+                return value
+            })
         else { return }
         // The same model again (an idle unload and reload) keeps its heat; any
         // other shape starts a fresh picture.

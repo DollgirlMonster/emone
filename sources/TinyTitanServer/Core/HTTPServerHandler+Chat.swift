@@ -56,7 +56,8 @@ extension ServerHTTPHandler {
             activeTask = childChannels.startTask {
                 defer { streamState.stop() }
                 let started = ContinuousClock.now
-                ServerLog.accepted(id: responseID, streaming: request.stream, clientModel: decoded.model)
+                ServerLog.accepted(
+                    id: responseID, streaming: request.stream, clientModel: decoded.model)
                 defer { ServerLog.closed(id: responseID) }
                 let outbox: SSEOutbox? =
                     request.stream
@@ -121,17 +122,8 @@ extension ServerHTTPHandler {
                     await Self.awaitDrainer(drainer)
                 }
             }
-        } catch let error as ServerRequestError {
-            writeError(
-                context,
-                status: error == .unknownModel ? .notFound : .badRequest,
-                error.envelope)
         } catch {
-            writeError(
-                context, status: .badRequest,
-                OpenAIErrorEnvelope(
-                    message: "malformed JSON request",
-                    code: "invalid_json"))
+            writeOpenAIDecodeFailure(context, error)
         }
     }
 

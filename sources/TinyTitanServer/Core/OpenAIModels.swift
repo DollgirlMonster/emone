@@ -645,7 +645,8 @@ public enum OpenAIRequestValidator {
         // generation keeps its normal meaning. Everything else about the
         // field's shape is checked here, before a model is touched.
         let hiddenStates = try request.hiddenStates.map {
-            try validateHiddenStates($0, stream: request.stream == true, family: reasoningProfile.family)
+            try validateHiddenStates(
+                $0, stream: request.stream == true, family: reasoningProfile.family)
         }
         // A non-zero presence penalty is supported now: the sampler subtracts it
         // once per distinct id already in the history. This guard used to reject
@@ -898,16 +899,23 @@ public enum OpenAIRequestValidator {
         func refuse(_ message: String) -> ServerRequestError {
             invalid(message, "x_prefill_reply", "unsupported_value")
         }
-        guard !stream else { throw refuse("x_prefill_reply cannot stream; there is nothing to stream") }
-        guard !hiddenStates else { throw refuse("x_prefill_reply cannot be combined with x_hidden_states") }
-        guard !jsonSchema else { throw refuse("x_prefill_reply cannot be combined with response_format") }
+        guard !stream else {
+            throw refuse("x_prefill_reply cannot stream; there is nothing to stream")
+        }
+        guard !hiddenStates else {
+            throw refuse("x_prefill_reply cannot be combined with x_hidden_states")
+        }
+        guard !jsonSchema else {
+            throw refuse("x_prefill_reply cannot be combined with response_format")
+        }
         guard messages.count >= 2, let reply = messages.last, reply.role == .assistant,
             reply.toolCalls.isEmpty, reply.toolCallID == nil,
             let text = reply.content,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             throw refuse(
-                "x_prefill_reply needs the history followed by a final plain-text assistant message")
+                "x_prefill_reply needs the history followed by a final plain-text assistant message"
+            )
         }
         guard messages[messages.count - 2].role != .assistant else {
             throw refuse("the message before the prefilled reply must not be an assistant message")

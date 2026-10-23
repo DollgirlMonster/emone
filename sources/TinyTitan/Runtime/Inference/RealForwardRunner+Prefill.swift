@@ -1155,38 +1155,38 @@ extension RealForwardRunner {
         let routedViaLogits =
             try prefillRouterLogits
             && prefillRouter.encodeFromLogits(
-                    commandBuffer: cb,
-                    weights: routerView.buffer, weightsOffset: Int(routerView.offset),
-                    scales: routerView.buffer, scalesOffset: Int(routerView.scaleOffset),
-                    biases: routerView.buffer, biasesOffset: Int(routerView.biasOffset),
-                    hidden: scratch.routedX,
-                    // The runner's effective scale is a ones buffer per layer.
-                    unitInputScale: true,
-                    perExpertScale: perExpertScale.buffer,
-                    perExpertScaleOffset: perExpertScale.offset,
-                    outIndices: scratch.routeIDs, outWeights: scratch.routeWeights,
-                    queryCount: t, numExperts: cfg.numExperts, d: D,
-                    topK: cfg.topKExperts, hiddenStrideElements: D)
+                commandBuffer: cb,
+                weights: routerView.buffer, weightsOffset: Int(routerView.offset),
+                scales: routerView.buffer, scalesOffset: Int(routerView.scaleOffset),
+                biases: routerView.buffer, biasesOffset: Int(routerView.biasOffset),
+                hidden: scratch.routedX,
+                // The runner's effective scale is a ones buffer per layer.
+                unitInputScale: true,
+                perExpertScale: perExpertScale.buffer,
+                perExpertScaleOffset: perExpertScale.offset,
+                outIndices: scratch.routeIDs, outWeights: scratch.routeWeights,
+                queryCount: t, numExperts: cfg.numExperts, d: D,
+                topK: cfg.topKExperts, hiddenStrideElements: D)
         if !routedViaLogits {
-        try prefillRouter.encodeBlock(
-            commandBuffer: cb,
-            weights: routerView.buffer,
-            weightsOffset: Int(routerView.offset),
-            scales: routerView.buffer,
-            scalesOffset: Int(routerView.scaleOffset),
-            biases: routerView.buffer,
-            biasesOffset: Int(routerView.biasOffset),
-            hidden: scratch.routedX,
-            effectiveScale: effectiveScaleBuffers[L],
-            perExpertScale: perExpertScale.buffer,
-            perExpertScaleOffset: perExpertScale.offset,
-            outIndices: scratch.routeIDs,
-            outWeights: scratch.routeWeights,
-            queryCount: UInt32(t),
-            numExperts: UInt32(cfg.numExperts),
-            d: UInt32(D),
-            topK: UInt32(cfg.topKExperts),
-            hiddenStrideElements: UInt32(D))
+            try prefillRouter.encodeBlock(
+                commandBuffer: cb,
+                weights: routerView.buffer,
+                weightsOffset: Int(routerView.offset),
+                scales: routerView.buffer,
+                scalesOffset: Int(routerView.scaleOffset),
+                biases: routerView.buffer,
+                biasesOffset: Int(routerView.biasOffset),
+                hidden: scratch.routedX,
+                effectiveScale: effectiveScaleBuffers[L],
+                perExpertScale: perExpertScale.buffer,
+                perExpertScaleOffset: perExpertScale.offset,
+                outIndices: scratch.routeIDs,
+                outWeights: scratch.routeWeights,
+                queryCount: UInt32(t),
+                numExperts: UInt32(cfg.numExperts),
+                d: UInt32(D),
+                topK: UInt32(cfg.topKExperts),
+                hiddenStrideElements: UInt32(D))
         }
 
         let traceCommit = Self.prefillLayerTrace ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0
@@ -1600,6 +1600,11 @@ extension RealForwardRunner {
     /// instead of once per chunk. Everything here is per (layer, chunk) except
     /// `scratch.hidden`, which is the residual and therefore the one buffer the
     /// caller must supply per chunk rather than per pass.
+    ///
+    /// lint:allow-long a straight-line stage pipeline (PLE, residual entry,
+    /// QSA selection, attention on GPU or ANE, residual exit, routed MoE, dump)
+    /// whose stages are already their own functions; what is left is the order
+    /// and the per-layer arguments, which read best in one place.
     private func runPrefillLayer(
         _ L: Int,
         cb: inout MTLCommandBuffer,

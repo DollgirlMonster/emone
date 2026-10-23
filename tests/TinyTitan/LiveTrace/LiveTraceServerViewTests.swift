@@ -230,7 +230,8 @@ final class ViewHarness {
             token: UUID(),
             info: Self.info(
                 "ornith", shape: Self.routed,
-                unavailable: "batched serving (--max-concurrent-sequences above 1) does not record routing"
+                unavailable:
+                    "batched serving (--max-concurrent-sequences above 1) does not record routing"
             ))
         #expect(view.currentPlanForTesting == .compact(width: 78, height: 9))
         #expect(harness.noteLines.count == 1)

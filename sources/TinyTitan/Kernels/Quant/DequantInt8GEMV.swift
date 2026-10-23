@@ -107,7 +107,8 @@ final class DequantInt8GEMV {
             enc.setBuffer(y, offset: rows.yOffset, index: 4)
             var params = (
                 UInt32(rows.count), n,
-                UInt32(rows.xRowStride / half), UInt32(rows.yRowStride / half))
+                UInt32(rows.xRowStride / half), UInt32(rows.yRowStride / half)
+            )
             enc.setBytes(&params.0, length: 4, index: 5)
             enc.setBytes(&params.1, length: 4, index: 6)
             enc.setBytes(&params.2, length: 4, index: 7)

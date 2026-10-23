@@ -82,9 +82,10 @@ public final class LiveTraceGeneration: @unchecked Sendable {
 
     /// Leave the view: normally, after an error, after a cancel. Idempotent.
     public func close() {
-        guard closed.compareExchange(
-            expected: false, desired: true, ordering: .acquiringAndReleasing
-        ).exchanged
+        guard
+            closed.compareExchange(
+                expected: false, desired: true, ordering: .acquiringAndReleasing
+            ).exchanged
         else { return }
         feed.finish()
         view?.generationEnded(self, summary: summary)

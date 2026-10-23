@@ -23,7 +23,8 @@ import Testing
     private static func buffer<T>(_ ctx: MetalContext, _ values: [T]) throws -> MTLBuffer {
         let made = values.withUnsafeBytes { raw -> MTLBuffer? in
             guard let base = raw.baseAddress else { return nil }
-            return ctx.device.makeBuffer(bytes: base, length: raw.count, options: .storageModeShared)
+            return ctx.device.makeBuffer(
+                bytes: base, length: raw.count, options: .storageModeShared)
         }
         guard let made else { throw MetalError.commandEncoderFailed }
         return made
@@ -227,12 +228,15 @@ import Testing
             else { throw MetalError.commandEncoderFailed }
             memset(out.contents(), 0xAB, count * 2)
             try attention.encodeCausal(
-                commandBuffer: cb, q: q, k: kCache.buffer, v: vCache.buffer, out: out, params: params)
+                commandBuffer: cb, q: q, k: kCache.buffer, v: vCache.buffer, out: out,
+                params: params)
             cb.commit()
             cb.waitUntilCompleted()
             #expect(cb.error == nil)
-            return Array(UnsafeBufferPointer(
-                start: out.contents().bindMemory(to: Float16.self, capacity: count), count: count))
+            return Array(
+                UnsafeBufferPointer(
+                    start: out.contents().bindMemory(to: Float16.self, capacity: count),
+                    count: count))
         }
         Self.check((try once(flash: false), try once(flash: true)), "dense q\(qHeads) kv\(kvBits)")
     }
@@ -264,7 +268,8 @@ import Testing
 
     @Test func scatteredSelection() throws {
         Self.check(
-            try Self.run(kvBits: 8, queries: 45, startPosition: 130, rowTile: nil, blockSparse: false),
+            try Self.run(
+                kvBits: 8, queries: 45, startPosition: 130, rowTile: nil, blockSparse: false),
             "scattered")
     }
 
@@ -272,7 +277,8 @@ import Testing
     /// `encodeCausalTiled` dispatches them.
     @Test func rowTilesOffsetIntoTheChunk() throws {
         Self.check(
-            try Self.run(kvBits: 8, queries: 150, startPosition: 64, rowTile: 64, blockSparse: true),
+            try Self.run(
+                kvBits: 8, queries: 150, startPosition: 64, rowTile: 64, blockSparse: true),
             "row tiles")
     }
     /// Packed mode at the Qwen3.8 shape of one 4,096-row tile at the end of a
@@ -334,8 +340,9 @@ import Testing
             scale: 0.0625, kvBits: 8,
             kvTokenStrideBytes: UInt32(kCache.strideBytes),
             kvValueBytes: UInt32(kCache.valueBytes), kvGroupSize: UInt32(groupSize))
-        guard let out = ctx.device.makeBuffer(
-            length: queries * qHeads * headDim * 2, options: .storageModeShared)
+        guard
+            let out = ctx.device.makeBuffer(
+                length: queries * qHeads * headDim * 2, options: .storageModeShared)
         else { throw MetalError.commandEncoderFailed }
         // Two products of 8 rows x 4 keys x 256 per block per query head.
         let flop = Double(walkedBlocks) * 2 * 2 * 8 * 4 * Double(headDim) * Double(qHeads)
@@ -343,7 +350,9 @@ import Testing
         attention.packedFlash = true
         var best = Double.infinity
         for round in 0..<6 {
-            guard let cb = ctx.queue.makeCommandBuffer() else { throw MetalError.commandEncoderFailed }
+            guard let cb = ctx.queue.makeCommandBuffer() else {
+                throw MetalError.commandEncoderFailed
+            }
             try attention.encodeCausal(
                 commandBuffer: cb, q: q, k: kCache.buffer, v: vCache.buffer, out: out,
                 params: params, keepMask: maskBuffer, keepStride: valid,
@@ -352,8 +361,10 @@ import Testing
             cb.waitUntilCompleted()
             if round > 0 { best = min(best, cb.gpuEndTime - cb.gpuStartTime) }
         }
-        print(String(format: "[qsa-packed-bench] best_gpu_ms=%.1f walked_tflops=%.2f",
-            best * 1000, flop / best / 1e12))
+        print(
+            String(
+                format: "[qsa-packed-bench] best_gpu_ms=%.1f walked_tflops=%.2f",
+                best * 1000, flop / best / 1e12))
     }
 
     /// GPU time at the Qwen3.8 shape of one 4,096-row attention tile at the
@@ -408,20 +419,25 @@ import Testing
             scale: 0.0625, kvBits: 8,
             kvTokenStrideBytes: UInt32(kCache.strideBytes),
             kvValueBytes: UInt32(kCache.valueBytes), kvGroupSize: UInt32(groupSize))
-        guard let out = ctx.device.makeBuffer(
-            length: queries * qHeads * headDim * 2, options: .storageModeShared)
+        guard
+            let out = ctx.device.makeBuffer(
+                length: queries * qHeads * headDim * 2, options: .storageModeShared)
         else { throw MetalError.commandEncoderFailed }
         for flash in [false, true, false, true] {
             attention.maskedFlash = flash
-            guard let cb = ctx.queue.makeCommandBuffer() else { throw MetalError.commandEncoderFailed }
+            guard let cb = ctx.queue.makeCommandBuffer() else {
+                throw MetalError.commandEncoderFailed
+            }
             try attention.encodeCausal(
                 commandBuffer: cb, q: q, k: kCache.buffer, v: vCache.buffer, out: out,
                 params: params, keepMask: maskBuffer, keepStride: valid,
                 keepIndices: indexBuffer, keepIndexStride: 2_048, keepCounts: countBuffer)
             cb.commit()
             cb.waitUntilCompleted()
-            print(String(format: "[qsa-flash-bench] flash=%d gpu_ms=%.1f", flash ? 1 : 0,
-                (cb.gpuEndTime - cb.gpuStartTime) * 1000))
+            print(
+                String(
+                    format: "[qsa-flash-bench] flash=%d gpu_ms=%.1f", flash ? 1 : 0,
+                    (cb.gpuEndTime - cb.gpuStartTime) * 1000))
         }
     }
 }

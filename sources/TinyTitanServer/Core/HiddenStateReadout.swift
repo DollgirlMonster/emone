@@ -165,19 +165,21 @@ public struct HiddenStatesPayload: Equatable, Sendable {
     public func jsonObject() -> [String: Any] {
         var object: [String: Any] = [:]
         for layer in result.layers {
-            object[String(layer.layer)] = [
-                "dim": layer.values.count,
-                "dtype": "float32",
-                "shape": [1, layer.values.count],
-                "data": Self.base64Float32(layer.values),
-            ] as [String: Any]
+            object[String(layer.layer)] =
+                [
+                    "dim": layer.values.count,
+                    "dtype": "float32",
+                    "shape": [1, layer.values.count],
+                    "data": Self.base64Float32(layer.values),
+                ] as [String: Any]
         }
         object["position"] = result.position
-        object["capture_path"] = [
-            "runner": "plain",
-            "prefill": result.path.usedANE ? "ane" : "gpu",
-            "early_stop": result.path.earlyStop,
-        ] as [String: Any]
+        object["capture_path"] =
+            [
+                "runner": "plain",
+                "prefill": result.path.usedANE ? "ane" : "gpu",
+                "early_stop": result.path.earlyStop,
+            ] as [String: Any]
         object["capture_ms"] = Double(result.captureNanos) / 1e6
         return object
     }

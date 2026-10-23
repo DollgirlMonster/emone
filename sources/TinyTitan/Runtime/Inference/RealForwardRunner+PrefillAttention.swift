@@ -380,7 +380,8 @@ extension RealForwardRunner {
                 // waits on directly; queue order completes them before the
                 // route readback, which drains them into the GPU timings.
                 onCommit: kernelGPUTimingsEnabled
-                    ? { [unowned self] in self.splitTimedBuffers.append(("prefill_attn_tiles", $0)) }
+                    ? { [unowned self] in self.splitTimedBuffers.append(("prefill_attn_tiles", $0))
+                    }
                     : nil)
         } else {
             throw PrefillError.chunkedUnsupported(
