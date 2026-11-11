@@ -134,6 +134,7 @@ extension RealForwardRunner {
         // must not run a chunk while another slot is decoding. One gate covers
         // both; a prefill holds it for its whole burst.
         try await forwardStepGate.acquire()
+        forwardActivityCount &+= 1
         do {
             let result = try await runPrefillChunked(
                 tokens: tokens, startPosition: startPosition, slot: slot,
@@ -257,6 +258,9 @@ extension RealForwardRunner {
         let runPrologue = true
         let runEpilogue = true
         guard !tokens.isEmpty else { return }
+        // Decode's warm reads may still be in flight from the last token;
+        // prefill plans its own tiles against a cache nothing else is filling.
+        try drainResidentWarm()
         guard kv != nil else {
             throw PrefillError.chunkedUnsupported("chunked prefill attention requires a KV cache")
         }

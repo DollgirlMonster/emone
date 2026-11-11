@@ -40,7 +40,7 @@ extension RealForwardRunner {
     /// tables of any layer whose cache map changed.
     func prepareResidentDecode() throws -> Bool {
         residentTokenBuffers.removeAll(keepingCapacity: true)
-        try drainResidentWarm()
+        try reapResidentWarm(blocking: false)
         guard Self.residentDecodeFlag, cfg.numExperts > 0,
             cfg.topKExperts <= moe.maxStreamedExperts,
             decodeExpertExecution == .hitFixup, expertIOSynchronization == .host,
@@ -89,12 +89,17 @@ extension RealForwardRunner {
     ///
     /// When few experts are missing -- after a prefill, the handful per layer
     /// it never routed to -- they are read here and the next token is
-    /// resident. A cold cache is filled a little each token instead, with the
-    /// reads submitted now and waited on at the token's end, so they overlap
-    /// its GPU work rather than add to it (read on the token's own time they
-    /// cost 11% of cold decode, 19.9 against 22.3 tok/s on Qwen 3.6 4-bit).
+    /// resident. A cold cache is filled in the background instead: a window
+    /// of reads is kept in flight across tokens, topped up at each token's
+    /// start and never waited on, so the drive stays busy while the tokens
+    /// decode on the ordinary path. (Waiting for two plans at each token's
+    /// end filled 32 experts a token, about a quarter of what the drive
+    /// delivers; reading on the token's own time cost 11% of cold decode.)
     static let residentWarmInline = 512
-    static let residentWarmPlansPerToken = 2
+    /// Plans in flight (16 experts each). 6, 12 and 24 measured alike on Qwen
+    /// 3.6 4-bit (40.1 / 40.7 / 40.2 tok/s over a cold 1,024 tokens, 2 at
+    /// 38.7): past the drive's rate a wider window only pins more slots.
+    static let residentWarmWindow = 6
 
     func warmTowardFullResidency(from firstLayer: Int) throws {
         guard let slots = model.routedExpertCacheSlotCount(), slots >= cfg.numExperts else {
@@ -107,6 +112,7 @@ extension RealForwardRunner {
         }
         var layer = firstLayer
         if missing <= Self.residentWarmInline {
+            try reapResidentWarm(blocking: true)
             while layer < cfg.numLayers {
                 let loaded = try model.warmRoutedExperts(layer: layer, limit: 16)
                 if loaded == 0 { layer += 1 }
@@ -114,7 +120,7 @@ extension RealForwardRunner {
             }
             return
         }
-        while residentWarmOperations.count < Self.residentWarmPlansPerToken,
+        while residentWarmOperations.count < Self.residentWarmWindow,
             layer < cfg.numLayers
         {
             if let warm = try model.beginWarmRoutedExperts(layer: layer, limit: 16) {
@@ -126,18 +132,75 @@ extension RealForwardRunner {
         }
     }
 
-    /// Waits for this token's warm reads and unpins their slots. Every
-    /// submitted read is waited on, error or not, so no slot is left loading.
-    func drainResidentWarm() throws {
+    /// Unpins the slots of warm reads that have finished, and surfaces their
+    /// errors. `blocking` waits for the ones still in flight as well, which
+    /// leaves no slot loading.
+    func reapResidentWarm(blocking: Bool) throws {
         guard !residentWarmOperations.isEmpty else { return }
         let operations = residentWarmOperations
         residentWarmOperations.removeAll(keepingCapacity: true)
         var failure: Error?
         for warm in operations {
+            let state = warm.operation.state
+            if !blocking, state == .submitted || state == .inFlight {
+                residentWarmOperations.append(warm)
+                continue
+            }
             do { _ = try warm.operation.wait() } catch { failure = failure ?? error }
             warm.lease.release()
         }
         if let failure { throw failure }
+    }
+
+    func drainResidentWarm() throws { try reapResidentWarm(blocking: true) }
+
+    static let residentIdleWarmPlans = 12
+
+    /// Fills the routed-expert cache while no request is running, so the
+    /// first reply after a load decodes resident instead of paying for the
+    /// read (on Qwen 3.6 4-bit about 14 GB, ~7 s of a cold reply). A no-op
+    /// for a model whose cache cannot hold every expert.
+    ///
+    /// The step gate is held a batch at a time -- twelve plans, a fraction of
+    /// a second -- so a request that arrives waits for one batch at most.
+    /// Once a prefill or decode step has run, the warm stops: decode fills
+    /// the rest itself (`warmTowardFullResidency`), and the caller may start
+    /// this again when the request is over.
+    public func warmResidentExpertsWhileIdle() async {
+        guard Self.residentDecodeFlag, cfg.numExperts > 0,
+            let slots = model.routedExpertCacheSlotCount(), slots >= cfg.numExperts
+        else { return }
+        var activityAtStart: UInt64?
+        var layer = 0
+        while !Task.isCancelled {
+            do { try await forwardStepGate.acquire() } catch { return }
+            var finished = activityAtStart.map { $0 != forwardActivityCount } ?? false
+            activityAtStart = forwardActivityCount
+            if !finished {
+                // A failed read ends the warm quietly: the token that needs
+                // the expert reads it again and reports the error there.
+                finished = (try? warmIdleBatch(from: &layer)) ?? true
+            }
+            await forwardStepGate.release()
+            if finished { return }
+            await Task.yield()
+        }
+    }
+
+    /// One batch of the idle warm, read concurrently and waited on here.
+    /// Returns whether every layer is complete. Call under the step gate.
+    func warmIdleBatch(from layer: inout Int) throws -> Bool {
+        try reapResidentWarm(blocking: true)
+        while residentWarmOperations.count < Self.residentIdleWarmPlans, layer < cfg.numLayers {
+            if let warm = try model.beginWarmRoutedExperts(layer: layer, limit: 16) {
+                residentWarmOperations.append(warm)
+                totalResidentWarmedExperts &+= UInt64(warm.operation.plan.misses.count)
+            } else {
+                layer += 1
+            }
+        }
+        try reapResidentWarm(blocking: true)
+        return layer >= cfg.numLayers
     }
 
     /// The routed stage of one layer with no readback: resolve, phase 1,

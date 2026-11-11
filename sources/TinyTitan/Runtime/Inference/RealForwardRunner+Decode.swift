@@ -20,6 +20,7 @@ extension RealForwardRunner {
         into logits: MTLBuffer
     ) async throws {
         try await forwardStepGate.acquire()
+        forwardActivityCount &+= 1
         do {
             // Checked under the gate: the commit state is runner-wide, so
             // another slot's in-flight prefill is only visible here, not before
@@ -643,7 +644,7 @@ extension RealForwardRunner {
         }
 
         if residentToken { try finishResidentToken(position: position) }
-        try drainResidentWarm()
+        try reapResidentWarm(blocking: false)
         kv?.advance(slot: slot, by: 1)
     }
 

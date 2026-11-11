@@ -1534,6 +1534,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     var residentRouteLog: MTLBuffer?
     /// This token's command buffers, checked and timed once it has landed.
     var residentTokenBuffers: [(role: String, cb: MTLCommandBuffer)] = []
+    /// Prefill bursts and decode tokens started; read and written only
+    /// under `forwardStepGate`. The idle warm stands down when it moves.
+    var forwardActivityCount: UInt64 = 0
     public internal(set) var totalResidentTokens: UInt64 = 0
     /// Warm reads submitted during this token, waited on at its end.
     var residentWarmOperations: [(lease: RoutedExpertLease, operation: RoutedExpertLoadOperation)] =

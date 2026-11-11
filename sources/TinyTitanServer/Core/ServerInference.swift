@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import TinyTitan
 import TinyTitanLiveTrace
 
@@ -368,6 +369,26 @@ private final class GenerationDecodeState: @unchecked Sendable {
     }
 }
 
+/// The session's idle expert warm (`RealForwardRunner.warmResidentExpertsWhileIdle`),
+/// held outside the actor so its initializer and deinit can start and cancel it.
+final class ResidentWarmHandle: Sendable {
+    private let task = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+
+    /// Replaces any warm still running with a fresh one.
+    func restart(_ runner: RealForwardRunner) {
+        let next = Task.detached(priority: .utility) {
+            await runner.warmResidentExpertsWhileIdle()
+        }
+        let previous = task.withLock { current -> Task<Void, Never>? in
+            defer { current = next }
+            return current
+        }
+        previous?.cancel()
+    }
+
+    func cancel() { task.withLock { $0 }?.cancel() }
+}
+
 public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, PromptCacheDescribing
 {
     /// Manifest-derived API model identifier used when --model-id is absent.
@@ -402,6 +423,9 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
     private let tokenizerFolder: URL
     private nonisolated let loadedReasoning: RequestReasoning
     let runner: RealForwardRunner
+    /// Fills the expert cache between requests; see
+    /// `RealForwardRunner.warmResidentExpertsWhileIdle`.
+    private let residentWarm = ResidentWarmHandle()
     let mtpDecoder: StreamingMTPDecoder?
     /// One raw-completion scratch per slot: its own logits/probs/token buffers
     /// and its own sampler, so concurrent slots cannot sample from each other's
@@ -904,9 +928,11 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         self.frontierClock = frontierPrefixEntries.count
         self.concisePrompt = concisePrompt
         reportLiveTraceLoad()
+        residentWarm.restart(runner)
     }
 
     deinit {
+        residentWarm.cancel()
         ServerLiveTrace.current?.modelUnloaded(token: liveTraceToken)
     }
 
@@ -940,6 +966,11 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
         freeSlots.append(slot)
         if !slotWaiters.isEmpty {
             slotWaiters.removeFirst().continuation.resume()
+        }
+        // The last generation is over: whatever the cache still lacks is
+        // read now, while nobody is waiting on a token.
+        if slotWaiters.isEmpty, freeSlots.count == slots {
+            residentWarm.restart(runner)
         }
     }
 
