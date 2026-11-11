@@ -1319,3 +1319,104 @@ kernel void moe_phase1_gate_up_act_u16load_v2(
         if (two) acts[slot1 * FF + f1] = half(moe_hidden_activation(g1) * u1);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Row-batched routed decode kernels.
+//
+// `moe_phase1_gate_up_act_u16load` and `moe_phase2_down_reduce_k8` for several
+// rows in one dispatch each: grid.y is the row, and row r owns pointers
+// [r*8, r*8+8) of the argument buffer (written by
+// `moe_resolve_resident_experts` with top_k = rows*8), activations
+// [r*8*F, (r+1)*8*F), routing weights [r*8, r*8+8) and x / residual / y row r.
+// Per row the arithmetic is the single-row kernels', call for call, so a row's
+// result is the one decode produces for it.
+// ---------------------------------------------------------------------------
+
+constant constexpr uint kMoEMaxRowPairs = 512;
+
+struct RoutedBlobRows {
+    device const uint8_t* blob[kMoEMaxRowPairs];
+};
+
+kernel void moe_phase1_gate_up_act_u16load_rows(
+    device const RoutedBlobRows& routed [[buffer(0)]],
+    constant ExpertOffsets& routed_offsets [[buffer(1)]],
+    device const half* x [[buffer(2)]],
+    device half* acts [[buffer(3)]],
+    constant uint& D [[buffer(4)]],
+    constant uint& F [[buffer(5)]],
+    constant uint& top_k [[buffer(6)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 16;
+    threadgroup half xt[kMoEXMaxD];
+    const uint DD = moe_fc_d(D);
+    const uint FF = moe_fc_f(F);
+    const uint K = moe_fc_top_k(top_k);
+    const uint row = tg.y;
+    device const half* xr = x + row * DD;
+    for (uint i = lane; i < DD; i += 32u) {
+        xt[i] = xr[i];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint rowg = tg.x * rows_per_tg + sg_idx;
+    if (rowg >= K * FF) return;
+    const uint pair = row * K + rowg / FF;
+    const uint f = rowg % FF;
+
+    device const uint8_t* base = routed.blob[pair];
+    const ExpertOffsets re = routed_offsets;
+    const float2 gu = moe_int4_gate_up_rows_simd_tgmem_u16load(
+        xt, base + re.gate_W_off,
+        (device const bfloat*)(base + re.gate_s_off),
+        (device const bfloat*)(base + re.gate_b_off),
+        base + re.up_W_off,
+        (device const bfloat*)(base + re.up_s_off),
+        (device const bfloat*)(base + re.up_b_off),
+        f, DD, lane);
+    if (lane == 0) acts[pair * FF + f] = half(moe_hidden_activation(gu.x) * gu.y);
+}
+
+kernel void moe_phase2_down_reduce_k8_rows(
+    device const RoutedBlobRows& routed [[buffer(0)]],
+    constant ExpertOffsets& routed_offsets [[buffer(1)]],
+    device const half* acts [[buffer(2)]],
+    device const half* routing_w [[buffer(3)]],
+    device const half* residual [[buffer(4)]],
+    device half* y [[buffer(5)]],
+    constant uint& D [[buffer(6)]],
+    constant uint& F [[buffer(7)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    threadgroup float partial[8];
+    const uint DD = moe_fc_d(D);
+    const uint FF = moe_fc_f(F);
+    const uint d = tg.x;
+    const uint row = tg.y;
+    if (d >= DD) return;
+    const uint pair = row * 8u + sg_idx;
+
+    device const uint8_t* base = routed.blob[pair];
+    const ExpertOffsets re = routed_offsets;
+    device const uint8_t* dW = base + re.down_W_off;
+    device const bfloat* dS = (device const bfloat*)(base + re.down_s_off);
+    device const bfloat* dB = (device const bfloat*)(base + re.down_b_off);
+    device const half* act_slot = acts + pair * FF;
+
+    const float value = moe_int4_gemv_row_simd_dev_vec(
+        dW, dS, dB, act_slot, d, FF, lane);
+    if (lane == 0) partial[sg_idx] = float(routing_w[pair]) * value;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sg_idx == 0 && lane == 0) {
+        float acc = float(residual[row * DD + d]);
+        acc += partial[0]; acc += partial[1]; acc += partial[2]; acc += partial[3];
+        acc += partial[4]; acc += partial[5]; acc += partial[6]; acc += partial[7];
+        y[row * DD + d] = half(acc);
+    }
+}

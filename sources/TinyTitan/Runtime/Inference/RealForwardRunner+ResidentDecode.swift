@@ -38,7 +38,7 @@ extension RealForwardRunner {
 
     /// Whether this token can take the resident path; refreshes the address
     /// tables of any layer whose cache map changed.
-    func prepareResidentDecode() throws -> Bool {
+    func prepareResidentDecode(warm: Bool = true) throws -> Bool {
         residentTokenBuffers.removeAll(keepingCapacity: true)
         try reapResidentWarm(blocking: false)
         guard Self.residentDecodeFlag, cfg.numExperts > 0,
@@ -58,7 +58,7 @@ extension RealForwardRunner {
                 if residentLayers[L].addresses == nil { return false }
             case .notFull(let epoch):
                 residentLayers[L] = ResidentLayer(epoch: epoch)
-                try warmTowardFullResidency(from: L)
+                if warm { try warmTowardFullResidency(from: L) }
                 return false
             case .full(let epoch, let addresses, let buffers):
                 let length = addresses.count * MemoryLayout<UInt64>.stride

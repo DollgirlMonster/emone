@@ -307,6 +307,107 @@ import TinyTitanValidationSupport
                 < Tolerance.fp16ChainedReduction)
     }
 
+    /// The row-batched kernels (`encodeRoutedRows`) against the single-row
+    /// decode kernels, row by row: the same halves, not merely close ones.
+    /// Rows share experts and pick them in different orders, and the picks go
+    /// through the resolve kernel as they do in the runner.
+    @Test func rowBatchedRoutedKernelsMatchTheSingleRowKernelsBitForBit() throws {
+        var rng = SeedTree(0x2D3).key("row-batched-routed-moe")
+        func matrix(rows: Int, columns: Int) -> [[Float]] {
+            (0..<rows).map { _ in (0..<columns).map { _ in rng.uniform(-0.4, 0.4) } }
+        }
+        let experts = 12
+        let rows = 5
+        let d = Self.dimension
+        let f = Self.intermediate
+        let blobs = (0..<experts).map { _ in
+            Self.makeBlob(
+                gate: matrix(rows: f, columns: d), up: matrix(rows: f, columns: d),
+                down: matrix(rows: d, columns: f))
+        }
+        let picks: [[Int]] = (0..<rows).map { row in
+            (0..<Self.topK).map { (row * 5 + $0 * 7) % experts }
+        }
+        let x = (0..<rows * d).map { _ in rng.uniform(-0.5, 0.5) }
+        let residual = (0..<rows * d).map { _ in rng.uniform(-0.5, 0.5) }
+        let weights = (0..<rows * Self.topK).map { _ in rng.uniform(0.02, 0.3) }
+
+        let context = try MetalContext()
+        let kernel = try MoE(context: context)
+        #expect(kernel.canEncodeRoutedRows(d: UInt32(d), f: UInt32(f)))
+        let device = context.device
+        let buffers = try blobs.map {
+            try #require(
+                device.makeBuffer(
+                    bytes: $0.bytes, length: $0.bytes.count, options: .storageModeShared))
+        }
+        let xBuffer = try #require(Fp16Buffer.make(device, values: x))
+        let residualBuffer = try #require(Fp16Buffer.make(device, values: residual))
+        let weightBuffer = try #require(Fp16Buffer.make(device, values: weights))
+        let half = MemoryLayout<Float16>.stride
+
+        // Reference: each row alone through the decode kernels.
+        var expected: [Float16] = []
+        for row in 0..<rows {
+            let routed = picks[row].map { buffers[$0] }
+            let args = try #require(
+                kernel.makeRoutedArgumentBuffer(routedBlobs: routed, topK: UInt32(Self.topK)))
+            let acts = try #require(Fp16Buffer.make(device, count: Self.topK * f))
+            let y = try #require(Fp16Buffer.make(device, count: d))
+            let command = try #require(context.queue.makeCommandBuffer())
+            try kernel.encodeRoutedPersistentPhase1U16Load(
+                commandBuffer: command, routedArgBuffer: args, routedBlobs: routed,
+                routedOffsets: blobs[0].offsets, x: xBuffer, xOffset: row * d * half,
+                acts: acts, d: UInt32(d), f: UInt32(f), topK: UInt32(Self.topK))
+            try kernel.encodeRoutedPersistentPhase2Reduce(
+                commandBuffer: command, routedArgBuffer: args, routedBlobs: routed,
+                routedOffsets: blobs[0].offsets, acts: acts,
+                routingWeights: weightBuffer, routingWeightsOffset: row * Self.topK * half,
+                residual: residualBuffer, residualOffset: row * d * half, y: y,
+                d: UInt32(d), f: UInt32(f), topK: UInt32(Self.topK))
+            command.commit()
+            command.waitUntilCompleted()
+            #expect(command.error == nil)
+            expected += Fp16Buffer.readHalf(y, count: d)
+        }
+
+        let pairs = MoE.maxRoutedRows * Self.topK
+        let addresses = buffers.map(\.gpuAddress)
+        let flatPicks = picks.flatMap { $0.map(UInt32.init) }
+        let addressBuffer = try #require(
+            device.makeBuffer(
+                bytes: addresses, length: experts * MemoryLayout<UInt64>.stride,
+                options: .storageModeShared))
+        let pickBuffer = try #require(
+            device.makeBuffer(
+                bytes: flatPicks, length: flatPicks.count * MemoryLayout<UInt32>.stride,
+                options: .storageModeShared))
+        let args = try #require(
+            device.makeBuffer(
+                length: pairs * MoE.routedArgumentPointerStride, options: .storageModeShared))
+        let log = try #require(
+            device.makeBuffer(
+                length: pairs * MemoryLayout<UInt32>.stride, options: .storageModeShared))
+        let acts = try #require(Fp16Buffer.make(device, count: rows * Self.topK * f))
+        let y = try #require(Fp16Buffer.make(device, count: rows * d))
+        let command = try #require(context.queue.makeCommandBuffer())
+        try kernel.encodeResolveResidentExperts(
+            commandBuffer: command, topKIndices: pickBuffer, expertAddresses: addressBuffer,
+            routedArgBuffer: args, routeLog: log, routeLogOffset: 0,
+            topK: UInt32(rows * Self.topK), numExperts: UInt32(experts))
+        try kernel.encodeRoutedRows(
+            commandBuffer: command, routedArgBuffer: args, routedOffsets: blobs[0].offsets,
+            x: xBuffer, acts: acts, routingWeights: weightBuffer,
+            residual: residualBuffer, y: y,
+            rows: rows, d: UInt32(d), f: UInt32(f), allResident: buffers)
+        command.commit()
+        command.waitUntilCompleted()
+        #expect(command.error == nil)
+        let actual = Fp16Buffer.readHalf(y, count: rows * d)
+        #expect(actual.map(\.bitPattern) == expected.map(\.bitPattern))
+        #expect(expected.contains { $0 != 0 })
+    }
+
     private static func makeBlob(
         gate: [[Float]],
         up: [[Float]],

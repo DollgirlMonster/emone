@@ -224,7 +224,11 @@ public func runRawCompletion(
     // (slot-aware chunked prefill is not implemented yet). Another slot prefills
     // by running its prompt through the decode step, which is slot-aware. Slot 0
     // keeps the chunked fast path, so the single-sequence behaviour is unchanged.
-    let prefillMode: PrefillRuntimeConfig.Mode = prefillConfig.mode
+    // TINYTITAN_PREFILL_SEQUENTIAL=1 runs the prompt through the decode step a
+    // token at a time: the reference a chunked prefill path is compared with.
+    let prefillMode: PrefillRuntimeConfig.Mode =
+        ProcessInfo.processInfo.environment["TINYTITAN_PREFILL_SEQUENTIAL"] == "1"
+        ? .off : prefillConfig.mode
     switch prefillMode {
     case .chunked:
         // A producer without the conformance cannot run chunked prefill at all,

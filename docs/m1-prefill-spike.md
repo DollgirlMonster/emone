@@ -914,3 +914,48 @@ missing they are read before the token; a cold cache is filled 32 experts a
 token with the reads submitted at the token's start and waited on at its end.
 Reading them on the token's own time instead cost 11% of cold decode (19.9
 against 22.3). `TINYTITAN_DECODE_RESIDENT=0` turns the path off.
+
+## Spike 27 (2026-11-10): short chunks on the decode routed kernels
+
+M1 Max 64 GB, Qwen 3.6 35B-A3B 4-bit, warm `tools/serve.sh` (every expert
+resident), a five-turn chat whose turns add 21-32 prompt tokens.
+
+A warm 21-token pass took 320 ms: 196 ms in the routed stage (62 distinct
+experts a layer, 2.7 rows each, one tile apiece) and 112 ms in attention plus
+the router readback. With every expert resident the routed stage needs no
+plan, so a chunk of up to 64 rows now resolves its picks on the GPU and runs
+two row-batched kernels (`moe_phase1_gate_up_act_u16load_rows`,
+`moe_phase2_down_reduce_k8_rows`) per layer, with no readback.
+
+| new prompt tokens | tiles | per-row kernels |
+|---:|---:|---:|
+| 21 | 310-320 ms | 184-187 ms |
+| 26 | 352-376 ms | 220-222 ms |
+| 30 (first turn) | 529-548 ms | 326-341 ms |
+| 32 | 330-345 ms | 204-205 ms |
+
+Running the single-row decode kernels once per row instead of the batched
+pair measured 202 ms at 21 rows.
+
+The batched kernels are bit-identical to the single-row decode kernels (unit
+test). They are not the tile path's arithmetic, and the output can differ: 40
+greedy requests of 64 tokens (24 prompts, a third with two follow-ups), logits
+traced with `TINYTITAN_LOGIT_TRACE=1`, an empty prompt cache per arm.
+
+- Tiles against tiles: 2,560 tokens and logits identical.
+- Tiles against per-row: 7 of 24 conversations pick a different token, each at
+  a top-2 margin of 0.30 or less; median top-logit shift 0.047, 99th
+  percentile 0.59, no growth with position.
+- Against a prompt run through the decode step token by token
+  (`TINYTITAN_PREFILL_SEQUENTIAL=1`), over 1,736 positions with a shared
+  history: tiles median 0.062, mean 0.094; per-row median 0.047, mean 0.097;
+  per-row closer at 738 positions, tiles at 780. Neither is closer.
+
+Shipped on. `TINYTITAN_PREFILL_RESIDENT_ROWS=0` turns it off. It engages only
+on a fully resident cache, so a cold prefill (the CLI, the golden check) is
+unchanged, and the same prompt can now be prefilled by either path depending
+on whether the cache is warm.
+
+What is left of the 184 ms at 21 rows, from `TINYTITAN_PREFILL_SPLIT=1`:
+routed rows 94 ms, linear-attention projections ~50, router 17, shared expert
+9, full attention ~16.

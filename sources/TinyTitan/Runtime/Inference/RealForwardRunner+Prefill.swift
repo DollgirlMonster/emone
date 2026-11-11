@@ -261,6 +261,7 @@ extension RealForwardRunner {
         // Decode's warm reads may still be in flight from the last token;
         // prefill plans its own tiles against a cache nothing else is filling.
         try drainResidentWarm()
+        residentPrefillChunk = try prepareResidentPrefill(tokenCount: tokens.count)
         guard kv != nil else {
             throw PrefillError.chunkedUnsupported("chunked prefill attention requires a KV cache")
         }
@@ -1118,6 +1119,63 @@ extension RealForwardRunner {
         }
     }
 
+    /// The shared-expert branch of one prefill layer into `h1`: the shared MLP
+    /// and, for a gated family, its per-row scalar gate.
+    func encodePrefillSharedBranch(
+        commandBuffer sharedCB: MTLCommandBuffer, layer L: Int,
+        scratch: PrefillChunkScratchBuffers, tokenCount t: Int, hiddenSize D: Int
+    ) throws {
+        let sharedProj = sharedExpertProjections[L]
+        try encodePrefillSharedExpertBlock(
+            commandBuffer: sharedCB, projections: sharedProj,
+            scratch: scratch, tokenCount: t, hiddenSize: D)
+        if cfg.sharedExpertGated {
+            // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX),
+            // per chunk row.
+            let gateView = try requireTensorView(sharedProj.scalarGate, "shared-expert scalar gate")
+            let halfBytes = MemoryLayout<Float16>.stride
+            if Self.prefillCoalescedRows {
+                // The same per-row gate GEMV and per-element sigmoid, in two
+                // encoders for the whole chunk instead of two per token.
+                try encodeScalarGateRows(
+                    commandBuffer: sharedCB,
+                    view: gateView,
+                    x: scratch.routedX,
+                    y: scratch.sharedScalarGate,
+                    run: GEMVRows(
+                        xOffset: 0, xRowStride: D * halfBytes,
+                        yOffset: 0, yRowStride: halfBytes,
+                        count: t),
+                    n: UInt32(D))
+                try requireElementwise().encodeSigmoidRowsMul(
+                    commandBuffer: sharedCB,
+                    y: scratch.h1,
+                    gate: scratch.sharedScalarGate,
+                    width: D, rows: t)
+            } else {
+                for row in 0..<t {
+                    try encodeScalarGate(
+                        commandBuffer: sharedCB,
+                        view: gateView,
+                        x: scratch.routedX,
+                        xOffset: row * D * halfBytes,
+                        y: scratch.sharedScalarGate,
+                        yOffset: row * halfBytes,
+                        n: UInt32(D))
+                }
+                for row in 0..<t {
+                    try requireElementwise().encodeSigmoidScalarMul(
+                        commandBuffer: sharedCB,
+                        y: scratch.h1,
+                        yOffset: row * D * halfBytes,
+                        gate: scratch.sharedScalarGate,
+                        gateOffset: row * halfBytes,
+                        count: D)
+                }
+            }
+        }
+    }
+
     /// Router, routed-expert fetch and the MoE tail for one prefill layer.
     ///
     /// lint:allow-long one layer's MoE stage is a single ordered pipeline:
@@ -1193,6 +1251,12 @@ extension RealForwardRunner {
                 hiddenStrideElements: UInt32(D))
         }
 
+        if residentPrefillChunk {
+            try encodeResidentRoutedRowsPrefill(
+                cb: &cb, layer: L, scratch: scratch, tokenCount: t, hiddenSize: D)
+            prefillTailNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - prefillLayerStart
+            return
+        }
         let traceCommit = Self.prefillLayerTrace ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0
         cb.commit()
         try waitForCompletion(cb)
@@ -1297,55 +1361,8 @@ extension RealForwardRunner {
         guard let sharedCB = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }
-        let sharedProj = sharedExpertProjections[L]
-        try encodePrefillSharedExpertBlock(
-            commandBuffer: sharedCB, projections: sharedProj,
-            scratch: scratch, tokenCount: t, hiddenSize: D)
-        if cfg.sharedExpertGated {
-            // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX),
-            // per chunk row.
-            let gateView = try requireTensorView(sharedProj.scalarGate, "shared-expert scalar gate")
-            let halfBytes = MemoryLayout<Float16>.stride
-            if Self.prefillCoalescedRows {
-                // The same per-row gate GEMV and per-element sigmoid, in two
-                // encoders for the whole chunk instead of two per token.
-                try encodeScalarGateRows(
-                    commandBuffer: sharedCB,
-                    view: gateView,
-                    x: scratch.routedX,
-                    y: scratch.sharedScalarGate,
-                    run: GEMVRows(
-                        xOffset: 0, xRowStride: D * halfBytes,
-                        yOffset: 0, yRowStride: halfBytes,
-                        count: t),
-                    n: UInt32(D))
-                try requireElementwise().encodeSigmoidRowsMul(
-                    commandBuffer: sharedCB,
-                    y: scratch.h1,
-                    gate: scratch.sharedScalarGate,
-                    width: D, rows: t)
-            } else {
-                for row in 0..<t {
-                    try encodeScalarGate(
-                        commandBuffer: sharedCB,
-                        view: gateView,
-                        x: scratch.routedX,
-                        xOffset: row * D * halfBytes,
-                        y: scratch.sharedScalarGate,
-                        yOffset: row * halfBytes,
-                        n: UInt32(D))
-                }
-                for row in 0..<t {
-                    try requireElementwise().encodeSigmoidScalarMul(
-                        commandBuffer: sharedCB,
-                        y: scratch.h1,
-                        yOffset: row * D * halfBytes,
-                        gate: scratch.sharedScalarGate,
-                        gateOffset: row * halfBytes,
-                        count: D)
-                }
-            }
-        }
+        try encodePrefillSharedBranch(
+            commandBuffer: sharedCB, layer: L, scratch: scratch, tokenCount: t, hiddenSize: D)
         // Committed, not awaited: the routed tiles' expert reads can start
         // while the GPU runs the shared expert. Command buffers on one queue
         // run in commit order -- the tiles below already rely on that for

@@ -80,6 +80,15 @@ final class MoE {
     private let routerTopKSimd: Bool
     private let residencyClassifyPSO: MTLComputePipelineState
     private let resolveResidentPSO: MTLComputePipelineState
+    /// Row-batched phase 1 / phase 2 (`encodeRoutedRows`); nil for a family
+    /// they do not cover (other than 4-bit experts, or top-k other than 8).
+    private let rowsPhase1PSO: MTLComputePipelineState?
+    private let rowsPhase2PSO: MTLComputePipelineState?
+    private let rowsPhase1SpecializedPSO: MTLComputePipelineState?
+    private let rowsPhase2SpecializedPSO: MTLComputePipelineState?
+    /// Rows one `encodeRoutedRows` call may carry: the kernels' argument
+    /// struct holds 512 pointers.
+    static let maxRoutedRows = 64
     private let routerLogits: MTLBuffer
     private let phase1U16PSO: MTLComputePipelineState
     private let phase1U16SpecializedPSO: MTLComputePipelineState
@@ -210,6 +219,22 @@ final class MoE {
         self.phase2ReduceK8SpecializedPSO = try context.pipeline(
             phase2Name,
             constants: moeConstants)
+        if routedWeightBits == 4, topKExperts == 8, !eventGatedIO {
+            let generic = activationConstants + weightConstants + ioConstants
+            self.rowsPhase1PSO = try context.pipeline(
+                "moe_phase1_gate_up_act_u16load_rows", constants: generic)
+            self.rowsPhase2PSO = try context.pipeline(
+                "moe_phase2_down_reduce_k8_rows", constants: generic)
+            self.rowsPhase1SpecializedPSO = try context.pipeline(
+                "moe_phase1_gate_up_act_u16load_rows", constants: moeConstants)
+            self.rowsPhase2SpecializedPSO = try context.pipeline(
+                "moe_phase2_down_reduce_k8_rows", constants: moeConstants)
+        } else {
+            self.rowsPhase1PSO = nil
+            self.rowsPhase2PSO = nil
+            self.rowsPhase1SpecializedPSO = nil
+            self.rowsPhase2SpecializedPSO = nil
+        }
 
         guard
             let logits = context.device.makeBuffer(
@@ -403,6 +428,7 @@ final class MoE {
     func encodeResolveResidentExperts(
         commandBuffer: MTLCommandBuffer,
         topKIndices: MTLBuffer,
+        topKIndicesOffset: Int = 0,
         expertAddresses: MTLBuffer,
         routedArgBuffer: MTLBuffer,
         routeLog: MTLBuffer,
@@ -410,7 +436,6 @@ final class MoE {
         topK: UInt32,
         numExperts: UInt32
     ) throws {
-        precondition(topK == UInt32(maxStreamedExperts))
         precondition(
             routedArgBuffer.length >= Int(topK) * Self.routedArgumentPointerStride
                 && expertAddresses.length >= Int(numExperts) * MemoryLayout<UInt64>.stride
@@ -421,7 +446,7 @@ final class MoE {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(resolveResidentPSO)
-        encoder.setBuffer(topKIndices, offset: 0, index: 0)
+        encoder.setBuffer(topKIndices, offset: topKIndicesOffset, index: 0)
         encoder.setBuffer(expertAddresses, offset: 0, index: 1)
         encoder.setBuffer(routedArgBuffer, offset: 0, index: 2)
         encoder.setBuffer(routeLog, offset: routeLogOffset, index: 3)
@@ -431,6 +456,78 @@ final class MoE {
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
         encoder.endEncoding()
+    }
+
+    /// Whether `encodeRoutedRows` can run for these dimensions.
+    func canEncodeRoutedRows(d: UInt32, f: UInt32) -> Bool {
+        rowsPhase1PSO != nil && rowsPhase2PSO != nil
+            && d <= 2816  // the kernels stage x in threadgroup memory (kMoEXMaxD)
+    }
+
+    /// Phase 1 and phase 2 of `rows` rows in one dispatch each, on pointers
+    /// `encodeResolveResidentExperts` wrote for all of them (top-k = rows*8).
+    /// Row r reads `x` and `residual` row r and pointers / weights
+    /// [r*8, r*8+8), and writes `y` row r; `acts` is rows*8*f of scratch.
+    /// Per row it is the single-row kernels' arithmetic.
+    func encodeRoutedRows(
+        commandBuffer: MTLCommandBuffer,
+        routedArgBuffer: MTLBuffer,
+        routedOffsets: MoEExpertOffsets,
+        x: MTLBuffer, acts: MTLBuffer, routingWeights: MTLBuffer,
+        residual: MTLBuffer, y: MTLBuffer,
+        rows: Int, d: UInt32, f: UInt32,
+        allResident: [MTLBuffer]
+    ) throws {
+        let specialized = useRealDecodeConstants(d: d, f: f)
+        guard let phase1 = specialized ? rowsPhase1SpecializedPSO : rowsPhase1PSO,
+            let phase2 = specialized ? rowsPhase2SpecializedPSO : rowsPhase2PSO
+        else { throw MetalError.commandEncoderFailed }
+        let half = MemoryLayout<Float16>.stride
+        precondition(
+            rows > 0 && rows <= Self.maxRoutedRows
+                && routedArgBuffer.length >= 512 * Self.routedArgumentPointerStride
+                && acts.length >= rows * 8 * Int(f) * half
+                && routingWeights.length >= rows * 8 * half
+                && x.length >= rows * Int(d) * half
+                && residual.length >= rows * Int(d) * half
+                && y.length >= rows * Int(d) * half)
+        var dimension = d
+        var intermediate = f
+        var expertCount = UInt32(8)
+        var offsets = routedOffsets
+        guard let first = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        first.setComputePipelineState(phase1)
+        first.setBuffer(routedArgBuffer, offset: 0, index: 0)
+        first.useResources(allResident, usage: .read)
+        first.setBytes(&offsets, length: MemoryLayout<MoEExpertOffsets>.stride, index: 1)
+        first.setBuffer(x, offset: 0, index: 2)
+        first.setBuffer(acts, offset: 0, index: 3)
+        first.setBytes(&dimension, length: MemoryLayout<UInt32>.stride, index: 4)
+        first.setBytes(&intermediate, length: MemoryLayout<UInt32>.stride, index: 5)
+        first.setBytes(&expertCount, length: MemoryLayout<UInt32>.stride, index: 6)
+        first.dispatchThreadgroups(
+            MTLSize(width: (8 * Int(f) + 15) / 16, height: rows, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 512, height: 1, depth: 1))
+        first.endEncoding()
+        guard let second = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        second.setComputePipelineState(phase2)
+        second.setBuffer(routedArgBuffer, offset: 0, index: 0)
+        second.useResources(allResident, usage: .read)
+        second.setBytes(&offsets, length: MemoryLayout<MoEExpertOffsets>.stride, index: 1)
+        second.setBuffer(acts, offset: 0, index: 2)
+        second.setBuffer(routingWeights, offset: 0, index: 3)
+        second.setBuffer(residual, offset: 0, index: 4)
+        second.setBuffer(y, offset: 0, index: 5)
+        second.setBytes(&dimension, length: MemoryLayout<UInt32>.stride, index: 6)
+        second.setBytes(&intermediate, length: MemoryLayout<UInt32>.stride, index: 7)
+        second.dispatchThreadgroups(
+            MTLSize(width: Int(d), height: rows, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        second.endEncoding()
     }
 
     /// An argument buffer with no views encoded yet, for callers that

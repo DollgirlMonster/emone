@@ -1534,6 +1534,14 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     var residentRouteLog: MTLBuffer?
     /// This token's command buffers, checked and timed once it has landed.
     var residentTokenBuffers: [(role: String, cb: MTLCommandBuffer)] = []
+    /// Whether the prefill chunk in progress runs its routed stage per row
+    /// on the decode kernels (`encodeResidentRoutedRowsPrefill`).
+    var residentPrefillChunk = false
+    /// Scratch of the row-batched routed stage: rows*8 pointers, rows*8*F
+    /// activations and the picks the resolve kernel logs.
+    var residentRowsArgBuffer: MTLBuffer?
+    var residentRowsActs: MTLBuffer?
+    var residentRowsRouteLog: MTLBuffer?
     /// Prefill bursts and decode tokens started; read and written only
     /// under `forwardStepGate`. The idle warm stands down when it moves.
     var forwardActivityCount: UInt64 = 0
