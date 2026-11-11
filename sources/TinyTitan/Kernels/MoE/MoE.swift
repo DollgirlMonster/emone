@@ -79,6 +79,7 @@ final class MoE {
     private let routerSelectKNSimdPSO: MTLComputePipelineState?
     private let routerTopKSimd: Bool
     private let residencyClassifyPSO: MTLComputePipelineState
+    private let resolveResidentPSO: MTLComputePipelineState
     private let routerLogits: MTLBuffer
     private let phase1U16PSO: MTLComputePipelineState
     private let phase1U16SpecializedPSO: MTLComputePipelineState
@@ -179,6 +180,7 @@ final class MoE {
         self.routerSelectKNPSO = try context.pipeline("router_topk_select_kn")
         self.routerSelectKNSimdPSO = try? context.pipeline("router_topk_select_kn_simd")
         self.residencyClassifyPSO = try context.pipeline("moe_classify_expert_residency")
+        self.resolveResidentPSO = try context.pipeline("moe_resolve_resident_experts")
         let phase1Name =
             routedWeightBits == 4
             ? "moe_phase1_gate_up_act_u16load" : "moe_affine_phase1_gate_up_act"
@@ -390,6 +392,47 @@ final class MoE {
         encoder.endEncoding()
     }
 
+    /// Bytes of one routed argument buffer when a kernel writes it
+    /// (`moe_resolve_resident_experts`): the shader's `RoutedBlobs` is an
+    /// array of device pointers, one per pick.
+    static let routedArgumentPointerStride = MemoryLayout<UInt64>.stride
+
+    /// Resolve the router's picks to expert addresses on the GPU, into
+    /// `routedArgBuffer`, and log the ids at `routeLogOffset`. The routed
+    /// phase encoders that follow take `allResident:` instead of the picks.
+    func encodeResolveResidentExperts(
+        commandBuffer: MTLCommandBuffer,
+        topKIndices: MTLBuffer,
+        expertAddresses: MTLBuffer,
+        routedArgBuffer: MTLBuffer,
+        routeLog: MTLBuffer,
+        routeLogOffset: Int,
+        topK: UInt32,
+        numExperts: UInt32
+    ) throws {
+        precondition(topK == UInt32(maxStreamedExperts))
+        precondition(
+            routedArgBuffer.length >= Int(topK) * Self.routedArgumentPointerStride
+                && expertAddresses.length >= Int(numExperts) * MemoryLayout<UInt64>.stride
+                && routeLog.length >= routeLogOffset + Int(topK) * MemoryLayout<UInt32>.stride)
+        var topKValue = topK
+        var expertCount = numExperts
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        encoder.setComputePipelineState(resolveResidentPSO)
+        encoder.setBuffer(topKIndices, offset: 0, index: 0)
+        encoder.setBuffer(expertAddresses, offset: 0, index: 1)
+        encoder.setBuffer(routedArgBuffer, offset: 0, index: 2)
+        encoder.setBuffer(routeLog, offset: routeLogOffset, index: 3)
+        encoder.setBytes(&topKValue, length: MemoryLayout<UInt32>.stride, index: 4)
+        encoder.setBytes(&expertCount, length: MemoryLayout<UInt32>.stride, index: 5)
+        encoder.dispatchThreadgroups(
+            MTLSize(width: 1, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+        encoder.endEncoding()
+    }
+
     /// An argument buffer with no views encoded yet, for callers that
     /// re-encode per use via `writeRoutedArgumentBuffer`.
     func makeEmptyRoutedArgumentBuffer(device: MTLDevice) -> MTLBuffer? {
@@ -438,9 +481,9 @@ final class MoE {
         f: UInt32,
         topK: UInt32,
         ioStatus: MTLBuffer? = nil,
-        ioStatusOffset: Int = 0
+        ioStatusOffset: Int = 0,
+        allResident: [MTLBuffer]? = nil
     ) throws {
-        validate(routedBlobs: routedBlobs, topK: topK)
         var dimension = d
         var intermediate = f
         var expertCount = topK
@@ -452,7 +495,7 @@ final class MoE {
                 ? phase1U16SpecializedPSO
                 : phase1U16PSO)
         encoder.setBuffer(routedArgBuffer, offset: 0, index: 0)
-        for buffer in routedBlobs { encoder.useResource(buffer, usage: .read) }
+        use(routedBlobs: routedBlobs, allResident: allResident, topK: topK, on: encoder)
         var offsets = routedOffsets
         encoder.setBytes(&offsets, length: MemoryLayout<MoEExpertOffsets>.stride, index: 1)
         encoder.setBuffer(x, offset: xOffset, index: 2)
@@ -543,9 +586,9 @@ final class MoE {
         f: UInt32,
         topK: UInt32,
         ioStatus: MTLBuffer? = nil,
-        ioStatusOffset: Int = 0
+        ioStatusOffset: Int = 0,
+        allResident: [MTLBuffer]? = nil
     ) throws {
-        validate(routedBlobs: routedBlobs, topK: topK)
         var dimension = d
         var intermediate = f
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -558,7 +601,7 @@ final class MoE {
                     : phase2ReduceK8PSO)
                 : phase2ReduceKNPSO)
         encoder.setBuffer(routedArgBuffer, offset: 0, index: 0)
-        for buffer in routedBlobs { encoder.useResource(buffer, usage: .read) }
+        use(routedBlobs: routedBlobs, allResident: allResident, topK: topK, on: encoder)
         var offsets = routedOffsets
         encoder.setBytes(&offsets, length: MemoryLayout<MoEExpertOffsets>.stride, index: 1)
         encoder.setBuffer(acts, offset: actsOffset, index: 2)
@@ -584,6 +627,22 @@ final class MoE {
                 width: 32 * maxStreamedExperts,
                 height: 1, depth: 1))
         encoder.endEncoding()
+    }
+
+    /// Declares what the argument buffer points at: the picks themselves, or
+    /// -- when a kernel resolved them (`encodeResolveResidentExperts`) and the
+    /// CPU never saw which -- every slot of the layer.
+    private func use(
+        routedBlobs: [MTLBuffer], allResident: [MTLBuffer]?, topK: UInt32,
+        on encoder: MTLComputeCommandEncoder
+    ) {
+        if let allResident {
+            precondition(topK == UInt32(maxStreamedExperts))
+            encoder.useResources(allResident, usage: .read)
+        } else {
+            validate(routedBlobs: routedBlobs, topK: topK)
+            for buffer in routedBlobs { encoder.useResource(buffer, usage: .read) }
+        }
     }
 
     private func validate(routedBlobs: [MTLBuffer], topK: UInt32) {

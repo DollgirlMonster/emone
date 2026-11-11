@@ -150,6 +150,28 @@ kernel void moe_classify_expert_residency(
     miss_count[0] = misses;
 }
 
+/// Fills the routed argument buffer (`RoutedBlobs`, one device pointer per
+/// pick) from the router's top-k ids and a table of every expert's device
+/// address, and logs the ids. With the whole expert set resident this is all
+/// the CPU's cache plan decided, so the routed kernels can follow the router
+/// in the same command stream with no readback. The clamp is the CPU path's
+/// (`min(id, numExperts - 1)`).
+kernel void moe_resolve_resident_experts(
+    device const uint* topk_indices [[buffer(0)]],
+    device const ulong* expert_addresses [[buffer(1)]],
+    device ulong* routed_args [[buffer(2)]],
+    device uint* route_log [[buffer(3)]],
+    constant uint& top_k [[buffer(4)]],
+    constant uint& num_experts [[buffer(5)]],
+    uint lane [[thread_index_in_threadgroup]]) {
+    if (lane != 0) return;
+    for (uint position = 0; position < top_k; ++position) {
+        const uint expert = min(topk_indices[position], num_experts - 1u);
+        routed_args[position] = expert_addresses[expert];
+        route_log[position] = expert;
+    }
+}
+
 static inline float moe_hidden_activation(float x) {
     if (is_function_constant_defined(FC_MOE_ACT_SILU) && FC_MOE_ACT_SILU) {
         return x / (1.0f + exp(-x));

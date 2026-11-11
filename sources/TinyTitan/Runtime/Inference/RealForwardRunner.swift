@@ -1525,6 +1525,20 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// their GPU timestamps; drained into `kernelGPUTimings` after the layer's
     /// tail wait.
     var splitTimedBuffers: [(role: String, cb: MTLCommandBuffer)] = []
+    /// Resident decode (`RealForwardRunner+ResidentDecode`): per layer, the
+    /// expert-address table a kernel resolves the router's picks through.
+    var residentLayers: [ResidentLayer] = []
+    /// The routed argument buffer the resolve kernel fills, layer after layer.
+    var residentArgBuffer: MTLBuffer?
+    /// `[numLayers * topK]` UInt32: the ids each layer routed to this token.
+    var residentRouteLog: MTLBuffer?
+    /// This token's command buffers, checked and timed once it has landed.
+    var residentTokenBuffers: [(role: String, cb: MTLCommandBuffer)] = []
+    public internal(set) var totalResidentTokens: UInt64 = 0
+    /// Warm reads submitted during this token, waited on at its end.
+    var residentWarmOperations: [(lease: RoutedExpertLease, operation: RoutedExpertLoadOperation)] =
+        []
+    public internal(set) var totalResidentWarmedExperts: UInt64 = 0
     let kernelGPUTimingsEnabled =
         ProcessInfo.processInfo.environment["TINYTITAN_KERNEL_STATS"] != nil
     let runnerStatsEnabled =

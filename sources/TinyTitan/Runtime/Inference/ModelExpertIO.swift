@@ -155,6 +155,59 @@ extension Model {
             experts: plan.experts)
     }
 
+    /// See `PreadExpertStreamer.fullResidency(knownEpoch:)`.
+    public func routedExpertFullResidency(
+        layer: Int, knownEpoch: UInt64?
+    ) throws -> PreadExpertStreamer.FullResidency {
+        try openStreamer(for: layer).fullResidency(knownEpoch: knownEpoch)
+    }
+
+    /// Loads up to `limit` of the layer's experts that have no slot yet, and
+    /// returns how many it read. Nothing is evicted: it is a no-op unless the
+    /// cache has a slot per expert.
+    public func warmRoutedExperts(layer: Int, limit: Int) throws -> Int {
+        let streamer = try openStreamer(for: layer)
+        // One plan holds at most the routed argument buffer's 16 experts.
+        let experts = streamer.missingExperts(limit: min(limit, 16))
+        guard !experts.isEmpty else { return 0 }
+        // Each layer has its own file and streamer: the plan's layer stays 0,
+        // as in `planRoutedExperts`.
+        let plan = try streamer.planExpertsCached(experts: experts)
+        _ = try streamer.executeExpertCachePlan(plan)
+        return plan.misses.count
+    }
+
+    /// How many of the layer's experts have no slot yet; 0 when the cache
+    /// cannot hold the whole layer.
+    public func missingRoutedExpertCount(layer: Int) throws -> Int {
+        try openStreamer(for: layer).missingExperts(limit: .max).count
+    }
+
+    /// `warmRoutedExperts` without the wait: the read is submitted and the
+    /// caller waits on the operation (and then releases the lease) when it
+    /// suits it. Nil when the layer has nothing left to load.
+    func beginWarmRoutedExperts(
+        layer: Int, limit: Int
+    ) throws -> (lease: RoutedExpertLease, operation: RoutedExpertLoadOperation)? {
+        let streamer = try openStreamer(for: layer)
+        let experts = streamer.missingExperts(limit: min(limit, 16))
+        guard !experts.isEmpty else { return nil }
+        let plan = RoutedExpertFetchPlan(
+            layer: layer, cachePlan: try streamer.planExpertsCached(experts: experts))
+        let lease = try pinRoutedExperts(for: plan)
+        do {
+            return (lease, try beginFetchRoutedExperts(plan: plan))
+        } catch {
+            lease.release()
+            throw error
+        }
+    }
+
+    /// See `PreadExpertStreamer.recordResidentUse(experts:)`.
+    public func recordRoutedResidentUse(layer: Int, experts: [Int]) throws {
+        try openStreamer(for: layer).recordResidentUse(experts: experts)
+    }
+
     public func routedExpertResidency(layer: Int) throws -> ExpertResidencyResources {
         let streamer = try openStreamer(for: layer)
         return streamer.expertResidencyResources()

@@ -165,6 +165,10 @@ public final class PreadExpertStreamer: @unchecked Sendable {
     private var statisticsLatencyHistogram = [UInt64](repeating: 0, count: 17)
     private var statisticsPeakLoadingSlots = 0
     private let cacheLock = NSLock()
+    /// Counts every change to the expert -> slot map (all of them go through
+    /// `publishResidencyUnlocked`), so a caller holding a table built from the
+    /// map can tell in O(1) that it is still current. Guarded by `cacheLock`.
+    private var residencyEpoch: UInt64 = 1
 
     public init(
         layout: StreamLayout,
@@ -1074,6 +1078,102 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         }
     }
 
+    /// What `fullResidency(knownEpoch:)` found.
+    public enum FullResidency {
+        /// At least one expert of the layer is not resident (or is loading).
+        case notFull(epoch: UInt64)
+        /// The map has not changed since `knownEpoch`; the caller's table holds.
+        case unchanged
+        /// Every expert is resident: `addresses[e]` is the device address of
+        /// expert `e`'s bytes, and `buffers` are the slots those point into.
+        case full(epoch: UInt64, addresses: [UInt64], buffers: [MTLBuffer])
+    }
+
+    /// Whether the cache holds every expert of the layer, and if so where.
+    ///
+    /// With a slot per expert and all of them resident no plan can evict, so
+    /// the map is stable and a GPU kernel can resolve a router's picks through
+    /// it without the CPU planning the layer (`moe_resolve_resident_experts`).
+    /// `knownEpoch` makes the steady state one lock and one compare.
+    public func fullResidency(knownEpoch: UInt64?) -> FullResidency {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let knownEpoch, knownEpoch == residencyEpoch { return .unchanged }
+        let experts = layout.expertsPerLayer
+        guard experts > 0, slotCount >= experts else { return .notFull(epoch: residencyEpoch) }
+        var addresses = [UInt64](repeating: 0, count: experts)
+        var found = 0
+        for slot in 0..<slotCount {
+            if slotState[slot] == .loading { return .notFull(epoch: residencyEpoch) }
+            let expert = slotExpert[slot]
+            guard slotState[slot] == .resident, expert >= 0, expert < experts,
+                addresses[expert] == 0
+            else { continue }
+            addresses[expert] = slotBuffers[slot].gpuAddress + slotBufferOffsets[slot]
+            found += 1
+        }
+        guard found == experts else { return .notFull(epoch: residencyEpoch) }
+        return .full(epoch: residencyEpoch, addresses: addresses, buffers: slotBuffers)
+    }
+
+    /// Up to `limit` experts with no slot yet (neither resident nor loading),
+    /// lowest id first; empty when the cache cannot hold the whole layer, so a
+    /// caller that warms toward full residency never evicts to do it.
+    public func missingExperts(limit: Int) -> [Int] {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        let experts = layout.expertsPerLayer
+        guard limit > 0, experts > 0, slotCount >= experts else { return [] }
+        // A demand plan that wants an expert a warm read is still loading
+        // takes a second slot for it (a loading slot is not a hit). Both
+        // copies are valid, but with a slot per expert the spare one is the
+        // slot some other expert needs: give it back, keeping the copy the
+        // residency table points at.
+        let entries = residencyTable.contents().bindMemory(
+            to: ExpertResidencyEntry.self, capacity: experts)
+        for slot in 0..<slotCount
+        where slotState[slot] == .resident && slotPinCount[slot] == 0 {
+            let expert = slotExpert[slot]
+            guard expert >= 0, expert < experts,
+                entries[expert].state == ExpertResidencyEntry.resident,
+                Int(entries[expert].slot) != slot
+            else { continue }
+            slotGeneration[slot] &+= 1
+            slotExpert[slot] = -1
+            slotState[slot] = .empty
+            residencyEpoch &+= 1
+        }
+        var present = [Bool](repeating: false, count: experts)
+        for slot in 0..<slotCount where slotState[slot] != .empty {
+            let expert = slotExpert[slot]
+            if expert >= 0 && expert < experts { present[expert] = true }
+        }
+        var missing: [Int] = []
+        for expert in 0..<experts where !present[expert] {
+            missing.append(expert)
+            if missing.count == limit { break }
+        }
+        return missing
+    }
+
+    /// The bookkeeping a cache plan does for an all-hit layer, for picks the
+    /// GPU resolved itself: use counts, recency and the hit statistics.
+    public func recordResidentUse(experts: [Int]) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        useClock += 1
+        let entries = residencyTable.contents().bindMemory(
+            to: ExpertResidencyEntry.self, capacity: max(1, layout.expertsPerLayer))
+        for expert in experts where expert >= 0 && expert < expertUseCount.count {
+            expertUseCount[expert] &+= 1
+            let slot = Int(entries[expert].slot)
+            if slot < slotCount { slotLastUse[slot] = useClock }
+        }
+        statisticsPlans &+= 1
+        statisticsRequestedExperts &+= UInt64(experts.count)
+        statisticsHits &+= UInt64(experts.count)
+    }
+
     public func statistics() -> ExpertStreamingStatistics {
         cacheLock.lock()
         defer { cacheLock.unlock() }
@@ -1242,6 +1342,7 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         state: UInt32,
         generation: UInt64
     ) {
+        residencyEpoch &+= 1
         guard expert >= 0 && expert < layout.expertsPerLayer else { return }
         let entries = residencyTable.contents()
             .bindMemory(

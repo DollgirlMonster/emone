@@ -214,6 +214,9 @@ extension RealForwardRunner {
         #else
             let routeTrace = expertTrace
         #endif
+        // Every expert resident and no diagnostic that needs the picks
+        // mid-token: the layers are encoded with no router readback.
+        let residentToken = try prepareResidentDecode()
         for L in 0..<cfg.numLayers {
             // Dumping drains the previous layer's routed command first. The
             // residual is only settled once that has landed, and a dump taken
@@ -251,7 +254,7 @@ extension RealForwardRunner {
             let postAttn = try model.postAttnNorm(layer: L)
             let sharedProj = sharedExpertProjections[L]
             let nextRouterW: TensorView?
-            if !denseFFN, nextLayerPredictionEnabled, L + 1 < cfg.numLayers {
+            if !denseFFN, nextLayerPredictionEnabled, !residentToken, L + 1 < cfg.numLayers {
                 nextRouterW = try model.router(layer: L + 1)
             } else {
                 nextRouterW = nil
@@ -404,6 +407,18 @@ extension RealForwardRunner {
             attnCB.commit()
             if let attentionCB = softmaxCB {
                 attentionCB.commit()
+            }
+            if residentToken {
+                // The shared MLP and the routed stage ride the tail buffer:
+                // nothing waits on the router, so a separate buffer for each
+                // would only add boundaries for the GPU to cross.
+                try encodeSharedExpert(commandBuffer: tailCB, layer: L)
+                try encodeResidentRoutedMoE(
+                    layer: L, attnCB: attnCB, softmaxCB: softmaxCB, tailCB: tailCB)
+                let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                totalCb1Nanos &+= now - tCb1Start
+                totalBodyNanos &+= now - tBodyStart
+                continue
             }
             tailCB.commit()
             // Queued before the wait below, not after: the GPU runs the shared
@@ -627,6 +642,8 @@ extension RealForwardRunner {
             }
         }
 
+        if residentToken { try finishResidentToken(position: position) }
+        try drainResidentWarm()
         kv?.advance(slot: slot, by: 1)
     }
 
@@ -1137,11 +1154,20 @@ extension RealForwardRunner {
         layer L: Int,
         completionClock: CommandCompletionClock?
     ) throws -> MTLCommandBuffer {
-        let sharedProj = sharedExpertProjections[L]
-        let D = UInt32(cfg.hiddenSize)
         guard let sharedCB = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }
+        try encodeSharedExpert(commandBuffer: sharedCB, layer: L)
+        completionClock?.track(sharedCB)
+        sharedCB.commit()
+        return sharedCB
+    }
+
+    /// The shared dense MLP (and its scalar gate) of layer `L`, reading
+    /// `routedX` and leaving its output in `h1Buf`.
+    func encodeSharedExpert(commandBuffer sharedCB: MTLCommandBuffer, layer L: Int) throws {
+        let sharedProj = sharedExpertProjections[L]
+        let D = UInt32(cfg.hiddenSize)
         try shared.encode(
             commandBuffer: sharedCB,
             x: routedX,
@@ -1167,9 +1193,6 @@ extension RealForwardRunner {
                 gate: try requireBuffer(sharedScalarGateBuf, "shared-expert gate buffer"),
                 count: cfg.hiddenSize)
         }
-        completionClock?.track(sharedCB)
-        sharedCB.commit()
-        return sharedCB
     }
 
     /// Routed-expert stage of one decode layer: top-k readback, expert fetch,

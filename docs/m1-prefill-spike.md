@@ -879,3 +879,38 @@ and V update -- only the loads do, and the 8 heads' state (64 float
 accumulators plus 64 half query values per lane) costs the occupancy. With
 attention already this small a share of decode, the ceiling did not justify a
 matrix-unit rewrite (8 query heads as the M dimension of an 8 x 8 tile).
+
+## Spike 26 (2026-11-10): decode with no router readback when every expert is resident
+
+Not prefill. Qwen 3.6 / Ornith 1.5 4-bit hold the whole expert set (17 GiB), yet
+each layer still stopped for the router: wait on the tail buffer, read the
+top-k ids, plan the cache, bind the picked slots, encode the expert kernels.
+Profiled at 8,529 tokens of context: 34.2 ms a token, of which 19.2 ms GPU,
+3.4 ms encode and 11.7 ms idle between ~80 command buffers.
+
+With a slot per expert and all of them resident the plan decides nothing, so
+`moe_resolve_resident_experts` does its one job on the GPU: it copies each
+picked expert's device address from a per-layer table into the routed argument
+buffer (`RealForwardRunner+ResidentDecode`). The routed kernels are unchanged
+and run in the same order; the layer's shared MLP and routed stage ride its
+tail buffer; nothing waits until the head. The next-layer prefetch predictor
+is not encoded on this path.
+
+| Qwen 3.6 4-bit, M1 Max, tok/s | before | after |
+| --- | ---: | ---: |
+| 384 tokens after an 8,529-token prompt, three interleaved pairs | 27.8, 28.0, 28.8 | 42.4, 44.3, 47.5 |
+| the same, sampled (0.7, logits head) | 27.4 | 40.9 |
+| 512 tokens after a 13-token prompt (cold cache) | 22.4 | 30.9, 31.1 |
+| 1,536 tokens after a 13-token prompt | 24.9 | 40.6 |
+| server, second request of a session | 29.0 | 52.0 |
+
+Ornith 1.5 4-bit: 28.3 -> 43.3. Output is byte-identical in every pair, CLI and
+server, greedy and sampled; Qwen3.8 (not fully resident) takes the old path and
+is unchanged. GPU occupancy over the run goes 70% -> 87-89%.
+
+The cache has to be complete for this, and prefill leaves a few experts per
+layer unread (248.5 of 256 active at 8.5K tokens). When 512 or fewer are
+missing they are read before the token; a cold cache is filled 32 experts a
+token with the reads submitted at the token's start and waited on at its end.
+Reading them on the token's own time instead cost 11% of cold decode (19.9
+against 22.3). `TINYTITAN_DECODE_RESIDENT=0` turns the path off.
