@@ -959,3 +959,14 @@ on whether the cache is warm.
 What is left of the 184 ms at 21 rows, from `TINYTITAN_PREFILL_SPLIT=1`:
 routed rows 94 ms, linear-attention projections ~50, router 17, shared expert
 9, full attention ~16.
+
+**Router logits on 32 x 32 tiles (2026-11-11).** The router stage was 17.0 ms
+of a 21-token prefill (0.43 ms per layer) for a 256 x 2048 matrix: the logits
+GEMM ran as four 64 x 64 threadgroups, 43 of each tile's 64 rows padding. A
+chunk of at most 32 rows now takes `prefill_dense_qmm_32x32_f32out` -- eight
+threadgroups, same sums in the same order, picks and weights bit-identical
+(unit test, and the probe's replies are unchanged). Router stage 17.0 ->
+13.9 ms; whole prefill, quiet interleaved round: 21 tokens 178-179 ->
+175-176 ms, 26: 214 -> 211, 30: 321 -> 318, 32: 197 -> 194.
+`TINYTITAN_ROUTER_SMALL_TILES=0` keeps the old tile. The scalar rows router
+(`TINYTITAN_PREFILL_ROUTER_LOGITS=0`) is slower here: 22.3 ms.

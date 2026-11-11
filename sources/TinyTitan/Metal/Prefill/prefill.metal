@@ -1107,6 +1107,33 @@ kernel void prefill_dense_qmm_64x64_f32out(
         x, y, w, w, item, p, tg, lid, sg, lane, xs, ws, ws);
 }
 
+/// The same logits from 32 x 32 tiles, for a chunk of at most 32 rows: twice
+/// the threadgroups over half the padded rows. Each logit is the same sum in
+/// the same order as the 64 x 64 tile's, so the selection cannot differ.
+[[kernel, max_total_threads_per_threadgroup(128)]]
+kernel void prefill_dense_qmm_32x32_f32out(
+    device const half* x [[buffer(0)]],
+    device float* y [[buffer(1)]],
+    device const uint8_t* weights [[buffer(2)]],
+    constant uint& M [[buffer(3)]],
+    constant PrefillRoutedQMMParams& p [[buffer(4)]],
+    device const bfloat* scales [[buffer(5)]],
+    device const bfloat* biases [[buffer(6)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    ushort lid [[thread_index_in_threadgroup]],
+    ushort sg [[simdgroup_index_in_threadgroup]],
+    ushort lane [[thread_index_in_simdgroup]]
+) {
+    threadgroup half xs[32 * kRoutedQMMLd];
+    threadgroup half ws[32 * kRoutedQMMLd];
+    const uint row = tg.y * 32u;
+    if (row >= M) return;
+    const PrefillRoutedQMMWork item = {0u, row, min(32u, M - row), 0u};
+    const PrefillQMMWeights w = {weights, scales, biases};
+    prefill_routed_qmm_body<false, 32, 32, float>(
+        x, y, w, w, item, p, tg, lid, sg, lane, xs, ws, ws);
+}
+
 kernel void prefill_routed_gather_rows(
     device const half*                      hidden         [[buffer(0)]],
     device const PrefillTokenExpertPairMSL* sorted_pairs   [[buffer(1)]],

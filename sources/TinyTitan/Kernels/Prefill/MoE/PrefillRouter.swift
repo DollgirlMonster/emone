@@ -39,6 +39,8 @@ final class PrefillRouter {
     private let topKLogitsPSO: MTLComputePipelineState
     /// `prefill_dense_qmm_64x64_f32out` at the router's width.
     private let logitsPSO: MTLComputePipelineState?
+    /// The same logits from 32 x 32 tiles, for chunks of at most 32 rows.
+    private let logitsSmallPSO: MTLComputePipelineState?
     /// `[tokens, experts]` float logits, grown to the largest chunk seen.
     private var logits: MTLBuffer?
     static let rowsPerThreadgroup = 8
@@ -65,6 +67,12 @@ final class PrefillRouter {
             ? nil
             : try context.pipeline(
                 "prefill_dense_qmm_64x64_f32out",
+                constants: [MetalFunctionConstant(index: 78, value: .uint32(UInt32(weightBits)))])
+        self.logitsSmallPSO =
+            weightBits == 16
+            ? nil
+            : try context.pipeline(
+                "prefill_dense_qmm_32x32_f32out",
                 constants: [MetalFunctionConstant(index: 78, value: .uint32(UInt32(weightBits)))])
         self.device = context.device
         self.weightBits = weightBits
@@ -147,6 +155,11 @@ final class PrefillRouter {
     /// runs `encodeBlock`. The effective scale must be ones for the logits to
     /// need no input scaling -- the runner's is -- and the caller says so with
     /// `unitInputScale`.
+    /// `TINYTITAN_ROUTER_SMALL_TILES=0` keeps the 64 x 64 logits tile for
+    /// every chunk, for A/B timing.
+    static let smallLogitsTiles =
+        ProcessInfo.processInfo.environment["TINYTITAN_ROUTER_SMALL_TILES"] != "0"
+
     func encodeFromLogits(
         commandBuffer: MTLCommandBuffer,
         weights: MTLBuffer, weightsOffset: Int,
@@ -157,7 +170,8 @@ final class PrefillRouter {
         perExpertScale: MTLBuffer, perExpertScaleOffset: Int,
         outIndices: MTLBuffer, outWeights: MTLBuffer,
         queryCount: Int, numExperts: Int, d: Int, topK: Int,
-        hiddenStrideElements: Int
+        hiddenStrideElements: Int,
+        smallTiles: Bool = true
     ) throws -> Bool {
         guard unitInputScale, let logitsPSO, hiddenStrideElements == d,
             numExperts <= 512, numExperts % 64 == 0, topK > 0, topK <= 64,
@@ -175,7 +189,12 @@ final class PrefillRouter {
         guard let gemm = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }
-        gemm.setComputePipelineState(logitsPSO)
+        // Up to 32 rows: 32 x 32 tiles, twice the threadgroups and half the
+        // padding. The logits are bit-identical either way.
+        let small =
+            smallTiles && Self.smallLogitsTiles && queryCount <= 32 ? logitsSmallPSO : nil
+        let tile = small == nil ? 64 : 32
+        gemm.setComputePipelineState(small ?? logitsPSO)
         gemm.setBuffer(hidden, offset: 0, index: 0)
         gemm.setBuffer(logits, offset: 0, index: 1)
         gemm.setBuffer(weights, offset: weightsOffset, index: 2)
@@ -188,7 +207,7 @@ final class PrefillRouter {
         gemm.setBuffer(scales, offset: scalesOffset, index: 5)
         gemm.setBuffer(biases, offset: biasesOffset, index: 6)
         gemm.dispatchThreadgroups(
-            MTLSize(width: numExperts / 64, height: (queryCount + 63) / 64, depth: 1),
+            MTLSize(width: numExperts / tile, height: (queryCount + tile - 1) / tile, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
         gemm.endEncoding()
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {

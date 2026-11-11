@@ -228,6 +228,52 @@ import TinyTitanValidationSupport
             tolerance: 2e-3)
     }
 
+    /// The 32 x 32 logits tile a short chunk takes against the 64 x 64 one:
+    /// the same sums in the same order, so unseparated scores must still
+    /// give the same picks and the same weight bits.
+    @Test func smallLogitsTileMatchesTheLargeTileBitForBit() throws {
+        var rng = SplitMix64(seed: 0x11_2026)
+        let (experts, rows) = (64, 27)
+        let weights: [[Float]] = (0..<experts).map { _ in
+            (0..<Self.d).map { _ in rng.uniform(-0.05, 0.05) }
+        }
+        let hidden = (0..<(rows * Self.d)).map { _ in Float16(rng.uniform(-1.0, 1.0)) }
+        let ctx = try MetalContext()
+        let router = try PrefillRouter(context: ctx)
+        func run(smallTiles: Bool) throws -> ([UInt32], [UInt16]) {
+            let buffers = try Self.makeBuffers(
+                ctx: ctx, weights: weights, hidden: hidden,
+                effectiveScale: [Float](repeating: 1, count: Self.d),
+                perExpertScale: [Float](repeating: 1, count: experts),
+                rows: rows)
+            guard let cb = ctx.queue.makeCommandBuffer() else {
+                throw RouterTestError.allocationFailed
+            }
+            let took = try router.encodeFromLogits(
+                commandBuffer: cb,
+                weights: buffers.weights, weightsOffset: 0,
+                scales: buffers.scales, scalesOffset: 0,
+                biases: buffers.biases, biasesOffset: 0,
+                hidden: buffers.hidden, unitInputScale: true,
+                perExpertScale: buffers.perExpertScale, perExpertScaleOffset: 0,
+                outIndices: buffers.blockIndices, outWeights: buffers.blockWeights,
+                queryCount: rows, numExperts: experts, d: Self.d, topK: Self.topK,
+                hiddenStrideElements: Self.d, smallTiles: smallTiles)
+            #expect(took)
+            cb.commit()
+            cb.waitUntilCompleted()
+            #expect(cb.error == nil)
+            return (
+                Self.readUInt32(buffers.blockIndices, count: rows * Self.topK),
+                Fp16Buffer.readHalf(buffers.blockWeights, count: rows * Self.topK).map(\.bitPattern)
+            )
+        }
+        let large = try run(smallTiles: false)
+        let small = try run(smallTiles: true)
+        #expect(large.0 == small.0)
+        #expect(large.1 == small.1)
+    }
+
     @Test func blockRouterNearTieMatchesScalarPath() throws {
         let weights = Self.makeNearTieWeights()
         let hidden = [Float16](repeating: 1, count: Self.d)
