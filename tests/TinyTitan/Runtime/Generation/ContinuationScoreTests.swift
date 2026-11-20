@@ -94,6 +94,29 @@ import Testing
         #expect(score.tokenHash == ContinuationScore.hash(context + continuation))
     }
 
+    /// Sequential mode feeds the context through decode, one token per
+    /// position, and never calls chunked prefill; the scores are the same here
+    /// because the producer's arithmetic does not depend on the path.
+    @Test func sequentialFeedsTheContextThroughDecode() async throws {
+        let vocab = 16
+        let producer = NextTokenProducer(vocab: vocab)
+        let scratch = try RawCompletionScratch(context: try MetalContext(), vocab: vocab)
+        let context: [Int32] = [5, 6, 7]
+        let continuation: [Int32] = [8, 9, 3]
+        let score = try await scoreContinuation(
+            producer: producer, context: context, continuation: continuation,
+            prefillConfig: .production(chunkTokens: 128), scratch: scratch, logitSoftcap: 0,
+            sequential: true)
+
+        #expect(producer.prefills.isEmpty)
+        #expect(producer.produced.map(\.token) == [5, 6, 7, 8, 9])
+        #expect(producer.produced.map(\.position) == [0, 1, 2, 3, 4])
+        let hit = -log(exp(4.0) / (exp(4.0) + 15))
+        #expect(score.nlls.count == 3)
+        #expect(abs(score.nlls[0] - hit) < 1e-6)
+        #expect(score.contextTokens == 3)
+    }
+
     @Test func anEmptySideIsRefused() async throws {
         let producer = NextTokenProducer(vocab: 16)
         let scratch = try RawCompletionScratch(context: try MetalContext(), vocab: 16)

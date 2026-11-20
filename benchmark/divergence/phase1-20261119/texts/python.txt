@@ -1,0 +1,808 @@
+#!/usr/bin/env python3.13
+"""Does precision buy quality? A checkable A/B between two installs of one model.
+
+TT-025 wants to promote ~10 MB of precision-sensitive tensors to 8 bits inside a
+4-bit install, because taking the whole attention block there costs +2.10 GB
+resident. Before building anything, the question is whether precision buys
+*quality* at all on these models  the Engineering Notes record weight-space
+fidelity and selection stability and say plainly that no end-to-end quality
+measurement exists.
+
+So this is a first one. Twenty prompts with answers a script can check: arithmetic
+including multi-step, a counting task, a syllogism, a format constraint, a
+reversal, a calendar step, a fact. Greedy, fixed prompt, one generation each, so
+two installs of the same model are compared on identical inputs.
+
+    python3.13 benchmark/quant_quality_ab.py models/qwen3.5_4B_4Bit models/qwen3.5_4B_8Bit
+
+It runs the release CLI once per (install, case) because that is the only runner
+that needs no server and no port. It is a *floor*, not a suite: twenty short
+answerable prompts cannot see a small perplexity difference, and a ceiling
+result  both installs at 20/20  is evidence that this instrument is too blunt,
+not that precision does not matter. It is here so a promotion has something to
+fail against before it costs a 360 GB fetch.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CLI = ROOT / ".build/release/TinyTitanCLI"
+SYSTEM = "Answer with just the answer, nothing else."
+MAX_NEW = 48
+
+# (prompt, expected token, how to match)
+CASES: list[tuple[str, str, str]] = [
+    ("What is 17 + 28?", "45", "number"),
+    ("What is 13 x 7?", "91", "number"),
+    ("If x + 9 = 20, what is x?", "11", "number"),
+    (
+        "A train leaves at 14:20 and arrives at 16:05. How many minutes is the journey?",
+        "105",
+        "number",
+    ),
+    ("How many letter r are in the word strawberry?", "3", "number"),
+    ("Which is the smallest: 0.7, 0.07, or 0.17?", "0.07", "number"),
+    ("What is the capital of Australia?", "Canberra", "word"),
+    ("What is 100 - 37?", "63", "number"),
+    (
+        "If all Bloops are Razzies and all Razzies are Lazzies, are all Bloops Lazzies?",
+        "yes",
+        "word",
+    ),
+    ("Write the numbers 1 to 5 as a JSON array.", "[1,2,3,4,5]", "json"),
+    ("What is 12% of 250?", "30", "number"),
+    ("Who wrote Pride and Prejudice?", "Austen", "word"),
+    ("What is 2 to the power of 10?", "1024", "number"),
+    ("Reverse the word stressed.", "desserts", "word"),
+    ("If today is Wednesday, what day is it in 10 days?", "Saturday", "word"),
+    ("What is the sum of the first five prime numbers?", "28", "number"),
+    ("Which word does not belong: apple, banana, carrot, cherry?", "carrot", "word"),
+    ("What is 9 squared minus 9?", "72", "number"),
+    ("How many minutes are in 2.5 hours?", "150", "number"),
+    ("What is 7 factorial?", "5040", "number"),
+]
+
+
+def completion_of(stdout: str) -> str:
+    """The model's text, without the CLI's `[stop=]` statistics line."""
+    lines = [line for line in stdout.splitlines() if not line.startswith("[stop=")]
+    return "\n".join(lines).strip()
+
+
+def passed(reply: str, expected: str, kind: str) -> bool:
+    text = reply.strip()
+    if kind == "json":
+        return re.sub(r"\s+", "", text) == expected
+    if kind == "number":
+        numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
+        if not numbers:
+            return False
+        # The last number is the answer when the model restates the question;
+        # compare numerically so "45." and "45" agree.
+        return any(abs(float(n) - float(expected)) < 1e-9 for n in numbers)
+    return expected.lower() in text.lower()
+
+
+def run_case(model: str, prompt: str) -> str:
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+        json.dump(
+            [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}], handle
+        )
+        path = handle.name
+    try:
+        result = subprocess.run(
+            [
+                str(CLI),
+                "--model",
+                model,
+                "--messages-file",
+                path,
+                "--max-new",
+                str(MAX_NEW),
+                "--temperature",
+                "0",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+    finally:
+        Path(path).unlink(missing_ok=True)
+    if result.returncode != 0:
+        return f"<exit {result.returncode}>"
+    return completion_of(result.stdout)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("models", nargs="+", help="two or more installs of one model")
+    args = ap.parse_args()
+    if not CLI.exists():
+        print(
+            f"build it first: swift build -c release --product TinyTitanCLI\n  missing {CLI}",
+            file=sys.stderr,
+        )
+        return 2
+
+    results: dict[str, list[bool]] = {}
+    for model in args.models:
+        print(f"\n=== {model}")
+        hits: list[bool] = []
+        for prompt, expected, kind in CASES:
+            reply = run_case(model, prompt)
+            ok = passed(reply, expected, kind)
+            hits.append(ok)
+            print(f"  {'ok  ' if ok else 'MISS'} want={expected:12s} got={reply[:40]!r}")
+        results[model] = hits
+
+    print("\n=== totals")
+    for model, hits in results.items():
+        print(f"  {model:44s} {sum(hits)}/{len(hits)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+#!/usr/bin/env python3
+"""Cross-process greedy determinism check: two fresh servers, 512-token greedy
+for the essay and digit-cycle prompts, comparing the CONTENT deltas token by
+token (never the raw SSE bytes). A raw-byte comparison is invalid: each
+response embeds a per-request chatcmpl id and created timestamp, so identical
+content hashes differently across processes. first_diff_index=None means the
+streams are identical token-for-token.
+
+Usage: python3 benchmark/tinytitan_determinism_ab.py [max_tokens]
+"""
+
+import hashlib
+import http.client
+import json
+import os
+import subprocess
+import sys
+import time
+
+from tinytitan_profile import (
+    DEFAULT_MODEL_PATH,
+    benchmark_log_path,
+    server_command,
+    server_environment,
+    resolve_api_model,
+)
+
+BASE = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+BIN = os.path.join(BASE, ".build", "release", "TinyTitanServer")
+MODEL = str(DEFAULT_MODEL_PATH)
+PORT = 8114
+MAX_TOKENS = int(sys.argv[1]) if len(sys.argv) > 1 else 512
+PROMPTS = [
+    ("essay", "Write a detailed essay about the history of computing."),
+    (
+        "digits",
+        "Write the digits 1,2,3,4,5,6,7,8,9,0 over and over in sequence, separated by commas, without stopping.",
+    ),
+]
+
+
+def extract_deltas(resp):
+    """Content deltas only  the raw bytes contain the per-request chatcmpl id
+    and created timestamp, so hashing/compare the stream itself is invalid."""
+    deltas = []
+    for raw in resp:
+        line = raw.decode()
+        if not line.startswith("data: "):
+            continue
+        payload = line[len("data: ") :].strip()
+        if payload == "[DONE]":
+            break
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        for choice in obj.get("choices", []):
+            content = choice.get("delta", {}).get("content")
+            if content is not None:
+                deltas.append(content)
+    return deltas
+
+
+def first_diff_index(a, b):
+    n = min(len(a), len(b))
+    for i in range(n):
+        if a[i] != b[i]:
+            return i
+    if len(a) != len(b):
+        return n
+    return None
+
+
+def run_server():
+    log = open(benchmark_log_path("tinytitan_determinism_server.log"), "w")
+    proc = subprocess.Popen(
+        server_command(BIN, PORT, model=MODEL),
+        env=server_environment(),
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
+    start = time.time()
+    while time.time() - start < 120:
+        if proc.poll() is not None:
+            raise SystemExit("server failed to start")
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=1)
+            conn.request("GET", "/health")
+            if "ok" in conn.getresponse().read().decode():
+                conn.close()
+                break
+            conn.close()
+        except OSError:
+            pass
+        time.sleep(0.05)
+
+    result = {}
+    for name, prompt in PROMPTS:
+        payload = json.dumps(
+            {
+                "model": resolve_api_model(PORT),
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "top_p": 0.95,
+                "top_k": 20,
+                "presence_penalty": 0.0,
+                "max_completion_tokens": MAX_TOKENS,
+                "stream": True,
+            }
+        ).encode()
+        conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=1800)
+        conn.request(
+            "POST",
+            "/v1/chat/completions",
+            body=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        deltas = extract_deltas(resp)
+        conn.close()
+        result[name] = deltas
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    time.sleep(0.5)
+    return result
+
+
+def main():
+    print(f"max_tokens={MAX_TOKENS} prompts={[n for n, _ in PROMPTS]}")
+    print("server A...", flush=True)
+    a = run_server()
+    print("server B...", flush=True)
+    b = run_server()
+    for name, _ in PROMPTS:
+        da, db = a[name], b[name]
+        diff = first_diff_index(da, db)
+        joined_a = "".join(da)
+        joined_b = "".join(db)
+        sha_a = hashlib.sha256(joined_a.encode()).hexdigest()[:16]
+        sha_b = hashlib.sha256(joined_b.encode()).hexdigest()[:16]
+        print(
+            f"{name}: tokens A={len(da)} B={len(db)} "
+            + f"first_diff_index={diff} "
+            + f"content_sha256={sha_a}=={sha_b} equal={sha_a == sha_b}"
+        )
+    print("None for both => 512-token greedy is deterministic across fresh processes")
+
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3
+"""Summarise a TINYTITAN_PREFIX_LOG file: would pinned prefix snapshots pay?
+
+    python3 benchmark/prefix_log_report.py prefix.jsonl
+    python3 benchmark/prefix_log_report.py prefix.jsonl --dense-ms-per-token 5.8 --cut-cost-s 17
+
+Each line is one completed request (see PrefixHashLog.swift). The hashes are
+chained per block, so a request shares its first k blocks with some earlier
+request exactly when its hash k-1 was seen before -- no pairwise comparison.
+
+For every request it reports the longest prefix any earlier request already
+had ("reusable"), against what the prompt cache actually served ("cached").
+The gap between the two is what better snapshot retention could win.
+
+Where a reusable prefix ends inside the prompt, the request diverged there. For
+each such divergence it applies the snapshot-placement rule: re-prefilling the
+tokens between the last chunk boundary and the divergence costs
+dense-ms-per-token each time the prefix is reused, while cutting a snapshot at
+the exact point costs one extra chunk (cut-cost-s) once. The defaults are the
+Qwen3.8-Flash 4-bit M1 Max spike figures; pass your own.
+"""
+
+import argparse
+import json
+import sys
+from collections import Counter
+
+
+def load(path):
+    rows = []
+    with open(path) as handle:
+        for number, text in enumerate(handle, 1):
+            text = text.strip()
+            if not text:
+                continue
+            try:
+                rows.append(json.loads(text))
+            except json.JSONDecodeError:
+                print(f"skipping malformed line {number}", file=sys.stderr)
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("log")
+    parser.add_argument("--dense-ms-per-token", type=float, default=5.8)
+    parser.add_argument("--cut-cost-s", type=float, default=17.0)
+    args = parser.parse_args()
+
+    rows = load(args.log)
+    if not rows:
+        print("no records")
+        return
+
+    seen = set()
+    hits_at = Counter()  # hash of a divergence prefix -> times reused
+    prompt_total = cached_total = reusable_total = 0
+    missed = []  # (reusable - cached) per request, tokens
+    divergences = []  # (divergence token, chunk tokens, prefix hash)
+
+    for row in rows:
+        hashes = row["hashes"]
+        block = row["block_tokens"]
+        prompt = row["prompt_tokens"]
+        shared = 0
+        while shared < len(hashes) and hashes[shared] in seen:
+            shared += 1
+        reusable = min(prompt, shared * block)
+        cached = row["cached_tokens"]
+        prompt_total += prompt
+        cached_total += cached
+        reusable_total += reusable
+        missed.append(max(0, reusable - cached))
+        if 0 < shared < len(hashes):
+            key = hashes[shared - 1]
+            hits_at[key] += 1
+            divergences.append((shared * block, row["chunk_tokens"], key))
+        seen.update(hashes)
+
+    n = len(rows)
+    print(f"requests            {n}")
+    print(f"prompt tokens       {prompt_total}")
+    print(f"cached by server    {cached_total}  ({100 * cached_total / prompt_total:.1f}%)")
+    print(f"reusable (ideal)    {reusable_total}  ({100 * reusable_total / prompt_total:.1f}%)")
+    lost = sum(missed)
+    print(f"missed reuse        {lost} tokens, "
+          f"~{lost * args.dense_ms_per_token / 1000:.0f} s of dense prefill "
+          f"(at {args.dense_ms_per_token} ms/token)")
+    print(f"requests missing >1K reusable tokens: {sum(1 for m in missed if m > 1024)}")
+
+    print()
+    print(f"divergence points   {len(divergences)} "
+          f"({len(hits_at)} distinct prefixes)")
+    hot = [(k, c) for k, c in hits_at.items() if c >= 2]
+    print(f"prefixes diverged from 2+ times (pin candidates): {len(hot)}")
+
+    boundary = cut = 0
+    for token, chunk, key in divergences:
+        gap = token % chunk if chunk > 0 else token
+        reuses = hits_at[key]
+        # Re-prefilling the gap on every reuse vs one extra chunk, once.
+        if gap * args.dense_ms_per_token / 1000 * reuses > args.cut_cost_s:
+            cut += 1
+        else:
+            boundary += 1
+    if divergences:
+        gaps = sorted(t % c if c > 0 else t for t, c, _ in divergences)
+        print(f"gap past last chunk boundary: median {gaps[len(gaps) // 2]} tokens, "
+              f"max {gaps[-1]}")
+        print(f"placement rule: boundary snapshot {boundary}, exact cut {cut} "
+              f"(cut when gap x {args.dense_ms_per_token} ms x reuses > {args.cut_cost_s} s)")
+
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3.13
+"""Does precision buy quality? Held-out perplexity, the sharper A/B.
+
+TT-025's twenty-prompt check (`quant_quality_ab.py`) is a floor: two installs
+of a 4B scored 18/20 and missed the *same* two cases, so it cannot see a small
+perplexity effect. The Engineering Notes say a sharper check  held-out
+perplexity  is cheap enough to run before concluding precision never matters.
+This is it. A fixed text is scored through the CPU forward pass, once per
+install, and because both passes see the *same token positions*, the
+difference between two quantizations of one model is a paired number (mean
+dNLL, standard error, t) rather than two means that could hide a real effect.
+
+    python3.13 benchmark/quant_perplexity_ab.py \\
+        models/qwen3.5_4B_4Bit .build/qwen35-4b-uniform.gturbo models/qwen3.5_4B_8Bit
+
+The first install is the baseline; each other is compared against it. A run
+whose token hash does not match the baseline is refused rather than averaged 
+two installs scoring different text is not a comparison.
+
+The default text is assembled from this repository's own documentation. It is
+held out in the sense that matters here: the comparison is between two widths
+of the same weights on identical tokens, so training contamination affects
+both arms equally. `--text` names a file instead, and `--tokens` bounds the
+work (1024 by default).
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import re
+import statistics
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+BENCH = ROOT / ".build/release/TinyTitanBench"
+# Natural prose, not part of any golden, and cheap to read. Order is fixed so
+# the token hash is reproducible.
+CORPUS = [
+    "docs/side-engine-tasks.md",
+    "docs/agent-memory.md",
+    "docs/handover-tinytitan.md",
+    ".qwen/wiki/Engineering-Notes.md",
+]
+
+SUMMARY = re.compile(r"mean nll ([\d.]+)\s+perplexity ([\d.]+)\s+seconds ([\d.]+)")
+HEADER = re.compile(r"token hash ([0-9a-f]+)")
+
+
+def corpus_text(named: str | None) -> tuple[str, list[str]]:
+    if named:
+        return Path(named).read_text(encoding="utf-8"), [named]
+    pieces, used = [], []
+    for relative in CORPUS:
+        path = ROOT / relative
+        if not path.exists():
+            continue
+        pieces.append(path.read_text(encoding="utf-8"))
+        used.append(relative)
+    if not pieces:
+        raise SystemExit(f"none of the default corpus files exist under {ROOT}")
+    return "\n\n".join(pieces), used
+
+
+def score(install: str, text: Path, tokens: int, nll_out: Path) -> dict:
+    result = subprocess.run(
+        [str(BENCH), "cpu35ppl", install, str(text), str(tokens), str(nll_out)],
+        capture_output=True,
+        text=True,
+        timeout=7200,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"{install}: cpu35ppl exited {result.returncode}\n" + result.stderr[-2000:]
+        )
+    header = HEADER.search(result.stdout)
+    summary = SUMMARY.search(result.stdout)
+    if not header or not summary:
+        raise SystemExit(f"{install}: could not read the bench output\n{result.stdout}")
+    return {
+        "install": install,
+        "hash": header.group(1),
+        "mean_nll": float(summary.group(1)),
+        "perplexity": float(summary.group(2)),
+        "seconds": float(summary.group(3)),
+        "nlls": [float(line) for line in nll_out.read_text(encoding="utf-8").splitlines()],
+    }
+
+
+def paired(baseline: list[float], other: list[float]) -> tuple[float, float, float]:
+    differences = [a - b for a, b in zip(baseline, other, strict=False)]
+    count = len(differences)
+    mean = sum(differences) / count
+    if count < 2:
+        return mean, 0.0, math.inf
+    stderr = statistics.stdev(differences) / math.sqrt(count)
+    return mean, stderr, mean / stderr if stderr > 0 else math.inf
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "installs", nargs="+", help="two or more installs of one model; the first is the baseline"
+    )
+    ap.add_argument(
+        "--tokens", type=int, default=1024, help="token positions to score (default 1024)"
+    )
+    ap.add_argument("--text", help="score this file instead of the default corpus")
+    args = ap.parse_args()
+    if not BENCH.exists():
+        print(
+            f"build it first: swift build -c release --product TinyTitanBench\n  missing {BENCH}",
+            file=sys.stderr,
+        )
+        return 2
+
+    body, sources = corpus_text(args.text)
+    print("held-out text: " + ", ".join(sources))
+    with tempfile.TemporaryDirectory() as tmp:
+        text = Path(tmp) / "held-out.txt"
+        text.write_text(body, encoding="utf-8")
+        runs = []
+        for index, install in enumerate(args.installs):
+            print(f"\n=== {install}")
+            run = score(install, text, args.tokens, Path(tmp) / f"nll{index}.txt")
+            runs.append(run)
+            print(
+                f"  mean nll {run['mean_nll']:.6f}  perplexity "
+                f"{run['perplexity']:.6f}  {run['seconds']:.1f}s  "
+                f"hash {run['hash']}"
+            )
+
+    baseline = runs[0]
+    print(f"\n=== paired against {baseline['install']}")
+    print(f"{'install':44s} {'dNLL':>10s} {'se':>9s} {'t':>8s} {'ppl ratio':>10s} {'n':>6s}")
+    for run in runs[1:]:
+        if run["hash"] != baseline["hash"]:
+            print(f"{run['install']:44s} refused: token hash {run['hash']} != {baseline['hash']}")
+            continue
+        mean, stderr, t = paired(baseline["nlls"], run["nlls"])
+        ratio = math.exp(mean)
+        count = len(run["nlls"])
+        print(f"{run['install']:44s} {mean:+10.6f} {stderr:9.6f} {t:8.2f} {ratio:10.6f} {count:6d}")
+    print(
+        "\ndNLL is baseline minus install, per token position; positive means the "
+        "baseline is worse. t is the paired statistic over the same positions."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+#!/usr/bin/env python3
+"""Interleaved A/B for the Top-K sampler path, at the published v4.1 profile.
+
+`generic` is the pre-change behavior: for any k != 64 the sampler fell through
+to a single-threadgroup kernel that extracts Top-K in k full passes over a
+262,144-entry vocabulary. `tiled` routes every k in 1...64 to the existing
+three-stage reduction. The two are required to emit the same token  this
+script checks that on the real model and measures what it costs.
+
+Both arms run from **one binary in one machine state**, alternating
+A/B/B/A with a fresh server process per run and a discarded warmup per arm,
+because throughput on this Mac carries run-to-run spread wider than many
+effects being tested and a sequential sweep warms the page cache as it goes.
+
+  python3 benchmark/tinytitan_sampler_ab.py --quant 4bit --pairs 2
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import statistics
+import sys
+
+import tinytitan_gate0_profile as g0
+from tinytitan_profile import ROOT
+
+
+def one_run(quant: str, arm: str, tag: str) -> dict:
+    port = g0.PORTS[quant]
+    log_name = f"samplerab_{quant}_{arm}_{tag}.log"
+    g0.launch(quant, port, log_name, sampler_path=arm)
+    if not g0.wait_ready(port):
+        g0._terminate_all()
+        raise SystemExit(f"[{quant}/{arm}] server did not become healthy")
+    result = g0.generate(port)
+    # stdout is block-buffered into the log; footers land only on exit.
+    g0._terminate_all()
+    if result is None:
+        raise SystemExit(f"[{quant}/{arm}] request failed")
+    records = g0.parse_log(g0.benchmark_log_path(log_name))
+    if not records:
+        raise SystemExit(f"[{quant}/{arm}] no footer lines")
+    record = records[-1]
+    record.update(result)
+    record["arm"] = arm
+    return record
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--quant", choices=sorted(g0.QUANTS), default="4bit")
+    parser.add_argument(
+        "--pairs", type=int, default=2, help="A/B/B/A blocks; each block is 4 measured runs"
+    )
+    parser.add_argument("--allow-busy-gpu", action="store_true")
+    args = parser.parse_args()
+
+    signal.signal(signal.SIGINT, g0._on_signal)
+    signal.signal(signal.SIGTERM, g0._on_signal)
+    g0.preflight(100 if args.allow_busy_gpu else 15)
+
+    rows: list[dict] = []
+    try:
+        # One discarded warmup per arm before any measurement, so neither arm
+        # pays the first-touch cost the other does not.
+        for arm in ("generic", "tiled"):
+            print(f"[{args.quant}] warmup {arm}", flush=True)
+            one_run(args.quant, arm, "warmup")
+        for block in range(args.pairs):
+            for arm in ("generic", "tiled", "tiled", "generic"):
+                row = one_run(args.quant, arm, f"b{block}_{len(rows)}")
+                rows.append(row)
+                print(
+                    f"[{args.quant}] {arm:<7} "
+                    f"{row['decode_tok_s']:.3f} tok/s  "
+                    f"busy/token {row.get('busy_per_token_ms', 0):.2f} ms  "
+                    f"sample_gap {row['gaps'].get('head_logits->embed', {}).get('per_token_ms', 0):.2f} ms  "
+                    f"sha {row['completion_sha256']}",
+                    flush=True,
+                )
+    finally:
+        g0._terminate_all()
+
+    out: dict = {"quant": args.quant, "arms": {}}
+    for arm in ("generic", "tiled"):
+        sel = [r for r in rows if r["arm"] == arm]
+        rates = [r["decode_tok_s"] for r in sel]
+        busy = [r.get("busy_per_token_ms", 0) for r in sel]
+        gaps = [r["gaps"].get("head_logits->embed", {}).get("per_token_ms", 0) for r in sel]
+        out["arms"][arm] = {
+            "runs": len(sel),
+            "median_tok_s": round(statistics.median(rates), 4),
+            "rates": [round(x, 4) for x in rates],
+            "median_busy_per_token_ms": round(statistics.median(busy), 4),
+            "median_sample_gap_ms": round(statistics.median(gaps), 4),
+            "digests": sorted({r["completion_sha256"] for r in sel}),
+        }
+
+    a, b = out["arms"]["generic"], out["arms"]["tiled"]
+    delta = (b["median_tok_s"] / a["median_tok_s"] - 1) * 100
+    out["delta_percent"] = round(delta, 2)
+    out["output_identical"] = a["digests"] == b["digests"] and len(a["digests"]) == 1
+
+    print("\n" + "=" * 68)
+    print(f"SAMPLER A/B  {args.quant}, published v4.1 profile, one binary")
+    print("=" * 68)
+    for arm in ("generic", "tiled"):
+        d = out["arms"][arm]
+        print(f"  {arm:<8} median {d['median_tok_s']:7.3f} tok/s   runs {d['rates']}")
+        print(
+            f"           busy/token {d['median_busy_per_token_ms']:.2f} ms   "
+            f"sampler gap {d['median_sample_gap_ms']:.2f} ms"
+        )
+    print(f"\n  DELTA: {delta:+.2f}%   (gate is +10%: {'PASS' if delta >= 10 else 'FAIL'})")
+    print(
+        f"  Output identical across every run of both arms: "
+        f"{'YES' if out['output_identical'] else 'NO'}"
+    )
+    if not out["output_identical"]:
+        print(f"    generic digests {a['digests']}")
+        print(f"    tiled   digests {b['digests']}")
+        print(
+            "    A sampling change that moves the token stream is a numerics "
+            "change and must be re-baselined deliberately, not accepted here."
+        )
+
+    path = ROOT / f".build/benchmark-results/sampler-ab-{args.quant}.json"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as handle:
+        json.dump(out, handle, indent=2)
+    print(f"\nwrote {path}")
+    return 0 if out["output_identical"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+#!/usr/bin/env python3
+"""ANE-vs-GPU prefill A/B across the installed models.
+
+One variable: `TINYTITAN_PREFILL_ANE`. Arms alternate `off, on, on, off` after a
+discarded warm-up per arm, so thermal drift and page-cache state land on both
+arms rather than on whichever ran second.
+
+The metric is prefill seconds from the CLI's own footer, on a prompt long enough
+to fill more than one 4,096-token chunk  the only workload the sidecar serves
+(a short prompt is one partial chunk and deliberately stays on the GPU, and a
+non-4,096 prefill chunk never matches the sidecar at all).
+
+The script refuses to report a speedup for an arm that did not use the ANE: the
+runtime prints `ane-prefill fallback ... using the GPU path` when a chunk is
+ineligible, and such an arm is recorded as fallen back rather than as an ANE
+number. A model with no sidecar is reported `no sidecar`  with the switch
+explicitly `on`, the runtime fails the load rather than pretending.
+
+  python3 benchmark/ane_prefill_ab_matrix.py \
+      --models qwen3.5_2B_4Bit qwen3.5_4B_4Bit --label v5.6 --record
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import pathlib
+import re
+import statistics
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODELS_DIR = ROOT / "models"
+CLI = ROOT / ".build/release/TinyTitanCLI"
+RESULTS = ROOT / "benchmark/ane-prefill"
+
+PREFILL_CHUNK = 4096
+FALLBACK_MARKER = "ane-prefill fallback"
+NO_SIDECAR_MARKER = "is missing; run "
+# One token: prefill is the metric, and a longer continuation only adds decode
+# time. It does cost the digest its diagnostic value  with a single greedy
+# token both arms usually emit the same one  so treat the digests as a
+# determinism check, not as evidence the arms differ.
+MAX_NEW = 1
+# Measured for this text: 23,000 characters is 4,333 tokens. Used only to warn
+# when a prompt cannot reach one full chunk, i.e. when the ANE cannot engage.
+CHARACTERS_PER_TOKEN = 5.31
+
+FOOTER = re.compile(
+    r"\[stop=(\S+) prefill=(\d+)tok/([\d.]+)s new=(\d+)tok decode=([\d.]+)s "
+    r"tok/s=([\d.]+)\]"
+)
+
+# A fixed, self-contained body. Deriving it from repo files would make the
+# prompt length move whenever those files are edited, and prompt length is the
+# quadratic term this benchmark is about.
+#
+# It is deliberately *just* over one chunk (~4,300 tokens, measured at ~5.3
+# characters per token for this text): the ANE only serves a full 4,096-token
+# chunk, so a short prompt would measure two GPU arms and call one of them
+# "ANE". Shorter is faster; below ~21,750 characters it is meaningless.
+PARAGRAPH = (
+    "Swift and C++ differ in memory management, dispatch, compilation and type "
+    "safety, and a fair comparison names each axis before it judges either "
+    "language. "
+)
+PROMPT_CHARACTERS = 23_000
+
+
+def prompt(characters: int = PROMPT_CHARACTERS) -> str:
+    repeats = characters // len(PARAGRAPH) + 1
+    return (PARAGRAPH * repeats)[:characters]
+
+
+def parse_footer(stderr: str) -> dict | None:
+    match = FOOTER.search(stderr)
+    if not match:
+        return None
+    return {
+        "finish": match.group(1),
+        "prefill_tokens": int(match.group(2)),
+        "prefill_seconds": float(match.group(3)),
+        "decode_tokens": int(match.group(4)),
+        "decode_seconds": float(match.group(5)),
+        "decode_tokens_per_second": float(match.group(6)),
+    }
+
+
+def run_arm(model: str, ane: bo

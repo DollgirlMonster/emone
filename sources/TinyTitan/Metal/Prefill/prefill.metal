@@ -2240,6 +2240,9 @@ kernel void attention_prefill_qsa_masked_flash(
     constant uint& causalOnly [[buffer(9)]],
     device const uint* blockCounts [[buffer(10)]],
     device const half* packedQ [[buffer(11)]],
+    constant uint& splitTiles [[buffer(12)]],
+    device float* partialO [[buffer(13)]],
+    device float* partialML [[buffer(14)]],
     uint3 tg [[threadgroup_position_in_grid]],
     uint lid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -2294,7 +2297,13 @@ kernel void attention_prefill_qsa_masked_flash(
     const bool packed = is_function_constant_defined(FC_QSA_FLASH_PACKED) && FC_QSA_FLASH_PACKED;
     const uint packedBlocks = packed ? blockCounts[rt] : 0u;
     device const uint* blockList = reinterpret_cast<device const uint*>(flags) + ulong(rt) * keyTiles;
-    const uint loopEnd = packed ? (packedBlocks + 3u) / 4u : tileEnd;
+    const uint walkEnd = packed ? (packedBlocks + 3u) / 4u : tileEnd;
+    // Key split (`splitTiles` > 0, causal mode only): this threadgroup walks
+    // key tiles [tg.z * splitTiles, (tg.z + 1) * splitTiles) and leaves its
+    // unnormalised partial for `qsa_flash_split_merge`. With no split the
+    // range is the whole walk, the same tiles in the same order as before.
+    const uint loopStart = splitTiles > 0u ? min(tg.z * splitTiles, walkEnd) : 0u;
+    const uint loopEnd = splitTiles > 0u ? min(loopStart + splitTiles, walkEnd) : walkEnd;
     // Key j of this step's 16-key tile, or ~0 past the end of a packed list.
     auto tileKey = [&](uint kt, uint j) -> uint {
         if (!packed) return kt * kQSAFlashKeys + j;
@@ -2302,7 +2311,7 @@ kernel void attention_prefill_qsa_masked_flash(
         return slot < packedBlocks ? blockList[slot] * kQSABlockKeys + j % kQSABlockKeys : 0xFFFFFFFFu;
     };
 
-    for (uint kt = 0u; kt < loopEnd; ++kt) {
+    for (uint kt = loopStart; kt < loopEnd; ++kt) {
         if (!packed && causalOnly == 0u && tileFlags[kt] == 0) continue;
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint task = lid; task < 2u * kQSAFlashKeys * HD / 8u; task += threads) {
@@ -2416,6 +2425,25 @@ kernel void attention_prefill_qsa_masked_flash(
         }
     }
 
+    if (splitTiles > 0u) {
+        if (rowLive && sg < G) {
+            // [split][row][query head]: the accumulator as it stands, and this
+            // row's running max and sum, written once (the lane with fn 0).
+            const ulong slot = (ulong(tg.z) * p.queryCount + row) * p.numQHeads + h;
+            device float* po = partialO + slot * HD;
+            _Pragma("clang loop unroll(full)")
+            for (uint cb = 0u; cb < HD / 8u; ++cb) {
+                po[cb * 8u + fn] = of[cb].thread_elements()[0];
+                po[cb * 8u + fn + 1u] = of[cb].thread_elements()[1];
+            }
+            if (fn == 0u) {
+                partialML[slot * 2u] = m;
+                partialML[slot * 2u + 1u] = l;
+            }
+        }
+        return;
+    }
+
     if (rowLive && sg < G) {
         device half* out = O + ulong(row) * p.oTokenStrideElements + h * HD;
         const float inv = l > 0.0f ? 1.0f / l : 0.0f;
@@ -2425,6 +2453,47 @@ kernel void attention_prefill_qsa_masked_flash(
             out[cb * 8u + fn + 1u] = half(of[cb].thread_elements()[1] * inv);
         }
     }
+}
+
+/// Combines `attention_prefill_qsa_masked_flash`'s key-split partials: for
+/// each (row, query head), M = max over splits of m, then
+/// O = sum(o_z * exp(m_z - M)) / sum(l_z * exp(m_z - M)). A split that kept
+/// no key for the row (m = -inf, l = 0) contributes nothing. One thread per
+/// four head-dim elements of one (row, head).
+kernel void qsa_flash_split_merge(
+    device const float* partialO [[buffer(0)]],
+    device const float* partialML [[buffer(1)]],
+    device half* O [[buffer(2)]],
+    constant PrefillAttentionParams& p [[buffer(3)]],
+    constant uint& splits [[buffer(4)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    const uint HD = kQSAFlashHD;
+    const uint quad = gid % (HD / 4u);
+    const uint rowHead = gid / (HD / 4u);
+    const uint h = rowHead % p.numQHeads;
+    const uint row = rowHead / p.numQHeads;
+    if (row >= p.queryCount) return;
+    const ulong stride = ulong(p.queryCount) * p.numQHeads;
+    float M = -INFINITY;
+    for (uint z = 0u; z < splits; ++z) {
+        M = max(M, partialML[(ulong(z) * stride + rowHead) * 2u]);
+    }
+    float L = 0.0f;
+    float4 acc = float4(0.0f);
+    if (isfinite(M)) {
+        for (uint z = 0u; z < splits; ++z) {
+            const ulong slot = ulong(z) * stride + rowHead;
+            const float mz = partialML[slot * 2u];
+            if (!isfinite(mz)) continue;
+            const float w = fast::exp(mz - M);
+            L += partialML[slot * 2u + 1u] * w;
+            acc += *reinterpret_cast<device const float4*>(partialO + slot * HD + quad * 4u) * w;
+        }
+    }
+    const float inv = L > 0.0f ? 1.0f / L : 0.0f;
+    device half* out = O + ulong(row) * p.oTokenStrideElements + h * HD + quad * 4u;
+    *reinterpret_cast<device half4*>(out) = half4(acc * inv);
 }
 
 [[kernel, max_total_threads_per_threadgroup(512)]]

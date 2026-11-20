@@ -105,6 +105,39 @@ final class PrefillAttention {
     /// `attention_prefill_causal_tiled`. Set from `ModelProfile.prefillDenseFlash`.
     var denseFlash = false
 
+    /// Key split for the dense flash kernel (causal mode, no selection): when a
+    /// chunk is too short to fill the GPU with row tiles -- fewer than
+    /// `flashSplitMaxGroups` (8-row tile, KV head) threadgroups -- each row
+    /// tile's keys are cut into `flashSplitKeys`-key ranges, one threadgroup
+    /// apiece, and `qsa_flash_split_merge` combines their partials. At 17 rows
+    /// over ~8.5K keys on Qwen 3.6 the unsplit kernel runs 6 threadgroups,
+    /// each walking every key (~8 ms per full-attention layer, M1 Max). The
+    /// same keys and softmax, summed in another order, so the output changes
+    /// by rounding. Set from `ModelProfile.prefillFlashKeySplit`
+    /// (TinyTitan-9ul.11.1; the quality call was TinyTitan-8d0's).
+    var flashKeySplit = false
+    static let flashSplitKeys = 1_024
+    static let flashSplitMaxGroups = 32
+    static let flashSplitMaxSplits = 64
+    private let psoQSAFlashSplitMerge: MTLComputePipelineState?
+    private var splitPartialO: MTLBuffer?
+    private var splitPartialML: MTLBuffer?
+
+    /// (splits, key tiles per split) for a causal dense-flash dispatch, or nil
+    /// to run it unsplit: the split only pays when the row tiles leave most
+    /// of the GPU idle and there are at least two key ranges to hand out.
+    static func flashKeySplitGeometry(
+        rowTiles: Int, kvHeads: Int, keyTiles: Int
+    ) -> (splits: Int, tilesPerSplit: Int)? {
+        guard rowTiles * kvHeads < flashSplitMaxGroups else { return nil }
+        let defaultTiles = flashSplitKeys / flashKeys
+        let splits = min(flashSplitMaxSplits, (keyTiles + defaultTiles - 1) / defaultTiles)
+        guard splits >= 2 else { return nil }
+        let tilesPerSplit = (keyTiles + splits - 1) / splits
+        // Rounding up can leave the last range empty; hand out only live ones.
+        return ((keyTiles + tilesPerSplit - 1) / tilesPerSplit, tilesPerSplit)
+    }
+
     /// Whether the matrix-unit QSA kernel compiled on this device.
     var hasQSAMatrixUnitKernel: Bool { psoCausalQSAGQAMMA != nil }
 
@@ -158,6 +191,7 @@ final class PrefillAttention {
             constants: [MetalFunctionConstant(index: 111, value: .bool(true))])
         self.psoQSAGroupBlocks = try? context.pipeline("qsa_flash_group_blocks")
         self.psoQSAPackQ = try? context.pipeline("qsa_flash_pack_q")
+        self.psoQSAFlashSplitMerge = try? context.pipeline("qsa_flash_split_merge")
         // Four bytes, not one: the kernels declare `keepIdx`/`keepIndices` as
         // `device const uint*`, and Metal's own validation aborts a binding
         // whose length is shorter than the argument it is bound to ("space for
@@ -455,10 +489,86 @@ final class PrefillAttention {
         }
         enc.setBytes(&causalOnly, length: 4, index: 9)
         enc.setBuffer(countsBinding?.0 ?? emptyKeepMask, offset: countsBinding?.1 ?? 0, index: 10)
+        // Causal mode only: a selection's tile flags and block lists are laid
+        // out per row tile over the whole key range.
+        let split =
+            keepMask == nil
+            ? try prepareKeySplit(
+                rowTiles: rowTiles, rows: rows, keyTiles: keyTiles, params: params)
+            : nil
+        var splitTiles = UInt32(split?.tilesPerSplit ?? 0)
+        enc.setBytes(&splitTiles, length: 4, index: 12)
+        enc.setBuffer(split?.partialO ?? emptyKeepMask, offset: 0, index: 13)
+        enc.setBuffer(split?.partialML ?? emptyKeepMask, offset: 0, index: 14)
         let group = Int(params.numQHeads / params.numKVHeads)
         enc.dispatchThreadgroups(
-            MTLSize(width: rowTiles, height: Int(params.numKVHeads), depth: 1),
+            MTLSize(width: rowTiles, height: Int(params.numKVHeads), depth: split?.splits ?? 1),
             threadsPerThreadgroup: MTLSize(width: 32 * max(group, 4), height: 1, depth: 1))
+        enc.endEncoding()
+        if let split {
+            try encodeSplitMerge(
+                commandBuffer: commandBuffer, split: split, out: out, outOffset: outOffset,
+                params: params)
+        }
+    }
+
+    private struct KeySplit {
+        let splits: Int
+        let tilesPerSplit: Int
+        let pipeline: MTLComputePipelineState
+        let partialO: MTLBuffer
+        let partialML: MTLBuffer
+    }
+
+    /// The split for this causal dispatch with its partial buffers grown to
+    /// fit, or nil to run it unsplit (switch off, merge kernel missing, or a
+    /// chunk that already fills the GPU).
+    private func prepareKeySplit(
+        rowTiles: Int, rows: Int, keyTiles: Int, params: PrefillAttentionParams
+    ) throws -> KeySplit? {
+        guard flashKeySplit, let merge = psoQSAFlashSplitMerge,
+            let geometry = Self.flashKeySplitGeometry(
+                rowTiles: rowTiles, kvHeads: Int(params.numKVHeads), keyTiles: keyTiles)
+        else { return nil }
+        let slots = geometry.splits * rows * Int(params.numQHeads)
+        let oBytes = slots * Int(params.headDim) * MemoryLayout<Float>.stride
+        let mlBytes = slots * 2 * MemoryLayout<Float>.stride
+        if (splitPartialO?.length ?? 0) < oBytes {
+            splitPartialO = context.device.makeBuffer(length: oBytes, options: .storageModePrivate)
+            splitPartialO?.label = "prefillAttention.flashSplit.partialO"
+        }
+        if (splitPartialML?.length ?? 0) < mlBytes {
+            splitPartialML = context.device.makeBuffer(
+                length: mlBytes, options: .storageModePrivate)
+            splitPartialML?.label = "prefillAttention.flashSplit.partialML"
+        }
+        guard let partialO = splitPartialO, let partialML = splitPartialML else {
+            throw PrefillAttentionError.commandEncoderFailed
+        }
+        return KeySplit(
+            splits: geometry.splits, tilesPerSplit: geometry.tilesPerSplit, pipeline: merge,
+            partialO: partialO, partialML: partialML)
+    }
+
+    private func encodeSplitMerge(
+        commandBuffer: MTLCommandBuffer, split: KeySplit, out: MTLBuffer, outOffset: Int,
+        params: PrefillAttentionParams
+    ) throws {
+        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+            throw PrefillAttentionError.commandEncoderFailed
+        }
+        enc.setComputePipelineState(split.pipeline)
+        enc.setBuffer(split.partialO, offset: 0, index: 0)
+        enc.setBuffer(split.partialML, offset: 0, index: 1)
+        enc.setBuffer(out, offset: outOffset, index: 2)
+        var p = params
+        enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 3)
+        var splits = UInt32(split.splits)
+        enc.setBytes(&splits, length: 4, index: 4)
+        let threads = Int(params.queryCount) * Int(params.numQHeads) * Int(params.headDim) / 4
+        enc.dispatchThreads(
+            MTLSize(width: threads, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
         enc.endEncoding()
     }
 

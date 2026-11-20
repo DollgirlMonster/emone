@@ -98,6 +98,22 @@ public struct ModelProfile: Sendable, Equatable {
     /// `TINYTITAN_ATTN_DECODE_LONG` overrides.
     public var decodeLong: Bool
 
+    /// Split a short chunk's dense-flash keys into 1,024-key ranges merged
+    /// after (`PrefillAttention.flashKeySplit`), so a few rows against a deep
+    /// cache fill the GPU. Same keys and softmax summed in another order, so it
+    /// moves numerics by rounding and ships only where measured:
+    /// `flashKeySplitRows`. `TINYTITAN_PREFILL_FLASH_SPLIT` overrides.
+    public var prefillFlashKeySplit = false
+
+    /// Rows with `prefillFlashKeySplit`: Qwen 3.6 and Ornith 1.5 4-bit. The
+    /// divergence overview (TinyTitan-8d0, benchmark/divergence, 2026-11-20)
+    /// found no measurable change in surprisal or task outcomes, and on Qwen 3.6
+    /// a 17-token continuation at ~8.5K context fell from 277 to 189 ms of
+    /// prefill (TinyTitan-9ul.11, M1 Max).
+    public static let flashKeySplitRows: Set<Key> = [
+        Key("qwen3.6-35b-a3b", 4), Key("ornith-1.5-35b-a3b", 4),
+    ]
+
     /// The shipped entries. Measured values, each on its own install.
     public static let table:
         [Key: (
@@ -429,6 +445,8 @@ public struct ModelProfile: Sendable, Equatable {
         if let v = env["TINYTITAN_PREFILL_QSA_PACKED"] { profile.prefillQSAPacked = v == "1" }
         if let v = env["TINYTITAN_PREFILL_ROUTER_LOGITS"] { profile.prefillRouterLogits = v == "1" }
         if let v = env["TINYTITAN_ATTN_DECODE_LONG"] { profile.decodeLong = v == "1" }
+        profile.prefillFlashKeySplit = flashKeySplitRows.contains(profile.key)
+        if let v = env["TINYTITAN_PREFILL_FLASH_SPLIT"] { profile.prefillFlashKeySplit = v == "1" }
         if let v = env["TINYTITAN_PREDICTIVE_PREFETCH"] {
             profile.prefetchDepth = v == "1" ? max(1, profile.prefetchDepth) : 0
         }
@@ -471,6 +489,7 @@ public struct ModelProfile: Sendable, Equatable {
             + "gdn_chunk=\(prefillGDNChunked) qsa_flash=\(prefillQSAFlash) "
             + "routed_qmm=\(prefillRoutedQMM) dense_qmm=\(prefillDenseQMM) "
             + "dense_flash=\(prefillDenseFlash) qsa_packed=\(prefillQSAPacked) "
-            + "router_logits=\(prefillRouterLogits) decode_long=\(decodeLong)"
+            + "router_logits=\(prefillRouterLogits) decode_long=\(decodeLong) "
+            + "flash_split=\(prefillFlashKeySplit)"
     }
 }

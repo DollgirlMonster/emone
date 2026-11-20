@@ -23,6 +23,29 @@ import Testing
         #expect(ModelProfile.table.count == 12)
     }
 
+    /// The flash key split ships on the two 35B 4-bit rows the divergence
+    /// overview measured (TinyTitan-8d0) and nowhere else in that family;
+    /// either environment value overrides the row.
+    @Test(arguments: [("qwen3.6-35b-a3b", ModelFamily.qwen36), ("ornith-1.5-35b-a3b", .qwen36)])
+    func theMeasured35BRowsTakeTheFlashKeySplit(id: String, family: ModelFamily) {
+        #expect(
+            ModelProfile.resolve(modelID: id, family: family, weightBits: 4, environment: [:])
+                .prefillFlashKeySplit)
+        #expect(
+            !ModelProfile.resolve(modelID: id, family: family, weightBits: 8, environment: [:])
+                .prefillFlashKeySplit)
+        #expect(
+            !ModelProfile.resolve(
+                modelID: id, family: family, weightBits: 4,
+                environment: ["TINYTITAN_PREFILL_FLASH_SPLIT": "0"]
+            ).prefillFlashKeySplit)
+        #expect(
+            ModelProfile.resolve(
+                modelID: id, family: family, weightBits: 8,
+                environment: ["TINYTITAN_PREFILL_FLASH_SPLIT": "1"]
+            ).prefillFlashKeySplit)
+    }
+
     @Test func modelsSharingAFamilyResolveIndependently() {
         // Same family, different keys: editing one row cannot move the other.
         let a = ModelProfile.resolve(

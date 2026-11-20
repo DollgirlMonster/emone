@@ -1,0 +1,684 @@
+import Foundation
+import Metal
+
+struct AttentionSplitGeometry: Sendable, Equatable {
+    let effectiveLength: Int
+    let numChunks: Int
+    let chunkLength: Int
+    let partialThreadgroups: Int
+    let useSWAGroupedPartial: Bool
+}
+
+/// Swift wrapper for sliding-window and full-causal decode attention.
+///
+/// The kernels assume a single decoded query token (`M_q = 1`) and a
+/// contiguous KV cache of length `seqLen`. The MPP-tensor-core prefill path
+/// (`M_q > 1`) is separate.
+///
+/// Buffer contracts (FP16 throughout):
+///   - `q`   : `[numQHeads, headDim]`
+///   - `k`   : `[seqLen, numKVHeads, headDim]`
+///   - `v`   : same shape as `k`. Full-layer K and V must remain distinct after
+///             their separate per-head normalization and RoPE paths.
+///   - `out` : `[numQHeads, headDim]`
+final class Attention {
+    private let ctx: MetalContext
+    private let psoPartial: MTLComputePipelineState
+    private let psoGQAPartial: MTLComputePipelineState
+    private let psoCombine: MTLComputePipelineState
+    private let psoPartialSWA: MTLComputePipelineState
+    private let psoPartialFull: MTLComputePipelineState
+    private let psoGQAPartialSWA: MTLComputePipelineState
+    private let psoGQAPartialSWAChunks16: MTLComputePipelineState
+    private let psoPartialFullChunks16: MTLComputePipelineState
+    private let psoCombineSWA: MTLComputePipelineState
+    private let psoCombineFull: MTLComputePipelineState
+    private let psoCombineSWAChunks16: MTLComputePipelineState
+    private let psoCombineFullChunks16: MTLComputePipelineState
+
+    /// Mirrors `kAttnThreads` in `attention.metal`. The kernel was authored
+    /// with a hardcoded 256-thread group so its threadgroup-memory scratch
+    /// (q_smem[512] + reduce[8] + bcast) sizes are correct.
+    static let threadsPerGroup: Int = 256
+
+    // 32: Qwen3.8-Flash-Next has 24 query heads against Qwen 3.6's 16. This
+    // only sizes the split-KV reduction scratch (maxQHeads x maxChunks, and
+    // the same again x maxHeadDim), so the cost is ~2 MB of host-side buffer,
+    // and the kernels read the real head count from their arguments.
+    /// Project ceilings for the split-KV partial scratch. `kAttnMaxHeadDim` in
+    /// attention.metal is 512; the model has 16 Q heads; `maxChunks` bounds the
+    /// split factor (and therefore the scratch size: 1664512 FP32  2 MB).
+    static let maxQHeads = 32
+    static let maxHeadDim = 512
+    static let maxChunks = 64
+    /// Full attention uses 16 base chunks by default.
+    private static let defaultFullChunks = 16
+    private static let defaultGQASWAChunks = 8
+
+    // Partial state written by pass 1, read by pass 2. One shared allocation:
+    // attention runs once per layer, serially, and pass 2 hazard-tracks pass 1
+    // within the same command buffer  no race (mirrors MoE.routerLogits).
+    private let mPartial: MTLBuffer
+    private let dPartial: MTLBuffer
+    private let oPartial: MTLBuffer
+
+    init(context: MetalContext) throws {
+        self.ctx = context
+        self.psoPartial = try context.pipeline("attention_decode_partial")
+        self.psoGQAPartial = try context.pipeline("attention_decode_gqa_swa_partial")
+        self.psoCombine = try context.pipeline("attention_decode_combine")
+        self.psoPartialSWA = try Self.specializedPipeline(
+            context,
+            "attention_decode_partial",
+            headDim: 256,
+            numQHeads: 16,
+            numKVHeads: 8)
+        self.psoPartialFull = try Self.specializedPipeline(
+            context,
+            "attention_decode_partial",
+            headDim: 512,
+            numQHeads: 16,
+            numKVHeads: 2)
+        self.psoGQAPartialSWA = try Self.specializedPipeline(
+            context,
+            "attention_decode_gqa_swa_partial",
+            headDim: 256,
+            numQHeads: 16,
+            numKVHeads: 8)
+        self.psoGQAPartialSWAChunks16 = try Self.specializedPipeline(
+            context,
+            "attention_decode_gqa_swa_partial",
+            headDim: 256,
+            numQHeads: 16,
+            numKVHeads: 8,
+            numChunks: 16)
+        self.psoPartialFullChunks16 = try Self.specializedPipeline(
+            context,
+            "attention_decode_partial",
+            headDim: 512,
+            numQHeads: 16,
+            numKVHeads: 2,
+            numChunks: 16)
+        self.psoCombineSWA = try Self.specializedPipeline(
+            context,
+            "attention_decode_combine",
+            headDim: 256,
+            numQHeads: 16,
+            numKVHeads: 8)
+        self.psoCombineFull = try Self.specializedPipeline(
+            context,
+            "attention_decode_combine",
+            headDim: 512,
+            numQHeads: 16,
+            numKVHeads: 2)
+        self.psoCombineSWAChunks16 = try Self.specializedPipeline(
+            context,
+            "attention_decode_combine",
+            headDim: 256,
+            numQHeads: 16,
+            numKVHeads: 8,
+            numChunks: 16)
+        self.psoCombineFullChunks16 = try Self.specializedPipeline(
+            context,
+            "attention_decode_combine",
+            headDim: 512,
+            numQHeads: 16,
+            numKVHeads: 2,
+            numChunks: 16)
+        let md = Self.maxQHeads * Self.maxChunks
+        guard
+            let m = context.device.makeBuffer(
+                length: md * MemoryLayout<Float>.size,
+                options: .storageModeShared),
+            let d = context.device.makeBuffer(
+                length: md * MemoryLayout<Float>.size,
+                options: .storageModeShared),
+            let o = context.device.makeBuffer(
+                length: md * Self.maxHeadDim * MemoryLayout<Float>.size,
+                options: .storageModeShared)
+        else {
+            throw MetalError.bufferAllocationFailed("attention split-KV scratch")
+        }
+        self.mPartial = m
+        self.dPartial = d
+        self.oPartial = o
+        self.splitStateLock = NSLock()
+        // A `uint` placeholder, not a byte: the decode kernels bind this where
+        // they declare `device const uint*`, which is what the prefill side's
+        // comment explains at length.
+        guard
+            let empty = context.device.makeBuffer(
+                length: MemoryLayout<UInt32>.size, options: .storageModeShared)
+        else {
+            throw MetalError.bufferAllocationFailed("attention keep-mask placeholder")
+        }
+        empty.contents().bindMemory(to: UInt32.self, capacity: 1).pointee = 0
+        empty.label = "attention.keepMask.unused"
+        self.emptyKeepMask = empty
+        self.splitInFlight = false
+    }
+
+    // K15: the split-KV partial scratch (mPartial/dPartial/oPartial) is shared
+    // instance state written by pass 1 and read by pass 2. The runtime encodes
+    // attention strictly serially  one layer at a time, one command buffer 
+    // so no two encodeSplit calls may be in flight. Guard that contract at
+    // runtime: a reentrant encodeSplit would corrupt pass-1 state and is a
+    // programming error, so it throws loudly instead of silently corrupting.
+    private let splitStateLock: NSLock
+    /// Simdgroup-per-key pass 1 (attention_decode_partial_simd), used when a
+    /// sparse selection is in play. Built per (head_dim, heads, chunks) on
+    /// first use. TINYTITAN_ATTN_SIMD_PARTIAL=0 keeps the serial kernel.
+    private var simdPartialCache: [String: MTLComputePipelineState] = [:]
+    /// Test hook: forces the simd (true) or serial (false) pass 1.
+    var simdPartialOverride: Bool?
+    private static let simdPartialDefault =
+        ProcessInfo.processInfo.environment["TINYTITAN_ATTN_SIMD_PARTIAL"] != "0"
+    private var simdPartialEnabled: Bool { simdPartialOverride ?? Self.simdPartialDefault }
+    private func simdPartialPipeline(
+        headDim: UInt32, numQHeads: UInt32,
+        numKVHeads: UInt32, numChunks: Int
+    ) -> MTLComputePipelineState? {
+        let key = "\(headDim)/\(numQHeads)/\(numKVHeads)/\(numChunks)"
+        if let pso = simdPartialCache[key] { return pso }
+        let specializedChunks = numChunks == 16 ? Optional(UInt32(numChunks)) : nil
+        guard
+            let pso = try? Self.specializedPipeline(
+                ctx, "attention_decode_partial_simd",
+                headDim: headDim, numQHeads: numQHeads,
+                numKVHeads: numKVHeads,
+                numChunks: specializedChunks)
+        else { return nil }
+        simdPartialCache[key] = pso
+        return pso
+    }
+    /// One byte, bound whenever no selection is in play: Metal requires the
+    /// argument, and `use_keep` is what actually turns the mask off.
+    private let emptyKeepMask: MTLBuffer
+    private var splitInFlight: Bool
+
+    /// Number of K/V chunks for a range of `effLen` positions  the split
+    /// factor used by the production split path.
+    static func chunkCount(effLen: Int, preferGQASWA: Bool = false) -> Int {
+        let eff = max(1, effLen)
+        let defaultChunks = preferGQASWA ? defaultGQASWAChunks : defaultFullChunks
+        return max(1, min(defaultChunks, min(maxChunks, eff)))
+    }
+
+    /// `TINYTITAN_ATTN_DECODE_LONG=1`: dense full attention past
+    /// `longDecodeMinKeys` takes the simdgroup pass 1 and one chunk per
+    /// `longDecodeChunkKeys` keys (up to `maxChunks`) instead of a fixed 16.
+    /// The serial pass 1 costs ~10 us per key per threadgroup, so at a fixed 16
+    /// chunks decode slows linearly with context: Qwen 3.6 35B-A3B 4-bit on an
+    /// M1 Max fell from ~23 tok/s near empty to ~3 tok/s at 95K. Off by default
+    /// until a surprisal A/B clears it: the simd kernel sums keys in another
+    /// order.
+    static let longDecodeEnabled =
+        ProcessInfo.processInfo.environment["TINYTITAN_ATTN_DECODE_LONG"] == "1"
+    /// Set from `ModelProfile.decodeLong` by the runner, which has already
+    /// applied the environment; nil (tests, other callers) reads it here.
+    var longDecodeOverride: Bool?
+    private var longDecodeOn: Bool { longDecodeOverride ?? Self.longDecodeEnabled }
+    static let longDecodeMinKeys = 4_096
+    static let longDecodeChunkKeys = 1_024
+
+    static func splitGeometry(
+        numQHeads: UInt32,
+        numKVHeads: UInt32,
+        seqLen: UInt32,
+        kvStart: UInt32,
+        preferGQASWA: Bool,
+        longDecode: Bool = false
+    ) -> AttentionSplitGeometry {
+        let qPerKV = Int(numQHeads / numKVHeads)
+        let useSWAGQAPartial = preferGQASWA && qPerKV <= 2
+        let effectiveLength = Int(seqLen) - Int(kvStart)
+        var baseChunks = Self.chunkCount(
+            effLen: effectiveLength,
+            preferGQASWA: useSWAGQAPartial)
+        if longDecode, !useSWAGQAPartial, effectiveLength >= Self.longDecodeMinKeys {
+            let byLength =
+                (effectiveLength + Self.longDecodeChunkKeys - 1) / Self.longDecodeChunkKeys
+            baseChunks = max(baseChunks, min(Self.maxChunks, byLength))
+        }
+        let numChunks =
+            useSWAGQAPartial
+            ? max(baseChunks, min(Self.maxChunks, baseChunks * qPerKV))
+            : baseChunks
+        let chunkLength = (max(1, effectiveLength) + numChunks - 1) / numChunks
+        let partialHeadGroups = useSWAGQAPartial ? Int(numKVHeads) : Int(numQHeads)
+        return AttentionSplitGeometry(
+            effectiveLength: effectiveLength,
+            numChunks: numChunks,
+            chunkLength: chunkLength,
+            partialThreadgroups: partialHeadGroups * numChunks,
+            useSWAGroupedPartial: useSWAGQAPartial)
+    }
+
+    /// Sliding-window attention. `window` caps the K/V positions to the most
+    /// recent `window` entries (`[max(0, seqLen-window), seqLen)`).
+    /// `scale` defaults to `rsqrt(head_dim)` for generic callers;
+    /// callers with a configured attention scale pass it explicitly.
+    func encodeSWA(
+        commandBuffer: MTLCommandBuffer,
+        q: MTLBuffer, qOffset: Int = 0,
+        k: MTLBuffer, kOffset: Int = 0,
+        v: MTLBuffer, vOffset: Int = 0,
+        out: MTLBuffer, outOffset: Int = 0,
+        headDim: UInt32,
+        numQHeads: UInt32,
+        numKVHeads: UInt32,
+        seqLen: UInt32,
+        window: UInt32,
+        scale: Float? = nil,
+        ringCapacity: UInt32 = 0,
+        kvFormat: KVView? = nil
+    ) throws {
+        precondition(
+            numQHeads % numKVHeads == 0,
+            "numQHeads must be a multiple of numKVHeads for GQA")
+        precondition(
+            headDim <= 512,
+            "head_dim must be <= 512 (kernel scratch is sized for the full-attn case)")
+        let sc = scale ?? Self.defaultScale(headDim: headDim)
+        let kvStart = seqLen > window ? seqLen - window : 0
+
+        try encodeSplit(
+            commandBuffer: commandBuffer,
+            q: q, qOffset: qOffset, k: k, kOffset: kOffset,
+            v: v, vOffset: vOffset, out: out, outOffset: outOffset,
+            headDim: headDim, numQHeads: numQHeads, numKVHeads: numKVHeads,
+            seqLen: seqLen, kvStart: kvStart, scale: sc,
+            preferGQASWA: true,
+            ringCapacity: ringCapacity,
+            kvFormat: kvFormat)
+    }
+
+    /// Full attention. Separate normalization and RoPE make the cache streams
+    /// distinct here. `scale` mirrors `encodeSWA`.
+    func encodeFull(
+        commandBuffer: MTLCommandBuffer,
+        q: MTLBuffer, qOffset: Int = 0,
+        k: MTLBuffer, kOffset: Int = 0,
+        v: MTLBuffer, vOffset: Int = 0,
+        out: MTLBuffer, outOffset: Int = 0,
+        headDim: UInt32,
+        numQHeads: UInt32,
+        numKVHeads: UInt32,
+        seqLen: UInt32,
+        scale: Float? = nil,
+        kvFormat: KVView? = nil,
+        keepMask: MTLBuffer? = nil
+    ) throws {
+        precondition(
+            numQHeads % numKVHeads == 0,
+            "numQHeads must be a multiple of numKVHeads for GQA")
+        precondition(
+            headDim <= 512,
+            "head_dim must be <= 512 (kernel scratch is sized for the full-attn case)")
+        precondition(seqLen > 0, "full attention requires at least one KV position")
+        let sc = scale ?? Self.defaultScale(headDim: headDim)
+
+        try encodeSplit(
+            commandBuffer: commandBuffer,
+            q: q, qOffset: qOffset, k: k, kOffset: kOffset,
+            v: v, vOffset: vOffset, out: out, outOffset: outOffset,
+            headDim: headDim, numQHeads: numQHeads, numKVHeads: numKVHeads,
+            seqLen: seqLen, kvStart: 0, scale: sc,
+            preferGQASWA: false,
+            kvFormat: kvFormat,
+            keepMask: keepMask)
+    }
+
+    /// Two-pass split-KV (Flash-Decoding) dispatch shared by SWA and full
+    /// attention  they differ only by `kvStart`. Pass 1 fans the head's
+    /// `[kvStart, seqLen)` range across `chunkCount` threadgroups per head;
+    /// pass 2 merges the partials. Both encoders go on the same command buffer
+    /// so pass 2 hazard-tracks the partial scratch written by pass 1.
+    private func encodeSplit(
+        commandBuffer: MTLCommandBuffer,
+        q: MTLBuffer, qOffset: Int,
+        k: MTLBuffer, kOffset: Int,
+        v: MTLBuffer, vOffset: Int,
+        out: MTLBuffer, outOffset: Int,
+        headDim: UInt32, numQHeads: UInt32, numKVHeads: UInt32,
+        seqLen: UInt32, kvStart: UInt32, scale: Float,
+        preferGQASWA: Bool,
+        ringCapacity: UInt32 = 0,
+        kvFormat: KVView? = nil,
+        keepMask: MTLBuffer? = nil
+    ) throws {
+        precondition(
+            Int(numQHeads) <= Self.maxQHeads,
+            "numQHeads \(numQHeads) exceeds split-KV scratch (max \(Self.maxQHeads))")
+        precondition(
+            Int(headDim) <= Self.maxHeadDim,
+            "head_dim \(headDim) exceeds split-KV scratch (max \(Self.maxHeadDim))")
+        precondition(
+            ringCapacity == 0 || preferGQASWA,
+            "KV ring is only valid for SWA attention")
+        // Only the full-attention kernel reads the selection. Binding it for
+        // the GQA/SWA path would be silently ignored, which is the wrong kind
+        // of quiet for a mask whose whole job is to change what is attended.
+        precondition(
+            keepMask == nil || !preferGQASWA,
+            "sparse key selection is not implemented for the GQA/SWA path")
+        splitStateLock.lock()
+        let reentered = splitInFlight
+        splitInFlight = true
+        splitStateLock.unlock()
+        defer {
+            splitStateLock.lock()
+            splitInFlight = false
+            splitStateLock.unlock()
+        }
+        guard !reentered else {
+            throw MetalError.invalidState(
+                "encodeSplit re-entered while the previous split-KV pass was in flight; attention must encode serially per layer"
+            )
+        }
+        let geometry = Self.splitGeometry(
+            numQHeads: numQHeads,
+            numKVHeads: numKVHeads,
+            seqLen: seqLen,
+            kvStart: kvStart,
+            preferGQASWA: preferGQASWA,
+            longDecode: longDecodeOn && keepMask == nil && ringCapacity == 0)
+        let useSWAGQAPartial = geometry.useSWAGroupedPartial
+        let longDense =
+            longDecodeOn && keepMask == nil
+            && geometry.effectiveLength >= Self.longDecodeMinKeys
+        let nChunks = geometry.numChunks
+        let chunkLen = geometry.chunkLength
+        var partialPSO = partialPipeline(
+            headDim: headDim,
+            numQHeads: numQHeads,
+            numKVHeads: numKVHeads,
+            numChunks: nChunks,
+            useGQAPartial: useSWAGQAPartial,
+            ringCapacity: ringCapacity)
+        if keepMask != nil || longDense, !useSWAGQAPartial, ringCapacity == 0, headDim % 32 == 0,
+            headDim <= 256,
+            simdPartialEnabled,
+            let simd = simdPartialPipeline(
+                headDim: headDim, numQHeads: numQHeads,
+                numKVHeads: numKVHeads, numChunks: nChunks)
+        {
+            partialPSO = simd
+        }
+        let tgWidth = min(Self.threadsPerGroup, Int(partialPSO.maxTotalThreadsPerThreadgroup))
+
+        guard let p1 = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        p1.setComputePipelineState(partialPSO)
+        p1.setBuffer(q, offset: qOffset, index: 0)
+        p1.setBuffer(k, offset: kOffset, index: 1)
+        p1.setBuffer(v, offset: vOffset, index: 2)
+        p1.setBuffer(mPartial, offset: 0, index: 3)
+        p1.setBuffer(dPartial, offset: 0, index: 4)
+        p1.setBuffer(oPartial, offset: 0, index: 5)
+        var hd = headDim
+        var nq = numQHeads
+        var nkv = numKVHeads
+        var sl = seqLen
+        var ks = kvStart
+        var cl = UInt32(chunkLen)
+        var nc = UInt32(nChunks)
+        var sc = scale
+        p1.setBytes(&hd, length: MemoryLayout<UInt32>.size, index: 6)
+        p1.setBytes(&nq, length: MemoryLayout<UInt32>.size, index: 7)
+        p1.setBytes(&nkv, length: MemoryLayout<UInt32>.size, index: 8)
+        p1.setBytes(&sl, length: MemoryLayout<UInt32>.size, index: 9)
+        p1.setBytes(&ks, length: MemoryLayout<UInt32>.size, index: 10)
+        p1.setBytes(&cl, length: MemoryLayout<UInt32>.size, index: 11)
+        p1.setBytes(&nc, length: MemoryLayout<UInt32>.size, index: 12)
+        p1.setBytes(&sc, length: MemoryLayout<Float>.size, index: 13)
+        var kvBits = UInt32(kvFormat?.precision.rawValue ?? 16)
+        var kvStride = UInt32(kvFormat?.stride ?? 0)
+        var kvValueBytes = UInt32(kvFormat?.valueBytes ?? 0)
+        var kvGroupSize = UInt32(kvFormat?.groupSize ?? KVCacheManager.quantizationGroupSize)
+        p1.setBytes(&kvBits, length: MemoryLayout<UInt32>.size, index: 14)
+        p1.setBytes(&kvStride, length: MemoryLayout<UInt32>.size, index: 15)
+        p1.setBytes(&kvValueBytes, length: MemoryLayout<UInt32>.size, index: 16)
+        p1.setBytes(&kvGroupSize, length: MemoryLayout<UInt32>.size, index: 17)
+        var useKeep = UInt32(keepMask == nil ? 0 : 1)
+        p1.setBuffer(keepMask ?? emptyKeepMask, offset: 0, index: 18)
+        p1.setBytes(&useKeep, length: MemoryLayout<UInt32>.size, index: 19)
+        let partialGroups = geometry.partialThreadgroups
+        p1.dispatchThreadgroups(
+            MTLSize(width: partialGroups, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
+        p1.endEncoding()
+
+        guard let p2 = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        let combinePSO = combinePipeline(
+            headDim: headDim,
+            numQHeads: numQHeads,
+            numKVHeads: numKVHeads,
+            numChunks: nChunks)
+        p2.setComputePipelineState(combinePSO)
+        p2.setBuffer(mPartial, offset: 0, index: 0)
+        p2.setBuffer(dPartial, offset: 0, index: 1)
+        p2.setBuffer(oPartial, offset: 0, index: 2)
+        p2.setBuffer(out, offset: outOffset, index: 3)
+        var hd2 = headDim
+        var nc2 = UInt32(nChunks)
+        p2.setBytes(&hd2, length: MemoryLayout<UInt32>.size, index: 4)
+        p2.setBytes(&nc2, length: MemoryLayout<UInt32>.size, index: 5)
+        let combineTGWidth = min(
+            Self.threadsPerGroup,
+            Int(combinePSO.maxTotalThreadsPerThreadgroup))
+        p2.dispatchThreadgroups(
+            MTLSize(width: Int(numQHeads), height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: combineTGWidth, height: 1, depth: 1))
+        p2.endEncoding()
+    }
+
+    /// `1 / sqrt(head_dim)`  the classic transformer scaling. Used as the
+    /// default for callers without a configured attention scale (and for the
+    /// existing tests that pre-date the runtime scale arg).
+    static func defaultScale(headDim: UInt32) -> Float {
+        Float(1.0) / Float(headDim).squareRoot()
+    }
+
+    private static func specializedPipeline(
+        _ context: MetalContext,
+        _ name: String,
+        headDim: UInt32,
+        numQHeads: UInt32,
+        numKVHeads: UInt32,
+        numChunks: UInt32? = nil,
+        ringCapacity: UInt32? = nil
+    ) throws -> MTLComputePipelineState {
+        var constants = [
+            MetalFunctionConstant(index: 60, value: .uint32(headDim)),
+            MetalFunctionConstant(index: 61, value: .uint32(numQHeads)),
+            MetalFunctionConstant(index: 62, value: .uint32(numKVHeads)),
+            MetalFunctionConstant(index: 63, value: .bool(true)),
+        ]
+        if let numChunks {
+            constants.append(MetalFunctionConstant(index: 65, value: .uint32(numChunks)))
+        }
+        if let ringCapacity {
+            constants.append(MetalFunctionConstant(index: 69, value: .uint32(ringCapacity)))
+        }
+        return try context.pipeline(name, constants: constants)
+    }
+
+    private func partialPipeline(
+        headDim: UInt32,
+        numQHeads: UInt32,
+        numKVHeads: UInt32,
+        numChunks: Int,
+        useGQAPartial: Bool,
+        ringCapacity: UInt32 = 0
+    ) -> MTLComputePipelineState {
+        // `attention_decode_gqa_swa_partial` sizes its threadgroup arrays to
+        // `kAttnMaxQPerKV` (2) queries per KV head and *returns without writing
+        // its partials* when the span is wider  so the combine pass would
+        // normalize the previous layer's values instead of failing. The geometry
+        // below already refuses to select this path above that span; stating the
+        // limit here, where the kernel is chosen, means a caller that reaches it
+        // another way fails loudly rather than quietly.
+        if useGQAPartial {
+            precondition(
+                numKVHeads > 0 && numQHeads / numKVHeads <= 2,
+                "attention_decode_gqa_swa_partial needs at most 2 queries "
+                    + "per KV head; got \(numQHeads) queries and "
+                    + "\(numKVHeads) KV heads")
+        }
+        if ringCapacity > 0 {
+            let name =
+                useGQAPartial ? "attention_decode_gqa_swa_partial" : "attention_decode_partial"
+            let specializedChunks = numChunks == 16 ? Optional(UInt32(numChunks)) : nil
+            do {
+                return try Self.specializedPipeline(
+                    ctx,
+                    name,
+                    headDim: headDim,
+                    numQHeads: numQHeads,
+                    numKVHeads: numKVHeads,
+                    numChunks: specializedChunks,
+                    ringCapacity: ringCapacity)
+            } catch {
+                preconditionFailure("failed to build KV ring attention pipeline: \(error)")
+            }
+        }
+        if useGQAPartial && headDim == 256 && numQHeads == 16 && numKVHeads == 8 {
+            if numChunks == 16 {
+                return psoGQAPartialSWAChunks16
+            }
+            return psoGQAPartialSWA
+        }
+        if !useGQAPartial && headDim == 256 && numQHeads == 16 && numKVHeads == 8 {
+            return psoPartialSWA
+        }
+        if !useGQAPartial && headDim == 512 && numQHeads == 16 && numKVHeads == 2 {
+            if numChunks == 16 {
+                return psoPartialFullChunks16
+            }
+            return psoPartialFull
+        }
+        return useGQAPartial ? psoGQAPartial : psoPartial
+    }
+
+    private func combinePipeline(
+        headDim: UInt32,
+        numQHeads: UInt32,
+        numKVHeads: UInt32,
+        numChunks: Int
+    ) -> MTLComputePipelineState {
+        if headDim == 256 && numQHeads == 16 && numKVHeads == 8 {
+            return numChunks == 16 ? psoCombineSWAChunks16 : psoCombineSWA
+        }
+        if headDim == 512 && numQHeads == 16 && numKVHeads == 2 {
+            return numChunks == 16 ? psoCombineFullChunks16 : psoCombineFull
+        }
+        return psoCombine
+    }
+}
+import Foundation
+import Metal
+
+/// Streaming callbacks from `runRawCompletion`. `.prefill` reports monotonic
+/// producer-defined prompt progress; scalar replay reports per token, while a
+/// prefill-capable producer may report per internal chunk. `.token` fires per
+/// decoded non-stop token; `.tail` carries the detokenizer flush remainder at a
+/// stop boundary.
+public enum RawDecodeProgress: Sendable {
+    case prefill(done: Int, total: Int)
+    case token(index: Int, id: Int32, delta: String)
+    case tail(String)
+}
+
+public enum RawCompletionStart: Sendable, Equatable {
+    case reset
+    case resume(cachedPromptTokens: Int)
+}
+
+public struct RawDecodeResult: Sendable {
+    public let prefillTokens: Int
+    public let cachedPromptTokens: Int
+    public let computedPrefillTokens: Int
+    public let prefillSeconds: Double
+    public let newTokens: Int
+    public let decodeSeconds: Double
+    public let reason: StopReason
+    public let kvPosition: Int
+    public let kvBackedTokenIDs: [Int32]
+    public let uncommittedBoundaryTokenIDs: [Int32]
+
+    /// This result as if the turn had ended on `boundary`: the same KV rows,
+    /// the stop reason an ended turn has, and `boundary` as the one token the
+    /// KV does not hold. For a reply the model did not sample (a prefilled one),
+    /// where the single token the runner did sample is not part of the turn.
+    public func endingTurn(boundary: Int32) -> RawDecodeResult {
+        RawDecodeResult(
+            prefillTokens: prefillTokens, cachedPromptTokens: cachedPromptTokens,
+            computedPrefillTokens: computedPrefillTokens, prefillSeconds: prefillSeconds,
+            newTokens: 0, decodeSeconds: decodeSeconds, reason: .endOfTurn,
+            kvPosition: kvPosition, kvBackedTokenIDs: kvBackedTokenIDs,
+            uncommittedBoundaryTokenIDs: [boundary])
+    }
+}
+
+/// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
+/// slot) and sampler. A warm session reuses them for every token, avoiding
+/// per-token Metal buffer allocation.
+///
+/// unchecked-invariant: the buffers and sampler are exclusively owned by one
+/// generation at a time  the single-in-flight guard upstream is the contract.
+public struct RawCompletionScratch: @unchecked Sendable {
+    let logits: MTLBuffer
+    let probs: MTLBuffer
+    let outToken: MTLBuffer
+    let sampler: Sampler
+
+    public init(context: MetalContext, vocab: Int, logitSoftcap: Float = 0.0) throws {
+        guard
+            let logits = context.device.makeBuffer(
+                length: vocab * MemoryLayout<Float16>.size,
+                options: .storageModeShared),
+            let probs = context.device.makeBuffer(
+                length: vocab * MemoryLayout<Float16>.size,
+                options: .storageModeShared),
+            let outToken = context.device.makeBuffer(
+                length: MemoryLayout<UInt32>.size,
+                options: .storageModeShared)
+        else {
+            throw ModelError.residentBufferWrapFailed
+        }
+        self.logits = logits
+        self.probs = probs
+        self.outToken = outToken
+        self.sampler = try Sampler(
+            context: context, vocab: vocab,
+            logitSoftcap: logitSoftcap)
+    }
+}
+
+extension GenerationConfig {
+    /// A pure-greedy config can use the fused head's GPU argmax
+    /// (`RealForwardRunner.lastGreedyToken`) instead of sampling from the
+    /// logits buffer. Anything else needs real logits.
+    public var isPureGreedy: Bool {
+        temperature == 0 && presencePenalty == 0 && repetitionPenalty == 1
+    }
+
+}
+
+/// Raw-completion prefill + decode loop shared by the CLI and the server.
+/// Consumes pre-encoded `promptIds` (BOS + verbatim encode upstream  no chat
+/// template). Stop handling, detokenizer flush ordering, and history append
+/// ordering are shared by both front ends.
+///
+/// When the producer runs the fused lm_head (`RealForwardRunner` default) the
+/// logits buffer is never written; the loop then requires a pure-greedy config
+/// and reads `lastGreedyToken`. Callers with sampling configs must construct
+/// the runner with `forceLogitsHead: true`.
+/// lint:allow-long the generation loop: continuation validation, the prefill
+/// mode switch, then token-by-token decode with stop matching and progress
+/// reporting. The loop body reads and writes the same half-dozen pieces of
+/// decode state on every itera

@@ -179,6 +179,7 @@ import Testing
         _ = try ctx.pipeline("attention_prefill_qsa_masked_flash")
         _ = try ctx.pipeline("qsa_flash_tile_flags")
         _ = try ctx.pipeline("qsa_flash_pack_q")
+        _ = try ctx.pipeline("qsa_flash_split_merge")
     }
 
     @Test(arguments: [8, 4, 16])
@@ -239,6 +240,157 @@ import Testing
                     count: count))
         }
         Self.check((try once(flash: false), try once(flash: true)), "dense q\(qHeads) kv\(kvBits)")
+    }
+
+    /// Key split geometry: only when the row tiles leave the GPU short of
+    /// threadgroups, only with two or more ranges, never an empty range.
+    @Test func keySplitGeometry() {
+        // 17 rows (3 row tiles) x 2 KV heads over 8,500 keys (532 key tiles).
+        let short = PrefillAttention.flashKeySplitGeometry(rowTiles: 3, kvHeads: 2, keyTiles: 532)
+        #expect(short?.splits == 9)
+        #expect(short?.tilesPerSplit == 60)
+        // A chunk that already fills the GPU stays unsplit.
+        #expect(
+            PrefillAttention.flashKeySplitGeometry(rowTiles: 16, kvHeads: 2, keyTiles: 532) == nil)
+        // Fewer keys than two ranges' worth stays unsplit.
+        #expect(
+            PrefillAttention.flashKeySplitGeometry(rowTiles: 1, kvHeads: 2, keyTiles: 64) == nil)
+        // Very long contexts cap the split count and widen the ranges.
+        let long = PrefillAttention.flashKeySplitGeometry(rowTiles: 2, kvHeads: 2, keyTiles: 12_500)
+        #expect(long?.splits == 64)
+        for (rowTiles, keyTiles) in [(3, 532), (2, 12_500), (1, 129), (15, 2_047), (2, 65)] {
+            guard
+                let g = PrefillAttention.flashKeySplitGeometry(
+                    rowTiles: rowTiles, kvHeads: 2, keyTiles: keyTiles)
+            else { continue }
+            #expect((g.splits - 1) * g.tilesPerSplit < keyTiles, "last range empty at \(keyTiles)")
+            #expect(g.splits * g.tilesPerSplit >= keyTiles, "keys dropped at \(keyTiles)")
+        }
+    }
+
+    /// The key-split dense flash kernel against the unsplit one: same keys and
+    /// softmax, partials merged in another order, so held to rounding. Qwen
+    /// 3.6's shape (16 query heads over 2 KV heads) at a verify pass's 16 rows
+    /// and the measured 17 deep in the cache, a single row, a 120-row chunk
+    /// near the split threshold, and every KV width. A sharp softmax (scale
+    /// 2.0, scores spread ~3) so random keys do not average the output to
+    /// nothing, and so most of a row's weight sits in a few splits: the
+    /// merge's hard case.
+    @Test(arguments: [
+        (8, 8_000, 17), (8, 8_483, 16), (8, 4_100, 1), (8, 2_000, 120), (4, 3_000, 17),
+        (16, 3_000, 17),
+    ])
+    func keySplitTracksTheUnsplitKernel(kvBits: Int, startPosition: Int, queries: Int) throws {
+        let ctx = try MetalContext()
+        let attention = try PrefillAttention(context: ctx)
+        let (qHeads, kvHeads, headDim) = (16, 2, 256)
+        let valid = startPosition + queries
+        let groupSize = KVCacheManager.quantizationGroupSize
+        var rng = LCG(state: UInt64(startPosition * 31 + queries * 7 + kvBits))
+        let kCache = try Self.kvCache(
+            ctx, bits: kvBits, rows: valid, elementsPerRow: kvHeads * headDim,
+            groupSize: groupSize, rng: &rng)
+        let vCache = try Self.kvCache(
+            ctx, bits: kvBits, rows: valid, elementsPerRow: kvHeads * headDim,
+            groupSize: groupSize, rng: &rng)
+        let q = try Self.buffer(
+            ctx, (0..<(queries * qHeads * headDim)).map { _ in Float16(rng.unit() * 0.5) })
+        let params = PrefillAttentionParams(
+            startPosition: UInt32(startPosition), queryCount: UInt32(queries),
+            headDim: UInt32(headDim), numQHeads: UInt32(qHeads), numKVHeads: UInt32(kvHeads),
+            kvValidCount: UInt32(valid), slidingWindow: UInt32(valid),
+            kvTokenStrideElements: UInt32(kvHeads * headDim),
+            qTokenStrideElements: UInt32(qHeads * headDim),
+            oTokenStrideElements: UInt32(qHeads * headDim),
+            scale: 2.0, kvBits: UInt32(kvBits),
+            kvTokenStrideBytes: UInt32(kCache.strideBytes),
+            kvValueBytes: UInt32(kCache.valueBytes), kvGroupSize: UInt32(groupSize))
+        let rowTiles = (queries + PrefillAttention.flashRows - 1) / PrefillAttention.flashRows
+        let keyTiles = (valid + PrefillAttention.flashKeys - 1) / PrefillAttention.flashKeys
+        #expect(
+            PrefillAttention.flashKeySplitGeometry(
+                rowTiles: rowTiles, kvHeads: kvHeads, keyTiles: keyTiles) != nil,
+            "case must exercise the split")
+        let count = queries * qHeads * headDim
+        func once(split: Bool) throws -> [Float16] {
+            attention.denseFlash = true
+            attention.flashKeySplit = split
+            guard let out = ctx.device.makeBuffer(length: count * 2, options: .storageModeShared),
+                let cb = ctx.queue.makeCommandBuffer()
+            else { throw MetalError.commandEncoderFailed }
+            memset(out.contents(), 0xAB, count * 2)
+            try attention.encodeCausal(
+                commandBuffer: cb, q: q, k: kCache.buffer, v: vCache.buffer, out: out,
+                params: params)
+            cb.commit()
+            cb.waitUntilCompleted()
+            #expect(cb.error == nil)
+            return Array(
+                UnsafeBufferPointer(
+                    start: out.contents().bindMemory(to: Float16.self, capacity: count),
+                    count: count))
+        }
+        Self.check(
+            (try once(split: false), try once(split: true)),
+            "split kv\(kvBits) start \(startPosition) rows \(queries)")
+    }
+
+    /// GPU time of the dense flash kernel split and unsplit at Qwen 3.6's
+    /// shape, 17 rows after 8,483 keys, int8 KV. Prints; asserts nothing.
+    /// TINYTITAN_QSA_FLASH_BENCH=1 to run.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_QSA_FLASH_BENCH"] == "1"))
+    func keySplitBenchmark() throws {
+        let ctx = try MetalContext()
+        let attention = try PrefillAttention(context: ctx)
+        let (qHeads, kvHeads, headDim) = (16, 2, 256)
+        let groupSize = KVCacheManager.quantizationGroupSize
+        for (startPosition, queries) in [(8_483, 17), (8_483, 16), (32_000, 16)] {
+            let valid = startPosition + queries
+            var rng = LCG(state: 5)
+            let kCache = try Self.kvCache(
+                ctx, bits: 8, rows: valid, elementsPerRow: kvHeads * headDim,
+                groupSize: groupSize, rng: &rng)
+            let vCache = try Self.kvCache(
+                ctx, bits: 8, rows: valid, elementsPerRow: kvHeads * headDim,
+                groupSize: groupSize, rng: &rng)
+            let q = try Self.buffer(
+                ctx, (0..<(queries * qHeads * headDim)).map { _ in Float16(rng.unit() * 0.5) })
+            let params = PrefillAttentionParams(
+                startPosition: UInt32(startPosition), queryCount: UInt32(queries),
+                headDim: UInt32(headDim), numQHeads: UInt32(qHeads), numKVHeads: UInt32(kvHeads),
+                kvValidCount: UInt32(valid), slidingWindow: UInt32(valid),
+                kvTokenStrideElements: UInt32(kvHeads * headDim),
+                qTokenStrideElements: UInt32(qHeads * headDim),
+                oTokenStrideElements: UInt32(qHeads * headDim),
+                scale: 0.0625, kvBits: 8,
+                kvTokenStrideBytes: UInt32(kCache.strideBytes),
+                kvValueBytes: UInt32(kCache.valueBytes), kvGroupSize: UInt32(groupSize))
+            guard
+                let out = ctx.device.makeBuffer(
+                    length: queries * qHeads * headDim * 2, options: .storageModeShared)
+            else { throw MetalError.commandEncoderFailed }
+            attention.denseFlash = true
+            var best: [Bool: Double] = [:]
+            for round in 0..<12 {
+                let split = round % 2 == 1
+                attention.flashKeySplit = split
+                guard let cb = ctx.queue.makeCommandBuffer() else {
+                    throw MetalError.commandEncoderFailed
+                }
+                try attention.encodeCausal(
+                    commandBuffer: cb, q: q, k: kCache.buffer, v: vCache.buffer, out: out,
+                    params: params)
+                cb.commit()
+                cb.waitUntilCompleted()
+                if round > 1 {
+                    best[split] = min(best[split] ?? .infinity, cb.gpuEndTime - cb.gpuStartTime)
+                }
+            }
+            print(
+                String(
+                    format: "[flash-split-bench] keys=%d rows=%d unsplit_ms=%.3f split_ms=%.3f",
+                    valid, queries, (best[false] ?? 0) * 1000, (best[true] ?? 0) * 1000))
+        }
     }
 
     /// Packed mode walks each row tile's selected 4-key blocks instead of

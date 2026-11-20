@@ -66,13 +66,19 @@ public enum ContinuationScoreError: Error, CustomStringConvertible, Equatable {
 /// Prefills `context` the way a completion does, then scores `continuation`
 /// by teacher forcing through decode. The producer must write real logits
 /// (a runtime built with `forceLogitsHead`), not the fused greedy head.
+///
+/// `sequential` runs the context through the decode step a token at a time
+/// instead of chunked prefill -- the reference arithmetic a chunked path is
+/// compared with. It defaults to `TINYTITAN_PREFILL_SEQUENTIAL=1`, the switch
+/// a completion honours, which scoring used to ignore (TinyTitan-8d0).
 public func scoreContinuation(
     producer: any LogitProducer,
     context: [Int32],
     continuation: [Int32],
     prefillConfig: PrefillRuntimeConfig,
     scratch: RawCompletionScratch,
-    logitSoftcap: Float
+    logitSoftcap: Float,
+    sequential: Bool = ProcessInfo.processInfo.environment["TINYTITAN_PREFILL_SEQUENTIAL"] == "1"
 ) async throws -> ContinuationScore {
     guard !context.isEmpty, !continuation.isEmpty else {
         throw ContinuationScoreError.emptyText(
@@ -85,7 +91,9 @@ public func scoreContinuation(
     await producer.resetSequence(slot: 0)
 
     var position = 0
-    if prefillConfig.mode == .chunked, let chunked = producer as? any ChunkedPrefillRunner {
+    if !sequential, prefillConfig.mode == .chunked,
+        let chunked = producer as? any ChunkedPrefillRunner
+    {
         let result = try await chunked.prefillChunked(
             tokens: context[...], startPosition: 0, outputMode: .logits,
             config: prefillConfig, into: scratch.logits
