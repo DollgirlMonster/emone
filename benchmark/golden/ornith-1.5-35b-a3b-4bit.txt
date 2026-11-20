@@ -3,11 +3,9 @@
 # temperature: 0 (greedy)
 # seed:        1234
 # target:      ornith-4 (4-bit)
-# captured-on: Mac15,3, 24 GB, macOS 26.6.2
-# commit:      fed0a96
+# captured-on: MacBookPro18,2, 64 GB, macOS 27.0.1
+# commit:      111963ba
 ---
 
 
-A mutex (mutual exclusion object) is a synchronization primitive used in concurrent programming to protect shared resources from being accessed simultaneously by multiple threads. It ensures that only one thread can access the resource at a time, preventing race conditions. You would use a mutex when you need to coordinate access to shared resources in a multi-threaded environment, such as when multiple threads need to modify a shared data structure or when you want to ensure that certain operations are performed atomically.
-
-Ex
+A mutex (short for "mutual exclusion") is a synchronization primitive used in concurrent programming to protect shared resources from being accessed by multiple threads simultaneously. It ensures that only one thread can access a particular resource at a time, preventing race conditions and data corruption. You would use a mutex when you need to coordinate access to shared data structures, files, or other resources that could be modified by multiple threads. For example, if two threads try to increment a counter, using a
