@@ -87,6 +87,56 @@ public struct ShortBranchPrefillReport: Sendable, Equatable {
     /// tile path, whose buffers are timed under EMONE_KERNEL_STATS).
     public let gpuBusyNanos: UInt64
     public let gpuElapsedNanos: UInt64
+    /// Rows above which this call's routed stage was routed to the grouped stage.
+    public let groupedMinRows: Int
+}
+
+/// Which routed stage a resident short branch takes: per row up to
+/// `groupedMinRows(heldContext:)` rows, grouped by expert above.
+///
+/// The per-row stage costs ~5.5-6.5 ms a row on ~40-55 ms fixed; the grouped
+/// one ~2.4-3.8 ms a row on ~160 ms fixed, so it wins only past a crossover,
+/// which moves up with the held context. Crossovers, interpolated linearly
+/// between the measured row counts where the faster stage flips (M1 Max,
+/// Qwen 3.6 35B-A3B 4-bit, `fastpath` exact-row sweep, median of 5,
+/// 2026-11-21): N = 1024, per-row 224.2 / grouped 235.1 ms at 32 rows and
+/// 321.8 / 296.4 at 48 -> 37 rows; N = 16384, 348.2 / 364.6 at 48 and
+/// 438.2 / 434.0 at 64 -> 61 rows. In between the threshold is interpolated in
+/// log2(N), which is not measured.
+public enum ShortBranchRouting {
+    static let nearContext = 1024
+    static let nearRows = 37
+    static let farContext = 16384
+    static let farRows = 61
+
+    /// Rows above which the grouped stage is faster at `heldContext` tokens.
+    public static func groupedMinRows(heldContext: Int) -> Int {
+        if heldContext <= nearContext { return nearRows }
+        if heldContext >= farContext { return farRows }
+        let octaves = log2(Double(heldContext) / Double(nearContext))
+        let span = log2(Double(farContext) / Double(nearContext))
+        return Int((Double(nearRows) + Double(farRows - nearRows) * octaves / span).rounded())
+    }
+
+    /// The threshold override: `EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS=<n>` (0:
+    /// always grouped, a huge value: never), else `EMONE_SHORT_BRANCH_GROUPED=1`
+    /// (always) or `=0` (never). Nil leaves the measured threshold.
+    public static func override(environment: [String: String]) -> Int? {
+        if let raw = environment["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS"],
+            let rows = Int(raw.trimmingCharacters(in: .whitespaces)), rows >= 0
+        {
+            return rows
+        }
+        switch environment["EMONE_SHORT_BRANCH_GROUPED"] {
+        case "1": return 0
+        case "0": return Int.max
+        default: return nil
+        }
+    }
+
+    public static func groupedMinRows(heldContext: Int, override: Int?) -> Int {
+        override ?? groupedMinRows(heldContext: heldContext)
+    }
 }
 
 extension RealForwardRunner {
@@ -97,6 +147,8 @@ extension RealForwardRunner {
     /// switch; off by default, so the ordinary path is unchanged).
     static let shortBranchForChunkedPrefill =
         ProcessInfo.processInfo.environment["EMONE_SHORT_BRANCH"] == "1"
+    static let shortBranchGroupedOverride = ShortBranchRouting.override(
+        environment: ProcessInfo.processInfo.environment)
 
     /// Prefills a short branch of `tokens` at `startPosition` of `slot`,
     /// holding the forward gate for the call. See the type comment above for
@@ -146,8 +198,11 @@ extension RealForwardRunner {
             (warmedExperts, warmNanos) = try warmForShortBranch(tokenCount: t, rowLimit: rowLimit)
         }
 
+        let groupedMinRows = ShortBranchRouting.groupedMinRows(
+            heldContext: startPosition, override: Self.shortBranchGroupedOverride)
         let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         residentPrefillDeferLastWait = short
+        shortBranchGroupedChosen = short && t > groupedMinRows
         let result: PrefillResult
         let span: ResidentPrefillGPUSpan
         do {
@@ -157,10 +212,12 @@ extension RealForwardRunner {
                 residentRowLimit: short ? rowLimit : nil,
                 onProgress: { _ in })
             residentPrefillDeferLastWait = false
+            shortBranchGroupedChosen = false
             // The head has been awaited, so this only checks and times.
             span = try finishResidentPrefillBuffers()
         } catch {
             residentPrefillDeferLastWait = false
+            shortBranchGroupedChosen = false
             residentPrefillRanGrouped = false
             _ = try? finishResidentPrefillBuffers()
             throw error
@@ -178,7 +235,8 @@ extension RealForwardRunner {
             result: result, rows: t, routedStage: stage,
             warmedExperts: warmedExperts, warmNanos: warmNanos, wallNanos: wall,
             gpuBusyNanos: UInt64(max(0, span.busySeconds) * 1e9),
-            gpuElapsedNanos: UInt64(max(0, span.elapsedSeconds) * 1e9))
+            gpuElapsedNanos: UInt64(max(0, span.elapsedSeconds) * 1e9),
+            groupedMinRows: groupedMinRows)
         if Self.shortBranchTrace { writeShortBranchTrace(report, startPosition: startPosition) }
         return report
     }
@@ -228,7 +286,8 @@ extension RealForwardRunner {
             + " warm_ms=\(ms(report.warmNanos)) warmed=\(report.warmedExperts)"
             + " wall_ms=\(ms(report.wallNanos))"
             + " gpu_busy_ms=\(ms(report.gpuBusyNanos))"
-            + " gpu_elapsed_ms=\(ms(report.gpuElapsedNanos))\n"
+            + " gpu_elapsed_ms=\(ms(report.gpuElapsedNanos))"
+            + " grouped_min_rows=\(report.groupedMinRows == Int.max ? "never" : String(report.groupedMinRows))\n"
         FileHandle.standardError.write(Data(line.utf8))
     }
 }

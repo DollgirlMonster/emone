@@ -82,12 +82,13 @@ final class ShortBranchGroupedMoE {
     /// Encodes the routed stage of `tokens` rows into `cb`: route partials
     /// `[tokens * topK, d]` unweighted, as the tile path leaves them.
     func encode(
-        commandBuffer cb: MTLCommandBuffer,
+        commandBuffer cb: inout MTLCommandBuffer,
         routeIDs: MTLBuffer, routeWeights: MTLBuffer,
         hidden: MTLBuffer, routePartials: MTLBuffer,
         expertAddresses: MTLBuffer, residentBuffers: [MTLBuffer],
         offsets: MoEExpertOffsets,
-        tokens: Int, topK: Int, d: Int, f: Int, numExperts: Int
+        tokens: Int, topK: Int, d: Int, f: Int, numExperts: Int,
+        split: (inout MTLCommandBuffer, String) throws -> Void = { _, _ in }
     ) throws {
         let pairs = tokens * topK
         precondition(pairs > 0)
@@ -118,10 +119,12 @@ final class ShortBranchGroupedMoE {
             threadsPerThreadgroup: MTLSize(
                 width: min(1024, group.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
         g.endEncoding()
+        try split(&cb, "prefill_split_grouped_plan")
 
         try encodeRows(
             cb, gather, source: hidden, destination: rowsIn, sortedPairs: sortedPairs,
             pairs: pairs, d: d, last: UInt32(d))
+        try split(&cb, "prefill_split_grouped_gather")
 
         let gateUpParams: [UInt32] = [
             UInt32(f), UInt32(d),
@@ -132,9 +135,9 @@ final class ShortBranchGroupedMoE {
             UInt32(d), UInt32(f),
             offsets.downWOff, offsets.downSOff, offsets.downBOff, 0, 0, 0, 64,
         ]
-        for (pso, x, y, params, n, columns) in [
-            (gateUp, rowsIn, activated, gateUpParams, f, Self.gateUpColumns),
-            (down, activated, rowsOut, downParams, d, Self.downEdge),
+        for (pso, x, y, params, n, columns, role) in [
+            (gateUp, rowsIn, activated, gateUpParams, f, Self.gateUpColumns, "gate_up"),
+            (down, activated, rowsOut, downParams, d, Self.downEdge, "down"),
         ] {
             guard let enc = cb.makeComputeCommandEncoder() else {
                 throw MetalError.commandEncoderFailed
@@ -151,11 +154,13 @@ final class ShortBranchGroupedMoE {
                 MTLSize(width: n / columns, height: capacity, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
             enc.endEncoding()
+            try split(&cb, "prefill_split_grouped_\(role)")
         }
 
         try encodeRows(
             cb, scatter, source: rowsOut, destination: routePartials, sortedPairs: sortedPairs,
             pairs: pairs, d: d, last: UInt32(topK))
+        try split(&cb, "prefill_split_grouped_scatter")
     }
 
     private func encodeRows(
