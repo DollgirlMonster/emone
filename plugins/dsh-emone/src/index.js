@@ -128,18 +128,14 @@ export function apply(ctx, config = {}) {
     try {
       registerRoute({ ...resolved, log });
     } catch (error) {
-      log(
-        `dsh-emone: route registration threw: ${error instanceof Error ? error.message : error}`,
-      );
+      log(`dsh-emone: route registration threw: ${error instanceof Error ? error.message : error}`);
     }
   }
   if (resolved.writeCompactionPreset) {
     try {
       ensureCompactionPreset({ ...resolved, log });
     } catch (error) {
-      log(
-        `dsh-emone: compaction preset threw: ${error instanceof Error ? error.message : error}`,
-      );
+      log(`dsh-emone: compaction preset threw: ${error instanceof Error ? error.message : error}`);
     }
   }
   // Boot writes the route once; a folder that changes during the session has to

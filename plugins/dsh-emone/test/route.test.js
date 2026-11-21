@@ -218,9 +218,7 @@ test("the checkout is found from a hint, the environment, the module, or the pro
     { root: checkout, found: true },
   );
   // Walking up from the module (running out of the checkout).
-  const moduleUrl = pathToFileURL(
-    join(checkout, "plugins", "dsh-emone", "src", "config.js"),
-  ).href;
+  const moduleUrl = pathToFileURL(join(checkout, "plugins", "dsh-emone", "src", "config.js")).href;
   assert.deepEqual(findRepoRoot({ env: {}, moduleUrl, cwd: base }), {
     root: checkout,
     found: true,

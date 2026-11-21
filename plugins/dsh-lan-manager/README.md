@@ -146,7 +146,7 @@ routine chatter. Found by booting a throwaway harness, not by reading.
 
 ```bash
 dsh plugin --profile web add ./plugins/dsh-lan-manager        # from the checkout
-dsh plugin --profile web add github:Pummelchen/TinyTitan#<commit>   # pinned
+dsh plugin --profile web add github:DollgirlMonster/emone#<commit>   # pinned
 ```
 
 The bundle patch mounts the row; the next `dsh web` picks it up. No `--patch` flag
@@ -325,7 +325,7 @@ done
 | Key                        | Env                            | Default                              | Meaning                                                                                                                                            |
 | -------------------------- | ------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `basePath`                 | `DSH_LAN_BASE_PATH`            | `/dsh-lan`                           | Route prefix                                                                                                                                       |
-| `groupKey` / `token`       | `DSH_LAN_KEY`, `DSH_LAN_TOKEN` | `emone-lan`                      | Group tag **and** the secret every request presents                                                                                                |
+| `groupKey` / `token`       | `DSH_LAN_KEY`, `DSH_LAN_TOKEN` | `emone-lan`                          | Group tag **and** the secret every request presents                                                                                                |
 | `peers`                    | `DSH_LAN_PEERS`                | `[]`                                 | Seed addresses (`host` or `host:port`) to try even when discovery finds nothing                                                                    |
 | `discoveryIntervalSeconds` | `DSH_LAN_DISCOVERY_SECONDS`    | `60`                                 | How often the group is refreshed (minimum 5)                                                                                                       |
 | `discoverTailscale`        | —                              | `true`                               | Enumerate online tailnet peers that have an IPv4 address — macOS, Linux, Windows — from the Tailscale CLI                                          |
