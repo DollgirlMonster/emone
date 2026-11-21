@@ -132,6 +132,17 @@ SKIP_GOLDENS_REASON="${TINYTITAN_RELEASE_SKIP_GOLDENS_REASON:-}"
 #
 #   * the MTP draft head -- a sidecar to a target whose own baseline already
 #     exercises it, not a served model.
+#   * Kev-0.8B, the System One decision model -- it scores options and never
+#     generates, so a greedy-text baseline has nothing to compare. Its check is
+#     `TinyTitanCLI decide --fixture benchmark/kev/kev08b_fixture.json`, parity
+#     against Kev's own fp32 reference (TinyTitan-lmw).
+#   * Rev-0.8B, our own decision model, both as a merged install
+#     (rev-0.8b_8Bit) and as a runtime-LoRA package (models/rev-0.8b_lora,
+#     not an install) over the 0.8B -- neither generates text. Checks:
+#     `TinyTitanCLI decide --model models/rev-0.8b_8Bit --fixture
+#     benchmark/rev/rev08b_fixture.json`, and the same with `--model
+#     models/qwen3.5_0.8B_8Bit --adapter models/rev-0.8b_lora`
+#     (TinyTitan-lmw.9, lmw.11).
 #
 # The dense Qwen 3.5 2B/4B/9B were listed here too, because they had no stored
 # baseline at all: a release verified them through neither path, and capturing
@@ -144,6 +155,8 @@ SKIP_GOLDENS_REASON="${TINYTITAN_RELEASE_SKIP_GOLDENS_REASON:-}"
 # wrapped, not guessed at.
 NON_GOLDEN_INSTALLS="
   qwen3.8-flash-next_125B_A6B_MTP_4Bit
+  kev-0.8b_8Bit
+  rev-0.8b_8Bit
 "
 NON_GOLDEN_SET=" $(printf '%s' "$NON_GOLDEN_INSTALLS" | tr -s '[:space:]' ' ') "
 
@@ -208,6 +221,8 @@ check_golden kat-coder-v2.5_35B_A3B_8Bit katcoder-8
 # them the one supported shape a release never verified; the targets exist now
 # and are inert on a machine that has not installed them, exactly like every
 # other target here.
+check_golden qwen3.5_0.8B_4Bit qwen35-0.8b-4
+check_golden qwen3.5_0.8B_8Bit qwen35-0.8b-8
 check_golden qwen3.5_2B_4Bit qwen35-2b-4
 check_golden qwen3.5_2B_8Bit qwen35-2b-8
 check_golden qwen3.5_4B_4Bit qwen35-4b-4
@@ -305,8 +320,8 @@ yourself after verifying the checksum published with this archive:
 
   xattr -dr com.apple.quarantine /path/to/tinytitan-$VERSION-macos-arm64
 
-No model weights are included. TinyTitanRepack defaults to Ornith 1.5 8-bit (about
-36.9 GB); 4-bit remains available explicitly. The runtime defaults to standard
+No model weights are included. TinyTitanRepack defaults to Qwen 3.6 35B-A3B 4-bit
+(about 19.5 GB); 8-bit remains available explicitly. The runtime defaults to standard
 answers with thinking off, as described in the README and Wiki.
 TXT
 

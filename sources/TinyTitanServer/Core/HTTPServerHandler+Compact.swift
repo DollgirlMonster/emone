@@ -200,7 +200,7 @@ extension ServerHTTPHandler {
             // harness's auxiliary calls.
             reasoningEffort: "off")
         let validated = try validate(request, for: target)
-        return try await coordinator.run {
+        return try await lane(for: request.model).run {
             try Task.checkCancellation()
             return try await self.backend.generate(validated) { _ in }
         }

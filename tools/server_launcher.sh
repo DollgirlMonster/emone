@@ -13,7 +13,7 @@
 #   <client>   server (default), or one of the coding clients:
 #              codex, claude, qwen, opencode, zed
 #   <model>    an install key (ornith|qwen36|agentworld|katcoder|qwen38, or
-#              qwen35-2b|qwen35-4b|qwen35-9b|qwen38-27b) optionally followed by 4|8, or a
+#              qwen35-0.8b|qwen35-2b|qwen35-4b|qwen35-9b|qwen38-27b) optionally followed by 4|8, or a
 #              catalog id such as ornith-1.5-35b-a3b_8-Bit, which names its own
 #              width. The three qwen35-* keys are the dense Qwen 3.5 models
 #              (2B, 4B, 9B): both engines implement their family
@@ -445,7 +445,7 @@ fi
 
 if [[ -z "$MODEL_ARG" ]]; then
   count=${#TINYTITAN_CAT_ID[@]}
-  default_idx="$(tinytitan_catalog_find_dir ornith-1.5_35B_A3B_8Bit)" || default_idx=0
+  default_idx="$(tinytitan_catalog_find_dir qwen3.6_35B_A3B_4Bit)" || default_idx=0
   echo ""
   if (( dynamic )); then
     echo "Which model? (loaded first; every other one stays available by name)"
@@ -501,7 +501,7 @@ else
     fi
   else
     if ! tinytitan_resolve_model "$MODEL_ARG" 2>/dev/null; then
-      echo "unknown model: $MODEL_ARG (a model id, or ornith|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|qwen38-27b)" >&2
+      echo "unknown model: $MODEL_ARG (a model id, or ornith|qwen36|agentworld|katcoder|qwen38|qwen35-0.8b|qwen35-2b|qwen35-4b|qwen35-9b|qwen38-27b)" >&2
       if (( dynamic )); then echo "installed: ${TINYTITAN_CAT_ID[*]+"${TINYTITAN_CAT_ID[*]}"}" >&2; fi
       exit 2
     fi

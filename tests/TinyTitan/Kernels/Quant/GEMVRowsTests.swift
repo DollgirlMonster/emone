@@ -75,7 +75,16 @@ import Testing
     @Test func int4RowsMatchThePerRowLoopExactly() throws {
         let ctx = try MetalContext()
         let gemv = try DequantInt4GEMV(context: ctx)
-        let (m, n, tokens) = (48, 256, 37)
+        try int4RowsMatch(ctx, gemv, m: 48, n: 256, tokens: 37)
+        // A shape the class constant-folds (Qwen 3.6's 1024 x 2816), so the
+        // specialized many-input pipeline is checked against the specialized
+        // per-input one.
+        try int4RowsMatch(ctx, gemv, m: 1_024, n: 2_816, tokens: 6)
+    }
+
+    private func int4RowsMatch(
+        _ ctx: MetalContext, _ gemv: DequantInt4GEMV, m: Int, n: Int, tokens: Int
+    ) throws {
         let ops = try Self.operands(
             ctx, m: m, n: n, tokens: tokens, weightBytesPerRow: n / 2, seed: 4)
         let half = MemoryLayout<Float16>.stride
@@ -155,6 +164,41 @@ import Testing
         #expect(!Self.same(untouched, coalesced, bytes: tokens * half))
     }
 
+    /// A many-row bf16 weight over many inputs -- the Gated-DeltaNet
+    /// `in_proj_a` / `in_proj_b` shape (16 rows) and a row count that leaves a
+    /// threadgroup partly empty (20) -- now one dispatch instead of one per
+    /// input. Same bits as the per-input loop.
+    @Test func bf16ManyRowsMatchThePerRowLoopExactly() throws {
+        let ctx = try MetalContext()
+        let gemv = try BF16GEMV(context: ctx)
+        for (m, n, tokens) in [(16, 1_024, 37), (20, 256, 5)] {
+            var rng = LCG(state: UInt64(m * 31 + tokens))
+            let weights = try Self.buffer(
+                ctx, (0..<(m * n)).map { _ in Self.bf16(rng.unit() * 0.2) })
+            let x = try Self.buffer(ctx, (0..<(tokens * n)).map { _ in Float16(rng.unit()) })
+            let half = MemoryLayout<Float16>.stride
+            let perRow = try Self.zeroed(ctx, bytes: tokens * m * half)
+            let coalesced = try Self.zeroed(ctx, bytes: tokens * m * half)
+            try Self.run(ctx) { cb in
+                for row in 0..<tokens {
+                    try gemv.encode(
+                        commandBuffer: cb, weights: weights,
+                        x: x, xOffset: row * n * half, y: perRow, yOffset: row * m * half,
+                        m: UInt32(m), n: UInt32(n))
+                }
+                try gemv.encodeRows(
+                    commandBuffer: cb, weights: weights, x: x, y: coalesced,
+                    rows: GEMVRows(
+                        xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: m * half,
+                        count: tokens),
+                    m: UInt32(m), n: UInt32(n))
+            }
+            #expect(Self.same(perRow, coalesced, bytes: tokens * m * half), "m=\(m)")
+            let untouched = try Self.zeroed(ctx, bytes: tokens * m * half)
+            #expect(!Self.same(untouched, coalesced, bytes: tokens * m * half), "m=\(m)")
+        }
+    }
+
     @Test func sigmoidRowsMulMatchesThePerRowScalarMulExactly() throws {
         let ctx = try MetalContext()
         let elementwise = try Elementwise(context: ctx)
@@ -184,5 +228,156 @@ import Testing
         let single = GEMVRows.single(xOffset: 64, yOffset: 128)
         #expect(single.count == 1)
         #expect(single.xOffset == 64 && single.yOffset == 128)
+    }
+}
+
+/// The tiled simdgroup QMM picks a 32-row tile for small chunks
+/// (`PrefillAffineSimdgroupQMM.tile(n:t:)`). That is only a scheduling change if
+/// every output element is the same bits at either edge.
+@Suite struct SimdgroupQMMTileTests {
+    @Test(arguments: [4, 8], [5, 40, 64])
+    func thirtyTwoAndSixtyFourRowTilesAgreeBitForBit(bits: Int, t: Int) throws {
+        let ctx = try MetalContext()
+        let qmm = try PrefillAffineSimdgroupQMM(context: ctx)
+        let (n, k) = (192, 256)
+        var state: UInt64 = UInt64(bits * 1_000 + t)
+        func next() -> UInt64 {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return state >> 33
+        }
+        func unit() -> Float { Float(next() % 20_001) / 10_000 - 1 }
+        func bf16(_ v: Float) -> UInt16 { UInt16(truncatingIfNeeded: v.bitPattern >> 16) }
+        func buffer<T>(_ values: [T]) throws -> MTLBuffer {
+            try #require(
+                values.withUnsafeBytes {
+                    ctx.device.makeBuffer(
+                        bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+                })
+        }
+        let groups = n * k / Quantization.groupSize
+        let weights = try buffer((0..<(n * k * bits / 8)).map { _ in UInt8(next() & 0xFF) })
+        let scales = try buffer((0..<groups).map { _ in bf16(0.01 + abs(unit()) * 0.05) })
+        let biases = try buffer((0..<groups).map { _ in bf16(unit() * 0.1) })
+        let x = try buffer((0..<(t * k)).map { _ in Float16(unit()) })
+        let bytes = t * n * MemoryLayout<Float16>.stride
+        let small = try #require(ctx.device.makeBuffer(length: bytes, options: .storageModeShared))
+        let large = try #require(ctx.device.makeBuffer(length: bytes, options: .storageModeShared))
+        let cb = try #require(ctx.queue.makeCommandBuffer())
+        for (edge, y) in [(32, small), (64, large)] {
+            try qmm.encode(
+                commandBuffer: cb, weights: weights, scales: scales, biases: biases,
+                x: x, y: y, t: t, n: n, k: k, bits: bits, forcedEdge: edge)
+        }
+        cb.commit()
+        cb.waitUntilCompleted()
+        #expect(cb.error == nil)
+        #expect(memcmp(small.contents(), large.contents(), bytes) == 0)
+    }
+}
+
+/// The 8-bit many-row path: one dispatch over 16-input blocks must match the
+/// per-input loop bit for bit, including a partial last block.
+@Suite struct Int8ManyRowsTests {
+    @Test(arguments: [(48, 256, 37), (16, 1_024, 16), (20, 128, 3)])
+    func int8ManyRowsMatchThePerRowLoopExactly(shape: (Int, Int, Int)) throws {
+        let (m, n, tokens) = shape
+        let ctx = try MetalContext()
+        let gemv = try DequantInt8GEMV(context: ctx)
+        var state = UInt64(m * 7 + tokens)
+        func next() -> UInt64 {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return state >> 33
+        }
+        func unit() -> Float { Float(next() % 20_001) / 10_000 - 1 }
+        func bf16(_ v: Float) -> UInt16 { UInt16(truncatingIfNeeded: v.bitPattern >> 16) }
+        func buffer<T>(_ values: [T]) throws -> MTLBuffer {
+            try #require(
+                values.withUnsafeBytes {
+                    ctx.device.makeBuffer(
+                        bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+                })
+        }
+        let groups = m * n / Quantization.groupSize
+        let weights = try buffer((0..<(m * n)).map { _ in UInt8(next() & 0xFF) })
+        let scales = try buffer((0..<groups).map { _ in bf16(0.01 + abs(unit()) * 0.05) })
+        let biases = try buffer((0..<groups).map { _ in bf16(unit() * 0.1) })
+        let x = try buffer((0..<(tokens * n)).map { _ in Float16(unit()) })
+        let half = MemoryLayout<Float16>.stride
+        let bytes = tokens * m * half
+        let perRow = try #require(ctx.device.makeBuffer(length: bytes, options: .storageModeShared))
+        let coalesced = try #require(
+            ctx.device.makeBuffer(length: bytes, options: .storageModeShared))
+        memset(coalesced.contents(), 0, bytes)
+        let cb = try #require(ctx.queue.makeCommandBuffer())
+        for row in 0..<tokens {
+            try gemv.encode(
+                commandBuffer: cb, weights: weights, scales: scales, biases: biases,
+                x: x, xOffset: row * n * half, y: perRow, yOffset: row * m * half,
+                m: UInt32(m), n: UInt32(n))
+        }
+        try gemv.encodeRows(
+            commandBuffer: cb, weights: weights, scales: scales, biases: biases,
+            x: x, y: coalesced,
+            rows: GEMVRows(
+                xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: m * half,
+                count: tokens),
+            m: UInt32(m), n: UInt32(n))
+        cb.commit()
+        cb.waitUntilCompleted()
+        #expect(cb.error == nil)
+        #expect(memcmp(perRow.contents(), coalesced.contents(), bytes) == 0)
+    }
+}
+
+/// The generic affine GEMV's many-row path, at both widths it is built for.
+@Suite struct AffineManyRowsTests {
+    @Test(arguments: [4, 8], [(48, 256, 37), (16, 1_024, 16), (20, 128, 3)])
+    func affineManyRowsMatchThePerRowLoopExactly(bits: Int, shape: (Int, Int, Int)) throws {
+        let (m, n, tokens) = shape
+        let ctx = try MetalContext()
+        let gemv = try AffineQuantGEMV(context: ctx, weightBits: bits)
+        var state = UInt64(bits * 1_000 + m * 7 + tokens)
+        func next() -> UInt64 {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return state >> 33
+        }
+        func unit() -> Float { Float(next() % 20_001) / 10_000 - 1 }
+        func bf16(_ v: Float) -> UInt16 { UInt16(truncatingIfNeeded: v.bitPattern >> 16) }
+        func buffer<T>(_ values: [T]) throws -> MTLBuffer {
+            try #require(
+                values.withUnsafeBytes {
+                    ctx.device.makeBuffer(
+                        bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+                })
+        }
+        let groups = m * n / Quantization.groupSize
+        let weights = try buffer((0..<(m * n * bits / 8)).map { _ in UInt8(next() & 0xFF) })
+        let scales = try buffer((0..<groups).map { _ in bf16(0.01 + abs(unit()) * 0.05) })
+        let biases = try buffer((0..<groups).map { _ in bf16(unit() * 0.1) })
+        let x = try buffer((0..<(tokens * n)).map { _ in Float16(unit()) })
+        let half = MemoryLayout<Float16>.stride
+        let bytes = tokens * m * half
+        let perRow = try #require(ctx.device.makeBuffer(length: bytes, options: .storageModeShared))
+        let coalesced = try #require(
+            ctx.device.makeBuffer(length: bytes, options: .storageModeShared))
+        memset(coalesced.contents(), 0, bytes)
+        let cb = try #require(ctx.queue.makeCommandBuffer())
+        for row in 0..<tokens {
+            try gemv.encode(
+                commandBuffer: cb, weights: weights, scales: scales, biases: biases,
+                x: x, xOffset: row * n * half, y: perRow, yOffset: row * m * half,
+                m: UInt32(m), n: UInt32(n))
+        }
+        try gemv.encodeRows(
+            commandBuffer: cb, weights: weights, scales: scales, biases: biases,
+            x: x, y: coalesced,
+            rows: GEMVRows(
+                xOffset: 0, xRowStride: n * half, yOffset: 0, yRowStride: m * half,
+                count: tokens),
+            m: UInt32(m), n: UInt32(n))
+        cb.commit()
+        cb.waitUntilCompleted()
+        #expect(cb.error == nil)
+        #expect(memcmp(perRow.contents(), coalesced.contents(), bytes) == 0)
     }
 }

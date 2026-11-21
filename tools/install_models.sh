@@ -294,6 +294,9 @@ CATALOGUE=(
   "agentworld-8bit|qwen-agentworld_35B_A3B_8Bit|8|convert_qwen35moe|agentworld|agentworld"
   # The dense Qwen 3.5 models. Small enough to run on the CPU, and the only
   # installs that do: the 2B beside a big GPU model, the 9B on its own.
+  # The 0.8B is the side model: session titles and one-word answers.
+  "qwen35-0.8b|qwen3.5_0.8B_4Bit|4|convert_qwen35"
+  "qwen35-0.8b-8bit|qwen3.5_0.8B_8Bit|8|convert_qwen35"
   "qwen35-2b|qwen3.5_2B_4Bit|4|convert_qwen35"
   "qwen35-2b-8bit|qwen3.5_2B_8Bit|8|convert_qwen35"
   "qwen35-4b|qwen3.5_4B_4Bit|4|convert_qwen35"
@@ -659,6 +662,7 @@ install_one() {
         # afterwards.
         local preset="${name%-8bit}" size_key model_id
         case "$preset" in
+          qwen35-0.8b) size_key=0.8b; model_id="qwen3.5-0.8b" ;;
           qwen35-2b) size_key=2b; model_id="qwen3.5-2b" ;;
           qwen35-4b) size_key=4b; model_id="qwen3.5-4b" ;;
           qwen35-9b) size_key=9b; model_id="qwen3.5-9b" ;;

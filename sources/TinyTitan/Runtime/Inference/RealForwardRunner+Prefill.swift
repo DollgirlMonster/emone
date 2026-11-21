@@ -461,6 +461,10 @@ extension RealForwardRunner {
             if let readout, readout.captureLayers.contains(L) {
                 try captureHiddenReadoutRow(layer: L, hidden: scratch.hidden, tokenCount: t)
             }
+            if decisionReadoutArmed {
+                try captureDecisionBlockRows(
+                    layer: L, hidden: scratch.hidden, startPosition: startPosition, tokenCount: t)
+            }
         }
 
         if prefillProfile {
@@ -479,7 +483,13 @@ extension RealForwardRunner {
             FileHandle.standardError.write(Data(lines.utf8))
         }
 
-        if writeFinalHead, runEpilogue, readout?.earlyStop != true {
+        // A decision readout norms its rows from the finished chunk and takes
+        // the place of the LM head; every layer above has run, so the state
+        // the chunk leaves is a valid point to continue or branch from.
+        try captureDecisionRows(
+            scratch: scratch, startPosition: startPosition, tokenCount: t, eps: eps)
+
+        if writeFinalHead, runEpilogue, readout?.earlyStop != true, !decisionReadoutSkipsHead {
             try encodeFinalHead(
                 logits: logits, scratch: scratch,
                 tokenCount: t, hiddenSize: D, rmsEps: eps,
@@ -553,10 +563,42 @@ extension RealForwardRunner {
         return true
     }
 
+    /// One prefill projection, then -- when a runtime-LoRA adapter is set and
+    /// targets `(layer, target)` -- its delta over the output
+    /// (TinyTitan-lmw.11). The base path is whichever `encodeBaseAffineProjection`
+    /// picks; the delta reads the same x and accumulates into the same y.
+    func encodeAffineProjection(
+        commandBuffer: MTLCommandBuffer,
+        family: PrefillProjectionFamily,
+        weightBits: Int,
+        weights: TensorView,
+        x: MTLBuffer,
+        y: MTLBuffer,
+        rows: Int,
+        columns: Int,
+        tokenCount: Int,
+        xStrideElements: Int,
+        yStrideElements: Int,
+        useTwoRowProjection: Bool,
+        layer: Int? = nil,
+        target: LoRATarget? = nil
+    ) throws {
+        try encodeBaseAffineProjection(
+            commandBuffer: commandBuffer, family: family, weightBits: weightBits,
+            weights: weights, x: x, y: y, rows: rows, columns: columns,
+            tokenCount: tokenCount, xStrideElements: xStrideElements,
+            yStrideElements: yStrideElements, useTwoRowProjection: useTwoRowProjection)
+        guard let layer, let target else { return }
+        try encodeLoRADelta(
+            commandBuffer: commandBuffer, layer: layer, target: target,
+            x: x, xStrideElements: xStrideElements, y: y, yStrideElements: yStrideElements,
+            rows: rows, columns: columns, tokenCount: tokenCount)
+    }
+
     /// `weightBits` is the *role's* width, not the attention slot's: the dense
     /// Qwen 3.5 installs keep k/v at 8 bits with q/o at 4, and the int4-only
     /// batched paths below would read an 8-bit tensor as packed nibbles.
-    func encodeAffineProjection(
+    private func encodeBaseAffineProjection(
         commandBuffer: MTLCommandBuffer,
         family: PrefillProjectionFamily,
         weightBits: Int,
@@ -585,7 +627,8 @@ extension RealForwardRunner {
                 m: UInt32(rows), n: UInt32(columns))
             return
         }
-        if tokenCount >= 32, xStrideElements == columns, yStrideElements == rows,
+        if tokenCount >= (profile.prefillSmallChunkQMM ? 3 : 32),
+            xStrideElements == columns, yStrideElements == rows,
             try encodeSimdgroupProjection(
                 commandBuffer: commandBuffer, weightBits: weightBits, weights: weights,
                 x: x, y: y, rows: rows, columns: columns, tokenCount: tokenCount)
@@ -678,8 +721,12 @@ extension RealForwardRunner {
         commandBuffer: MTLCommandBuffer,
         projections sharedProj: LayerSharedExpertProjections,
         scratch: PrefillChunkScratchBuffers,
-        tokenCount t: Int, hiddenSize D: Int
+        tokenCount t: Int, hiddenSize D: Int,
+        layer L: Int? = nil
     ) throws {
+        let lora = L.flatMap {
+            loraFFNHooks(layer: $0, scratch: scratch, tokenCount: t, hiddenSize: D)
+        }
         if prefillBatchedSharedExpert,
             try prefillSharedExpert.encodeBlockBatched(
                 commandBuffer: commandBuffer,
@@ -689,9 +736,18 @@ extension RealForwardRunner {
                 scratchUp: scratch.sharedUpScratch,
                 scratchAct: scratch.sharedActScratch,
                 queryCount: t, d: D, intermediate: cfg.intermediateSize,
-                xStrideElements: D, yStrideElements: D)
+                xStrideElements: D, yStrideElements: D,
+                afterGateUp: lora?.gateUp, afterDown: lora?.down)
         {
             return
+        }
+        if lora != nil {
+            // The per-token fallback below has no seam between the gate/up
+            // GEMVs and the activation, so it cannot carry the delta: refuse
+            // rather than answer from the base weights alone.
+            throw ModelError.internalInconsistency(
+                detail: "a runtime-LoRA adapter needs the batched dense FFN, "
+                    + "which this chunk could not take")
         }
         try prefillSharedExpert.encodeBlock(
             commandBuffer: commandBuffer,
@@ -1062,6 +1118,44 @@ extension RealForwardRunner {
         }
     }
 
+    /// The dense FFN without the per-stage drains: the feed-forward and its
+    /// residual add are encoded into the layer's own command buffer, which is
+    /// committed at the layer boundary and awaited only after the last layer.
+    ///
+    /// Nothing between layers is read on the host -- a dense layer has no
+    /// routing readback -- and one queue runs its command buffers in commit
+    /// order with hazard tracking on every buffer, so the drains bought no
+    /// ordering. They cost three CPU/GPU round trips per layer: on Kev-0.8B
+    /// that was most of a 30-token prefill. Committing (not waiting) at each
+    /// boundary keeps the order every per-layer hook relies on -- a hidden
+    /// readout's blit after layer L, an early stop -- and the final wait keeps
+    /// the invariant the head and the activation dump assume: when the layer
+    /// loop ends, the chunk's GPU work is done. Same kernels, same order, so
+    /// the arithmetic is unchanged. Kernel GPU timing keeps the drained path,
+    /// because it times each stage's own command buffer.
+    private func encodeDenseFFNPrefillPipelined(
+        cb: inout MTLCommandBuffer,
+        layer L: Int,
+        scratch: PrefillChunkScratchBuffers,
+        tokenCount t: Int,
+        hiddenSize D: Int
+    ) throws {
+        try encodePrefillSharedExpertBlock(
+            commandBuffer: cb, projections: sharedExpertProjections[L],
+            scratch: scratch, tokenCount: t, hiddenSize: D, layer: L)
+        try requireElementwise().encodeResidualAdd(
+            commandBuffer: cb, hidden: scratch.hidden, delta: scratch.h1, count: t * D)
+        cb.commit()
+        guard L + 1 < cfg.numLayers else {
+            try waitForCompletion(cb)
+            return
+        }
+        guard let nextCB = ctx.queue.makeCommandBuffer() else {
+            throw ModelError.residentBufferWrapFailed
+        }
+        cb = nextCB
+    }
+
     /// The dense family's prefill FFN.
     ///
     /// The shared-expert block *is* this family's feed-forward network, so this
@@ -1077,6 +1171,12 @@ extension RealForwardRunner {
         tokenCount t: Int,
         hiddenSize D: Int
     ) throws {
+        guard kernelGPUTimingsEnabled || Self.prefillSplitTiming || !splitTimedBuffers.isEmpty
+        else {
+            try encodeDenseFFNPrefillPipelined(
+                cb: &cb, layer: L, scratch: scratch, tokenCount: t, hiddenSize: D)
+            return
+        }
         // Commit and drain the incoming buffer first: it carries this layer's
         // attention and its MLP entry norm. The MoE stage does the same at the
         // top of its pipeline (it needs the routing readback), and without it
@@ -1095,7 +1195,7 @@ extension RealForwardRunner {
         let sharedProj = sharedExpertProjections[L]
         try encodePrefillSharedExpertBlock(
             commandBuffer: sharedCB, projections: sharedProj,
-            scratch: scratch, tokenCount: t, hiddenSize: D)
+            scratch: scratch, tokenCount: t, hiddenSize: D, layer: L)
         sharedCB.commit()
         try waitForCompletion(sharedCB)
         recordKernelGPU(role: "prefill_shared_expert", sharedCB)

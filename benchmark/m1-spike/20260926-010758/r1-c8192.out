@@ -1,0 +1,5 @@
+0240)  add to the residual stream.
+
+**This is the biggest fidelity risk in the port.** The table is bf16 in the
+official checkpoint; a 4-bit quantization of it is a lossy approximation of a
+lossy approximation. Record the decision in the install receipt.

@@ -14,6 +14,9 @@ final class BF16GEMV {
     private let pipeline: MTLComputePipelineState
     /// One-row weight over many inputs, one simdgroup per input.
     private let oneRowManyX: MTLComputePipelineState
+    /// Many-row weight over many inputs in one dispatch, one simdgroup per
+    /// (row, input).
+    private let manyX: MTLComputePipelineState
 
     init(context: MetalContext) throws {
         self.pipeline = try context.pipeline(
@@ -22,6 +25,10 @@ final class BF16GEMV {
             maxTotalThreadsPerThreadgroup: 256)
         self.oneRowManyX = try context.pipeline(
             "bf16_gemv_simd_one_row_many_x",
+            constants: [],
+            maxTotalThreadsPerThreadgroup: 256)
+        self.manyX = try context.pipeline(
+            "bf16_gemv_simd_many_x",
             constants: [],
             maxTotalThreadsPerThreadgroup: 256)
     }
@@ -75,6 +82,27 @@ final class BF16GEMV {
             encoder.endEncoding()
             return
         }
+        let rowsPerThreadgroup = 8
+        if rows.count > 1, rows.xRowStride % half == 0, rows.yRowStride % half == 0 {
+            // Every input in one dispatch rather than one dispatch per input;
+            // the same per-(row, input) arithmetic, so the same bits.
+            encoder.setComputePipelineState(manyX)
+            encoder.setBuffer(weights, offset: weightsOffset, index: 0)
+            encoder.setBuffer(x, offset: rows.xOffset, index: 1)
+            encoder.setBuffer(y, offset: rows.yOffset, index: 2)
+            var params = (m, n, UInt32(rows.xRowStride / half), UInt32(rows.yRowStride / half))
+            encoder.setBytes(&params.0, length: 4, index: 3)
+            encoder.setBytes(&params.1, length: 4, index: 4)
+            encoder.setBytes(&params.2, length: 4, index: 5)
+            encoder.setBytes(&params.3, length: 4, index: 6)
+            encoder.dispatchThreadgroups(
+                MTLSize(
+                    width: (Int(m) + rowsPerThreadgroup - 1) / rowsPerThreadgroup,
+                    height: rows.count, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 32 * rowsPerThreadgroup, height: 1, depth: 1))
+            encoder.endEncoding()
+            return
+        }
         encoder.setComputePipelineState(pipeline)
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)
         encoder.setBuffer(x, offset: rows.xOffset, index: 1)
@@ -83,7 +111,6 @@ final class BF16GEMV {
         var columns = n
         encoder.setBytes(&outputRows, length: MemoryLayout<UInt32>.size, index: 3)
         encoder.setBytes(&columns, length: MemoryLayout<UInt32>.size, index: 4)
-        let rowsPerThreadgroup = 8
         let groups = (Int(m) + rowsPerThreadgroup - 1) / rowsPerThreadgroup
         rows.dispatch(
             encoder, xIndex: 1, yIndex: 2,

@@ -1,0 +1,5 @@
+0240)  add to the residual stream.
+
+**Faithfulness:** the table is a *hash*  collisions are frequent and
+content-dependent. Any deviation (wrong prime, wrong shift, wrong rounding)
+perturbs every token's embedding. The table must ship as a tensor and the

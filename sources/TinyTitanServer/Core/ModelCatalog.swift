@@ -212,8 +212,44 @@ public struct ModelCatalog: Sendable {
         let reason: String
     }
 
+    /// Base model ids served as *side* models by default: small enough to stay
+    /// resident beside any primary, and used for session titles and one-word
+    /// answers rather than for the conversation itself.
+    public static let defaultSideModels: Set<String> = ["qwen3.5-0.8b"]
+
+    /// The catalog ids to serve as side models. `TINYTITAN_SIDE_MODELS`
+    /// replaces the default set: a comma-separated list of base ids
+    /// (`qwen3.5-0.8b`) or catalog ids (`qwen3.5-0.8b_8-Bit`), or `off`.
+    public func sideModelIDs(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Set<String> {
+        let wanted: Set<String>
+        if let raw = environment["TINYTITAN_SIDE_MODELS"] {
+            let names = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            wanted = raw.lowercased() == "off" ? [] : Set(names.filter { !$0.isEmpty })
+        } else {
+            wanted = Self.defaultSideModels
+        }
+        return Set(
+            entries.map(\.id).filter { id in
+                wanted.contains(id)
+                    || wanted.contains(String(id.split(separator: "_").first ?? ""))
+            })
+    }
+
+    /// The pointer head a System One decision model (Kev) carries beside its
+    /// payload. Its backbone is an ordinary dense Qwen 3.5, but it was
+    /// fine-tuned to score options, not to write text, so it is never offered
+    /// as a chat model; `/v1/systemone` will serve it (TinyTitan-lmw.5).
+    static let decisionHeadFile = "decision_head.safetensors"
+
     static func probe(_ directory: URL) -> Result<Entry, ProbeFailure> {
         let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: directory.appendingPathComponent(decisionHeadFile).path) {
+            return .failure(
+                ProbeFailure(
+                    reason: "a System One decision model (\(decisionHeadFile)); not a chat model"))
+        }
         if fileManager.fileExists(atPath: directory.appendingPathComponent("manifest.json").path) {
             return probeInstall(directory)
         }
@@ -362,6 +398,7 @@ public struct ModelCatalog: Sendable {
         // a name. Without these entries repacking them would silently rename
         // them from "Qwen 3.5 9B" to "qwen3.5-9b" in the app and the server's
         // /v1/models listing.
+        "qwen3.5-0.8b": "Qwen 3.5 0.8B",
         "qwen3.5-2b": "Qwen 3.5 2B",
         "qwen3.5-4b": "Qwen 3.5 4B",
         "qwen3.5-9b": "Qwen 3.5 9B",

@@ -20,7 +20,23 @@ import Testing
                 #expect(p.key == ModelProfile.Key(id, bits))
             }
         }
-        #expect(ModelProfile.table.count == 12)
+        #expect(ModelProfile.table.count == 14)
+    }
+
+    /// The decision models (Kev, Rev) ship at 8 bits only, so they are checked
+    /// apart from the 4/8 pairs.
+    @Test(arguments: ["kev-0.8b", "rev-0.8b"])
+    func theDecisionModelsTakeTheDensePrefillSwitches(id: String) {
+        let model = ModelProfile.resolve(
+            modelID: id, family: .qwen35Dense, weightBits: 8, environment: [:])
+        #expect(model.isTabled)
+        #expect(model.prefillGDNChunked && model.prefillDenseQMM && model.prefillDenseFlash)
+        #expect(model.prefillSmallChunkQMM)
+        #expect(model.prefillChunkTokens == 4_096)
+        #expect(
+            !ModelProfile.resolve(
+                modelID: id, family: .qwen35Dense, weightBits: 4, environment: [:]
+            ).isTabled)
     }
 
     /// The flash key split ships on the two 35B 4-bit rows the divergence
@@ -44,6 +60,22 @@ import Testing
                 modelID: id, family: family, weightBits: 8,
                 environment: ["TINYTITAN_PREFILL_FLASH_SPLIT": "1"]
             ).prefillFlashKeySplit)
+    }
+
+    /// Small-chunk QMM ships on the same two rows, on the same evidence.
+    @Test(arguments: [("qwen3.6-35b-a3b", ModelFamily.qwen36), ("ornith-1.5-35b-a3b", .qwen36)])
+    func theMeasured35BRowsTakeSmallChunkQMM(id: String, family: ModelFamily) {
+        #expect(
+            ModelProfile.resolve(modelID: id, family: family, weightBits: 4, environment: [:])
+                .prefillSmallChunkQMM)
+        #expect(
+            !ModelProfile.resolve(modelID: id, family: family, weightBits: 8, environment: [:])
+                .prefillSmallChunkQMM)
+        #expect(
+            !ModelProfile.resolve(
+                modelID: id, family: family, weightBits: 4,
+                environment: ["TINYTITAN_PREFILL_SMALL_QMM": "0"]
+            ).prefillSmallChunkQMM)
     }
 
     @Test func modelsSharingAFamilyResolveIndependently() {
@@ -127,12 +159,17 @@ import Testing
         let hybrids: Set<ModelProfile.Key> = [
             ModelProfile.Key("qwen3.6-35b-a3b", 4), ModelProfile.Key("ornith-1.5-35b-a3b", 4),
         ]
-        // Dense: no routed experts, so no routed switches.
-        let dense = ModelProfile.Key("qwen3.8-27b", 4)
+        // Dense: no routed experts, so no routed switches. Kev-0.8B and
+        // Rev-0.8B were measured against their own fp32 references
+        // (benchmark/kev/, benchmark/rev/).
+        let dense: Set<ModelProfile.Key> = [
+            ModelProfile.Key("qwen3.8-27b", 4), ModelProfile.Key("kev-0.8b", 8),
+            ModelProfile.Key("rev-0.8b", 8),
+        ]
         for (key, row) in ModelProfile.table {
             let isQ38 = key == q38
             let routed = isQ38 || hybrids.contains(key)
-            let measured = routed || key == dense
+            let measured = routed || dense.contains(key)
             let name = Comment(rawValue: "\(key.modelID) \(key.weightBits)")
             #expect(row.wideMPP == isQ38, name)
             #expect(row.qsaFlash == isQ38, name)

@@ -41,9 +41,13 @@ final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     let modelID: String
     let backend: any ServerInferenceBackend
     let coordinator: ServerCoordinator
+    /// Admits side-model requests (`ModelRouting.isSideModel`), so a session
+    /// title runs beside the primary's generation instead of queueing behind it.
+    let sideCoordinator: ServerCoordinator
     let heartbeatInterval: TimeAmount
     let reasoningProfile: ServerReasoningProfile
     let router: (any ModelRouting)?
+    let systemOne: SystemOneService?
     let childChannels: ChildChannelRegistry
     let responseStore: ResponseStore
     var head: HTTPRequestHead?
@@ -86,21 +90,34 @@ final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         modelID: String,
         backend: any ServerInferenceBackend,
         coordinator: ServerCoordinator,
+        sideCoordinator: ServerCoordinator,
         heartbeatInterval: TimeAmount,
         reasoningProfile: ServerReasoningProfile,
         router: (any ModelRouting)?,
+        systemOne: SystemOneService? = nil,
         childChannels: ChildChannelRegistry,
         responseStore: ResponseStore
     ) {
         self.modelID = modelID
         self._responseModelID = modelID
         self.router = router
+        self.systemOne = systemOne
         self.reasoningProfile = reasoningProfile
         self.backend = backend
         self.coordinator = coordinator
+        self.sideCoordinator = sideCoordinator
         self.heartbeatInterval = heartbeatInterval
         self.childChannels = childChannels
         self.responseStore = responseStore
+    }
+
+    /// The admission lane for a request naming `model`: the side lane for a
+    /// side model, the primary coordinator for everything else.
+    func lane(for model: String?) -> ServerCoordinator {
+        guard let model, let router, let served = router.servedModel(named: model),
+            router.isSideModel(served.id)
+        else { return coordinator }
+        return sideCoordinator
     }
 
     /// Which API's wire shapes a request speaks. Error envelopes, stream

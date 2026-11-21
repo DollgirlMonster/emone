@@ -51,8 +51,8 @@ the model-load path, also run the golden baseline, which is the only check that
 exercises real inference:
 
 ```bash
-tools/golden-baseline.sh --check 8        # Ornith 1.5 8-bit, the default target
-tools/golden-baseline.sh --check 4        # Ornith 1.5 4-bit
+tools/golden-baseline.sh --check qwen36-4   # Qwen 3.6 35B-A3B 4-bit, the default target
+tools/golden-baseline.sh --check qwen36-8   # Qwen 3.6 35B-A3B 8-bit
 ```
 
 It compares greedy, fixed-seed output against `benchmark/golden/`. A baseline is

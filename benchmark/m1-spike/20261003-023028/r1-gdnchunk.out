@@ -1,0 +1,5 @@
+0240)  add to the residual stream.
+
+**Do not reuse the Gemma 3 1B n-gram code path**  different hashing,
+different projection, different injection point.
+

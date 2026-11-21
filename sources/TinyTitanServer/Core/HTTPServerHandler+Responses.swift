@@ -121,7 +121,8 @@ extension ServerHTTPHandler {
                     }
                 }
                 do {
-                    let completion = try await self.coordinator.run(onQueued: onQueued) {
+                    let completion = try await self.lane(for: decoded.model).run(onQueued: onQueued)
+                    {
                         try Task.checkCancellation()
                         startStream()
                         try await streamState.waitUntilStarted()

@@ -45,7 +45,7 @@ extension RealForwardRunner {
             cfg.topKExperts <= moe.maxStreamedExperts,
             decodeExpertExecution == .hitFixup, expertIOSynchronization == .host,
             !splitKernelTiming, activationDumpDirectory == nil, prefetchTraceFD < 0,
-            !Self.probe2TraceEnabled, !Self.layerTraceFlag
+            !Self.probe2TraceEnabled, !Self.layerTraceFlag, !MLPCapture.shared.active
         else { return false }
         if residentLayers.count != cfg.numLayers {
             residentLayers = [ResidentLayer](repeating: ResidentLayer(), count: cfg.numLayers)

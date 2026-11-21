@@ -53,7 +53,7 @@ def run_menu(stdin: str | None) -> subprocess.CompletedProcess:
 class InstallMenuAnswerTests(unittest.TestCase):
     def test_an_empty_line_takes_the_default(self) -> None:
         result = run_menu("\n")
-        self.assertIn("INSTALLED ornith15-8bit", result.stdout + result.stderr)
+        self.assertIn("INSTALLED qwen36\n", result.stdout + result.stderr)
 
     def test_a_number_installs_that_row(self) -> None:
         result = run_menu("13\n")

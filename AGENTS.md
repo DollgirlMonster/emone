@@ -20,8 +20,9 @@ Qwen 3.6 35B-A3B, plus the dense Qwen 3.5 2B/4B/9B on either engine. **The READM
 is the authority on which checkpoints and widths are supported** — it changes more
 often than this file, so do not treat any list here as the current matrix.
 `Qwen 3.5 <size> <bits>` (keys `qwen35-2b/4b/9b`) are dense: no routed experts,
-nothing streamed from SSD. Ornith 1.5 8-bit is the default install and the default
-golden target; 6-bit is a withdrawn legacy format.
+nothing streamed from SSD. Qwen 3.6 35B-A3B 4-bit is the default install and the
+default golden target. Ornith 1.5 is a coding fine-tune kept as a fallback, not a
+stand-in for "the model"; 6-bit is a withdrawn legacy format.
 
 ## Working here
 
@@ -109,14 +110,14 @@ nothing depends on it.
 
 **Installing a model is a separate, operator-requested job** — never run it to
 satisfy a check, a gate, a benchmark or a release. The 4-bit download is about
-19.5 GB and the 8-bit about 36.9 GB. The installer streams the pinned checkpoint
+19.5 GB and the 8-bit about 37.8 GB (Qwen 3.6). The installer streams the pinned checkpoint
 without staging the full source, so it needs `HF_TOKEN` only if one is requested;
 cancellation preserves verified completed ranges, which `--resume` continues and
 `--discard-partial --output <model.gturbo>` removes.
 
 ```bash
-swift run -c release TinyTitanRepack --model ornith15-8bit --output models/ornith-1.5_35B_A3B_8Bit
-swift run -c release TinyTitanRepack --model ornith15-8bit --output models/ornith-1.5_35B_A3B_8Bit --resume
+swift run -c release TinyTitanRepack --model qwen36 --output models/qwen3.6_35B_A3B_4Bit
+swift run -c release TinyTitanRepack --model qwen36 --output models/qwen3.6_35B_A3B_4Bit --resume
 ```
 
 An installed model's `verified-install.json` receipt is bound to the absolute path
@@ -181,8 +182,8 @@ gate fails on a bare one. `tools/lint.sh <mode>` runs a single gate (`force-cast
 `tools/golden-baseline.sh --check <target>` compares greedy, fixed-seed generation
 against `benchmark/golden/`. It is the only check that exercises real inference, so
 run it for any change to the runtime or the model-load path — the unit tests never
-load a model. Ornith 1.5 8-bit (`8`) is the default target; bare `4` still means
-Ornith 1.5 4-bit. It counts as a model run: apply the preconditions above first. A
+load a model. Qwen 3.6 35B-A3B 4-bit (`qwen36-4`) is the default target; bare `8`
+and `4` still mean Ornith 1.5, because the stored baselines are named for it. It counts as a model run: apply the preconditions above first. A
 baseline is valid for one (machine, build, model) triple; re-capture only for a
 deliberate numerics change, never to make a mismatch go away.
 

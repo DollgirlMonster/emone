@@ -1,0 +1,2 @@
+round	arm	prefill_tok	prefill_s	prefill_tps	decode_tps	occupancy_pct	decode_hit_pct	decode_gib	max_rss_gib	swap_mb_delta	output_sha	exit	gpu_mhz	gpu_residency_pct	gpu_busy_s	gpu_gcycles
+1	splitwide	7879	150.85	52.2	n/a(1tok)	71	-	-	15.8	0	e3b0c44298fc	0	-	-	95.6	-

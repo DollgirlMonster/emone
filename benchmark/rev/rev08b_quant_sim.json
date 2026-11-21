@@ -1,0 +1,12 @@
+{
+ "bf16": {
+  "max_abs_dp": 0.0019597411155700684,
+  "argmax_flips": 0,
+  "questions": 11
+ },
+ "8": {
+  "max_abs_dp": 0.008567661046981812,
+  "argmax_flips": 1,
+  "questions": 11
+ }
+}

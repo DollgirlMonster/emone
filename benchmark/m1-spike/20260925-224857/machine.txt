@@ -1,0 +1,10 @@
+commit      0063869 on claude/beautiful-rubin-kl1wy2
+chip        Apple M1 Max
+memory      64 GiB
+gpu cores   32
+macOS       27.0 (26A428)
+swift       6.4
+model       /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
+model disk  Protocol=PCI-Express  Device Location=External  Solid State=Yes  
+arms        base mppwide gqa wide
+rounds      3, prompt 28000 chars, max-new 64, cooldown 20s

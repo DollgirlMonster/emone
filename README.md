@@ -209,6 +209,8 @@ Every model installs at **4-bit and 8-bit**:
 - **Qwen 3.5 9B**
 - **Qwen 3.5 4B**
 - **Qwen 3.5 2B**
+- **Qwen 3.5 0.8B** — a side model for session titles and one-word answers,
+  not a chat model (8-bit verified; 4-bit installs but is untested)
 
 
 

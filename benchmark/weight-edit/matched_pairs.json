@@ -1,0 +1,42 @@
+{
+ "about": "Matched productive / repetitive continuations of one prefix (after the MIT CSAIL Exp 8 recipe). Written by hand in the 0.8B's own thinking style: the repetitive branch re-verifies the line it just wrote, as its greedy loops do; the productive branch takes the next step. Both branches are scored by teacher forcing; the repetition direction is the mean residual difference over the branch tokens.",
+ "template": "<|im_start|>user\n{q}\nPlease reason step by step, and put your final answer within \\boxed{{}}.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+ "pairs": [
+  {
+   "q": "Matteo drove at 55 miles per hour for 4 hours. Shandy drove at 45 miles per hour for 10 hours. How many more miles did Shandy drive than Matteo?",
+   "prefix": "Here's a thinking process:\n\n1.  **Matteo's distance:** $55 \\times 4 = 220$ miles.\n2.  **Shandy's distance:** $45 \\times 10 = 450$ miles.\n",
+   "productive": "3.  **Difference:** $450 - 220 = 230$ miles.\n4.  So Shandy drove 230 more miles than Matteo. The answer is 230.\n",
+   "repetitive": "    *   Wait, let me check: $45 \\times 10 = 450$.\n    *   Wait, let me check: $45 \\times 10 = 450$.\n    *   Wait, let me check: $45 \\times 10 = 450$.\n"
+  },
+  {
+   "q": "A baker makes 24 muffins and sells them in boxes of 6. Each box costs $9. How much money does the baker make?",
+   "prefix": "Here's a thinking process:\n\n1.  **Number of boxes:** $24 / 6 = 4$ boxes.\n",
+   "productive": "2.  **Revenue:** $4 \\times 9 = 36$ dollars.\n3.  The baker makes $36 in total, so the final answer is 36.\n",
+   "repetitive": "    *   Let's check the division again: $24 / 6 = 4$.\n    *   Let's check the division again: $24 / 6 = 4$.\n    *   Let's check the division again: $24 / 6 = 4$.\n"
+  },
+  {
+   "q": "Wanda pumps 4500 gallons into an 18000-gallon tank and Ms. B pumps 3375 gallons. How many gallons are still needed to fill the tank?",
+   "prefix": "Here's a thinking process:\n\n1.  **Total pumped:** $4500 + 3375 = 7875$ gallons.\n",
+   "productive": "2.  **Remaining:** $18000 - 7875 = 10125$ gallons.\n3.  So 10125 gallons are still needed. The answer is 10125.\n",
+   "repetitive": "    *   Wait, is $4500 + 3375 = 7875$? Yes, $7875$.\n    *   Wait, is $4500 + 3375 = 7875$? Yes, $7875$.\n    *   Wait, is $4500 + 3375 = 7875$? Yes, $7875$.\n"
+  },
+  {
+   "q": "Lena reads 15 pages a day. Her book has 210 pages. How many days will it take her to finish the book?",
+   "prefix": "Here's a thinking process:\n\n1.  **Pages per day:** 15.\n2.  **Total pages:** 210.\n",
+   "productive": "3.  **Days needed:** $210 / 15 = 14$ days.\n4.  Lena finishes the book in 14 days, so the answer is 14.\n",
+   "repetitive": "    *   Let me re-read the prompt: she reads 15 pages a day.\n    *   Let me re-read the prompt: she reads 15 pages a day.\n    *   Let me re-read the prompt: she reads 15 pages a day.\n"
+  },
+  {
+   "q": "A shirt costs $40 and is on sale for 25% off. What is the sale price?",
+   "prefix": "Here's a thinking process:\n\n1.  **Discount:** $25\\%$ of $40$ is $0.25 \\times 40 = 10$ dollars.\n",
+   "productive": "2.  **Sale price:** $40 - 10 = 30$ dollars.\n3.  The shirt costs $30 on sale. The final answer is 30.\n",
+   "repetitive": "    *   Wait, $0.25 \\times 40 = 10$. Let me check again.\n    *   Wait, $0.25 \\times 40 = 10$. Let me check again.\n    *   Wait, $0.25 \\times 40 = 10$. Let me check again.\n"
+  },
+  {
+   "q": "Tom has 3 times as many marbles as Sam. Sam has 12 marbles. How many marbles do they have together?",
+   "prefix": "Here's a thinking process:\n\n1.  **Sam's marbles:** 12.\n2.  **Tom's marbles:** $3 \\times 12 = 36$.\n",
+   "productive": "3.  **Together:** $12 + 36 = 48$ marbles.\n4.  They have 48 marbles together, so the answer is 48.\n",
+   "repetitive": "    *   Let me verify: $3 \\times 12 = 36$. Correct.\n    *   Let me verify: $3 \\times 12 = 36$. Correct.\n    *   Let me verify: $3 \\times 12 = 36$. Correct.\n"
+  }
+ ]
+}

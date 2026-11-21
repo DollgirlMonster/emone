@@ -1,0 +1,52 @@
+commit      195d317 on claude/beautiful-rubin-kl1wy2
+chip        Apple M1 Max
+memory      64 GiB
+gpu cores   32
+macOS       27.0 (26A428)
+swift       6.4
+model       /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
+model disk  Protocol=PCI-Express  Device Location=External  Solid State=Yes  
+arms        base mppwide gqa wide
+rounds      3, prompt 28000 chars, max-new 64, cooldown 20s
+golden      not checked (model is not under models/)
+
+arm          prefill s          prefill tok/s  decode tok/s  occ %     dec hit %   rss GiB    swap MB   output
+base         228.07 202.61 202.01 34.5 38.9 39.0 n/a(7tok) n/a(7tok) n/a(7tok) 72 78 79  - - -       15.8 15.8 15.8 -8 -8 -8  reference
+mppwide      184.26 177.51 174.83 42.8 44.4 45.1 n/a(1tok) n/a(1tok) n/a(1tok) 77 77 77  - - -       15.8 15.8 15.8 -8 0 -8   DIFFERS from base
+gqa          179.93 173.79 172.88 43.8 45.3 45.6 n/a(7tok) n/a(7tok) n/a(7tok) 75 75 75  - - -       15.8 15.8 15.8 -8 0 0    same as base
+wide         157.10 151.59 150.16 50.2 52.0 52.5 n/a(1tok) n/a(1tok) n/a(1tok) 73 72 72  - - -       15.8 15.8 15.8 -24 -32 0 DIFFERS from base
+
+Values are per round, in round order; read the spread before the mean.
+  mppwide      prefill -15.2% vs base
+  gqa          prefill -16.8% vs base
+  wide         prefill -27.5% vs base
+
+GPU work, independent of the clock (--gpu-clock): busy s x MHz = Gcycles
+arm          GPU MHz            Gcycles
+base         1073 1236 1193     164.5 182.4 176.2
+mppwide      1096 1168 1246     140.7 143.7 150.9
+gqa          1116 1138 1266     139.3 135.5 150.6
+wide         1073 1112 1231     110.5 108.5 118.1
+  mppwide      GPU work -16.8% vs base
+  gqa          GPU work -18.7% vs base
+  wide         GPU work -35.6% vs base
+Compare kernels by Gcycles: prefill seconds also move with the clock.
+
+How to read it:
+  occ % on base well under 90 -> prefill is waiting on the SSD here, unlike the M3;
+     s256 and a >4096 chunk are the levers to build on.
+  c2048 much slower than base -> prefill cost tracks the chunk count;
+     an 8K/16K chunk (needs code: PrefillRuntimeConfig.maxChunkTokens) should pay.
+  s256 faster with swap +0 -> run with --expert-cache-slots 256 (or --ram-budget) now.
+  nobound faster -> the page-cache trade pays on this machine (TINYTITAN_BOUNDED_IO=0).
+  c2048 may legitimately differ in output (different chunking); the others should not.
+Spike 2:
+  coalesce MUST read "same as base"; if it does not, that is a bug, not a trade.
+  qqmm/hcfused/qsagpu may differ; a faster arm that differs needs a quality check
+     (benchmark/quant_perplexity_ab.py) before it becomes a default.
+  split is a diagnostic: read its prefill_split_* roles in r*-split.log, not its time.
+Spike 3:
+  mppwide/all may differ from base (different summation order); faster AND
+     close is the bar, then benchmark/quant_perplexity_ab.py before a default.
+  gqa MUST read "same as base": it keeps the per-head arithmetic exactly.
+  Read GPU work (Gcycles) first; prefill seconds move with the clock.

@@ -198,6 +198,28 @@ struct ModelCatalogTests {
         #expect(catalog.skipped.count == 1)
     }
 
+    /// Kev is a dense Qwen 3.5 the loader would accept, which is exactly why
+    /// the catalog must not list it: offered as a chat model it would answer
+    /// with text it was never trained to write.
+    @Test func aDecisionModelIsNotOfferedAsAChatModel() throws {
+        let root = try CatalogFixture.root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try CatalogFixture.install(
+            root, "kev-0.8b_8Bit", modelID: "kev-0.8b", family: "qwen3_5_dense", bits: 8)
+        try CatalogFixture.snapshot(
+            root, "kev-snapshot", config: CatalogFixture.cpuConfig(bits: 8, id: "kev-0.8b_8-Bit"))
+        for name in ["kev-0.8b_8Bit", "kev-snapshot"] {
+            try Data().write(
+                to: root.appendingPathComponent(name)
+                    .appendingPathComponent(ModelCatalog.decisionHeadFile))
+        }
+        try CatalogFixture.snapshot(root, "qwen3.5_2B_4Bit", config: CatalogFixture.cpuConfig())
+        let catalog = ModelCatalog.scan(directory: root)
+        #expect(catalog.entries.map(\.id) == ["qwen3.5-2b_4-Bit"])
+        #expect(catalog.skipped.count == 2)
+        #expect(catalog.skipped.allSatisfy { $0.reason.contains("System One decision model") })
+    }
+
     @Test func aDuplicateIdIsServedOnce() throws {
         let root = try CatalogFixture.root()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -313,7 +335,7 @@ struct ModelCatalogTests {
         let shipped = [
             "qwen3.6-35b-a3b", "ornith-1.5-35b-a3b", "qwen-agentworld",
             "kat-coder-v2.5", "qwen3.8-flash-next",
-            "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b", "qwen3.8-27b",
+            "qwen3.5-0.8b", "qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b", "qwen3.8-27b",
         ]
         for id in shipped {
             let name = ModelCatalog.displayNames[id]

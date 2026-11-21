@@ -102,6 +102,14 @@ final class PrefillAffineSimdgroupQMM {
     static let threads = 128
     /// Output tile edge for a width: 64 when N is whole 64-column tiles.
     static func tile(n: Int) -> Int { n % 64 == 0 ? 64 : 32 }
+
+    /// The edge for `t` input rows: 32 at 64 rows or fewer, where a 64-row
+    /// tile is mostly empty and N/64 threadgroups cannot fill the GPU (a
+    /// 3,584-wide projection is 56 of them). Each output element sums the
+    /// same K steps in the same order at either edge, so the choice moves
+    /// time, not bits (`GEMVRowsTests`). Measured on Kev-0.8B 8-bit, M1 Max:
+    /// a 35-41-token branch 31 -> 23 ms.
+    static func tile(n: Int, t: Int) -> Int { t <= 64 ? 32 : tile(n: n) }
     private let pipelines: [Int: [Int: MTLComputePipelineState]]
 
     init(context: MetalContext) throws {
@@ -131,9 +139,9 @@ final class PrefillAffineSimdgroupQMM {
         biases: MTLBuffer, biasesOffset: Int = 0,
         x: MTLBuffer, xOffset: Int = 0,
         y: MTLBuffer, yOffset: Int = 0,
-        t: Int, n: Int, k: Int, bits: Int
+        t: Int, n: Int, k: Int, bits: Int, forcedEdge: Int? = nil
     ) throws {
-        let edge = Self.tile(n: n)
+        let edge = forcedEdge ?? Self.tile(n: n, t: t)
         guard accepts(bits: bits, n: n, k: k), t > 0, let pipeline = pipelines[edge]?[bits]
         else {
             throw MetalError.commandEncoderFailed

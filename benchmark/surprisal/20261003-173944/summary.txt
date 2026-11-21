@@ -1,0 +1,10 @@
+
+model   /Volumes/Chai/TinyTitan/models/ornith-1.5_35B_A3B_4Bit
+commit  a48eab5f
+A env   (none), chunk 8192
+B env   TINYTITAN_PREFILL_DENSE_FLASH=1 TINYTITAN_PREFILL_GDN_CHUNK=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_PREFILL_ROUTED_QMM=1 TINYTITAN_PREFILL_SG_QMM=1, chunk 8192
+tokens  512
+A       mean nll 2.30477  perplexity 10.0219
+B       mean nll 2.29476  perplexity 9.9220
+B - A   mean dNLL -0.01001  (se 0.00714, t -1.40)  perplexity -0.996%
+verdict no measurable change (|t| < 2)

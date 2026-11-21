@@ -452,3 +452,166 @@ void hc_stream_mean_fp16(
     for (uint s = 0; s < S; ++s) { acc += float(row[s * D + d]); }
     out[tid] = half(acc / float(S));
 }
+
+// Runtime LoRA (TinyTitan-lmw.11): the rank-r delta y += scale * (x A^T) B^T
+// laid over a base projection's output, so an adapter runs over the resident
+// weights instead of a merged copy. Activations are fp16, the adapter fp32,
+// every product accumulated in fp32; y takes one rounding, when it is written.
+//
+// lora_down: u[t][j] = sum_k x[t][k] * A[j][k]. One threadgroup per tile of
+// LORA_DOWN_TILE tokens, one simdgroup per rank row j (r <= 32), lanes striding
+// k: each A element is read once per tile rather than once per token (per
+// token, every target's whole A was re-read -- ~19 MB a token on Rev-0.8B).
+constant constexpr uint LORA_DOWN_TILE = 2;
+
+[[kernel, max_total_threads_per_threadgroup(1024)]]
+void lora_down_fp16(
+    device const half*  x        [[buffer(0)]],
+    device const float* a        [[buffer(1)]],
+    device float*       u        [[buffer(2)]],
+    constant uint&      k        [[buffer(3)]],
+    constant uint&      rank     [[buffer(4)]],
+    constant uint&      xStride  [[buffer(5)]],
+    constant uint&      tokens   [[buffer(6)]],
+    uint  tile  [[threadgroup_position_in_grid]],
+    uint  j     [[simdgroup_index_in_threadgroup]],
+    uint  lane  [[thread_index_in_simdgroup]]
+) {
+    if (j >= rank) return;
+    const uint first = tile * LORA_DOWN_TILE;
+    const uint count = min(tokens - first, LORA_DOWN_TILE);
+    device const float* aj = a + j * k;
+    float acc[LORA_DOWN_TILE];
+    for (uint t = 0; t < LORA_DOWN_TILE; ++t) acc[t] = 0.0f;
+    for (uint c = lane; c < k; c += 32) {
+        const float w = aj[c];
+        for (uint t = 0; t < count; ++t) {
+            acc[t] += float(x[(first + t) * xStride + c]) * w;
+        }
+    }
+    for (uint t = 0; t < count; ++t) {
+        const float total = simd_sum(acc[t]);
+        if (lane == 0) u[(first + t) * rank + j] = total;
+    }
+}
+
+// lora_up: y[t][i] += scale * sum_j u[t][j] * B[i][j], with B stored
+// transposed ([rank x n], `bT`) so a simdgroup's lanes read adjacent rows.
+// One thread per (output row, tile of LORA_UP_TILE tokens): the row's rank
+// weights stay in registers across the tile, so B is read once per tile
+// instead of once per token (the per-(row, token) form re-read it per token,
+// uncoalesced, and was most of the adapter's cost), while tiles keep the
+// tokens parallel (a thread walking every token was latency-bound). u[t] is
+// the same for every thread of a token: a broadcast read.
+constant constexpr uint LORA_UP_TILE = 8;
+
+[[kernel, max_total_threads_per_threadgroup(256)]]
+void lora_up_fp16(
+    device half*        y        [[buffer(0)]],
+    device const float* bT       [[buffer(1)]],
+    device const float* u        [[buffer(2)]],
+    constant uint&      n        [[buffer(3)]],
+    constant uint&      rank     [[buffer(4)]],
+    constant uint&      yStride  [[buffer(5)]],
+    constant float&     scale    [[buffer(6)]],
+    constant uint&      tokens   [[buffer(7)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    const uint i = gid.x;
+    if (i >= n) return;
+    float b[32];
+    for (uint j = 0; j < rank; ++j) b[j] = bT[j * n + i];
+    const uint first = gid.y * LORA_UP_TILE;
+    const uint last = min(tokens, first + LORA_UP_TILE);
+    for (uint token = first; token < last; ++token) {
+        device const float* ut = u + token * rank;
+        float acc = 0.0f;
+        for (uint j = 0; j < rank; ++j) acc += ut[j] * b[j];
+        device half* out = y + token * yStride + i;
+        *out = half(float(*out) + scale * acc);
+    }
+}
+
+// Grouped runtime LoRA (TinyTitan-lmw.12): the deltas of up to four
+// projections that read the same input, as one down and one up dispatch over
+// (tokens x members) -- one dispatch fills the GPU where four small ones each
+// left it mostly idle. Same arithmetic as lora_down_fp16 / lora_up_fp16.
+struct LoRAGroupDown {
+    uint k, rank, xStride, members;
+    uint aOffset[4];     // floats into the adapter buffer
+    uint uOffset[4];     // floats into the scratch
+};
+
+[[kernel, max_total_threads_per_threadgroup(1024)]]
+void lora_down_group_fp16(
+    device const half*  x  [[buffer(0)]],
+    device const float* a  [[buffer(1)]],
+    device float*       u  [[buffer(2)]],
+    constant LoRAGroupDown& p [[buffer(3)]],
+    uint2 tg   [[threadgroup_position_in_grid]],
+    uint  j    [[simdgroup_index_in_threadgroup]],
+    uint  lane [[thread_index_in_simdgroup]]
+) {
+    const uint token = tg.x, m = tg.y;
+    if (j >= p.rank || m >= p.members) return;
+    device const half*  row = x + token * p.xStride;
+    device const float* aj  = a + p.aOffset[m] + j * p.k;
+    float acc = 0.0f;
+    for (uint c = lane; c < p.k; c += 32) acc += float(row[c]) * aj[c];
+    acc = simd_sum(acc);
+    if (lane == 0) u[p.uOffset[m] + token * p.rank + j] = acc;
+}
+
+struct LoRAGroupUp {
+    uint rank, tokens, members;
+    float scale;
+    uint rows[4];
+    uint yStride[4];
+    uint bOffset[4];     // floats into the adapter buffer (B transposed)
+    uint uOffset[4];     // floats into the scratch
+};
+
+[[kernel, max_total_threads_per_threadgroup(256)]]
+void lora_up_group_fp16(
+    device half*        y0 [[buffer(0)]],
+    device half*        y1 [[buffer(1)]],
+    device half*        y2 [[buffer(2)]],
+    device half*        y3 [[buffer(3)]],
+    device const float* bT [[buffer(4)]],
+    device const float* u  [[buffer(5)]],
+    constant LoRAGroupUp& p [[buffer(6)]],
+    uint3 gid [[thread_position_in_grid]]
+) {
+    const uint i = gid.x, m = gid.z;
+    if (m >= p.members || i >= p.rows[m]) return;
+    device half* y = m == 0 ? y0 : (m == 1 ? y1 : (m == 2 ? y2 : y3));
+    const uint n = p.rows[m];
+    float b[32];
+    for (uint j = 0; j < p.rank; ++j) b[j] = bT[p.bOffset[m] + j * n + i];
+    const uint first = gid.y * LORA_UP_TILE;
+    const uint last = min(p.tokens, first + LORA_UP_TILE);
+    for (uint token = first; token < last; ++token) {
+        device const float* ut = u + p.uOffset[m] + token * p.rank;
+        float acc = 0.0f;
+        for (uint j = 0; j < p.rank; ++j) acc += ut[j] * b[j];
+        device half* out = y + token * p.yStride[m] + i;
+        *out = half(float(*out) + p.scale * acc);
+    }
+}
+
+// Weight patches (TinyTitan-bbm.3): scale each attention head's output before
+// o_proj, `x[t, h, d] *= scale[h]`, in place over `tokens` rows of
+// `heads * dim` halves. Equivalent to scaling that head's o_proj columns, which
+// a low-rank delta cannot express (a full head is rank headDim).
+kernel void head_scale_fp16(
+    device half*         x      [[buffer(0)]],
+    device const float*  scale  [[buffer(1)]],
+    constant uint&       heads  [[buffer(2)]],
+    constant uint&       dim    [[buffer(3)]],
+    constant uint&       total  [[buffer(4)]],
+    uint                 tid    [[thread_position_in_grid]]
+) {
+    if (tid >= total) return;
+    const uint h = (tid / dim) % heads;
+    x[tid] = half(float(x[tid]) * scale[h]);
+}

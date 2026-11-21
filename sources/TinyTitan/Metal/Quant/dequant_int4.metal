@@ -179,6 +179,38 @@ static inline void dequant_int4_gemv_simd_body(
     }
 }
 
+// `dequant_int4_gemv_simd` over many inputs in one dispatch, 4 inputs per
+// simdgroup pass: the same body, called once per input, so every output is
+// the same bits (`GEMVRowsTests`); the row's weights are re-read from cache
+// rather than memory, and the per-token dispatches of the coalesced rows path
+// -- one per input per projection on a short prefill chunk -- become one.
+constant constexpr uint kInt4ManyXBlock = 4;
+
+kernel void dequant_int4_gemv_simd_many_x(
+    device const uint8_t* W       [[buffer(0)]],
+    device const bfloat*  scales  [[buffer(1)]],
+    device const bfloat*  biases  [[buffer(2)]],
+    device const half*    x       [[buffer(3)]],
+    device half*          y       [[buffer(4)]],
+    constant uint&        M       [[buffer(5)]],
+    constant uint&        N       [[buffer(6)]],
+    constant uint&        count   [[buffer(7)]],
+    constant uint&        xStride [[buffer(8)]],
+    constant uint&        yStride [[buffer(9)]],
+    uint2                 tg      [[threadgroup_position_in_grid]],
+    uint                  sg_idx  [[simdgroup_index_in_threadgroup]],
+    uint                  lane    [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8;
+    const uint first = tg.y * kInt4ManyXBlock;
+    const uint inputs = min(kInt4ManyXBlock, count - first);
+    for (uint j = 0; j < inputs; ++j) {
+        dequant_int4_gemv_simd_body(W, scales, biases, x + (first + j) * xStride,
+                                    y + (first + j) * yStride, int4_fc_m(M), int4_fc_n(N),
+                                    rows_per_tg, tg.x, sg_idx, lane);
+    }
+}
+
 kernel void dequant_int4_gemv_simd(
     device const uint8_t* W      [[buffer(0)]],
     device const bfloat*  scales [[buffer(1)]],

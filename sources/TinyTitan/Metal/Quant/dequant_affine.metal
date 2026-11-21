@@ -134,3 +134,62 @@ kernel void affine_quant_embedding_lookup(
         * float(row_scales[group]) + float(row_biases[group]);
     output[element] = half(value * out_scale);
 }
+
+// `affine_quant_gemv_simd` over many inputs in one dispatch, 4 inputs per
+// simdgroup pass: each weight pair is unpacked once and applied to every
+// input of the block. The coalesced rows path issued one dispatch per input,
+// so a short prefill chunk paid a dispatch per token per projection and
+// unpacked every weight once per token. Each (row, input) accumulator runs the
+// per-input kernel's exact sequence -- same pairs, same two fmas, one
+// simd_sum -- so every output is the same bits (`GEMVRowsTests`).
+constant constexpr uint kAffineManyXBlock = 4;
+
+kernel void affine_quant_gemv_simd_many_x(
+    device const uint*   weights [[buffer(0)]],
+    device const bfloat* scales  [[buffer(1)]],
+    device const bfloat* biases  [[buffer(2)]],
+    device const half*   x       [[buffer(3)]],
+    device half*         y       [[buffer(4)]],
+    constant uint&       rows    [[buffer(5)]],
+    constant uint&       columns [[buffer(6)]],
+    constant uint&       count   [[buffer(7)]],
+    constant uint&       xStride [[buffer(8)]],
+    constant uint&       yStride [[buffer(9)]],
+    uint2 tg     [[threadgroup_position_in_grid]],
+    uint sg_idx  [[simdgroup_index_in_threadgroup]],
+    uint lane    [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_threadgroup = 8;
+    const uint row = tg.x * rows_per_threadgroup + sg_idx;
+    if (row >= rows) return;
+    const uint first_input = tg.y * kAffineManyXBlock;
+    const uint inputs = min(kAffineManyXBlock, count - first_input);
+
+    const uint bits = affine_quant_bits();
+    const uint groups_per_row = columns / kAffineGroupSize;
+    const uint words_per_row = (columns * bits) / 32u;
+    device const uint* row_weights = weights + row * words_per_row;
+    device const bfloat* row_scales = scales + row * groups_per_row;
+    device const bfloat* row_biases = biases + row * groups_per_row;
+    device const half* xb = x + first_input * xStride;
+
+    float accumulator[kAffineManyXBlock];
+    for (uint j = 0; j < kAffineManyXBlock; ++j) accumulator[j] = 0.0f;
+    for (uint group = 0; group < groups_per_row; ++group) {
+        const uint first = group * kAffineGroupSize + lane * 2u;
+        const float q0 = float(affine_quant_value(row_weights, first, bits));
+        const float q1 = float(affine_quant_value(row_weights, first + 1u, bits));
+        const float scale = float(row_scales[group]);
+        const float bias = float(row_biases[group]);
+        for (uint j = 0; j < inputs; ++j) {
+            const float x0 = float(xb[j * xStride + first]);
+            const float x1 = float(xb[j * xStride + first + 1u]);
+            accumulator[j] = fma(scale, q0 * x0 + q1 * x1, accumulator[j]);
+            accumulator[j] = fma(bias, x0 + x1, accumulator[j]);
+        }
+    }
+    for (uint j = 0; j < inputs; ++j) {
+        const float total = simd_sum(accumulator[j]);
+        if (lane == 0u) y[(first_input + j) * yStride + row] = half(total);
+    }
+}

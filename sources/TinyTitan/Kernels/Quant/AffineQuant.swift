@@ -43,12 +43,23 @@ final class AffineQuantGEMV {
     let weightBits: Int
     private let pipeline: MTLComputePipelineState
     private let twoRowPipeline: MTLComputePipelineState
+    /// Many inputs in one dispatch, 4 per simdgroup pass (see `encodeRows`).
+    private let manyXPipeline: MTLComputePipelineState
+    static let manyXBlock = 4
 
     init(context: MetalContext, weightBits: Int) throws {
         precondition([4, 8].contains(weightBits))
         self.weightBits = weightBits
         self.pipeline = try context.pipeline(
             "affine_quant_gemv_simd",
+            constants: [
+                MetalFunctionConstant(
+                    index: 100,
+                    value: .uint32(UInt32(weightBits)))
+            ],
+            maxTotalThreadsPerThreadgroup: 256)
+        self.manyXPipeline = try context.pipeline(
+            "affine_quant_gemv_simd_many_x",
             constants: [
                 MetalFunctionConstant(
                     index: 100,
@@ -96,6 +107,33 @@ final class AffineQuantGEMV {
         precondition(weightsOffset.isMultiple(of: MemoryLayout<UInt32>.alignment))
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
+        }
+        let half = MemoryLayout<Float16>.stride
+        if rows.count > 1, rows.xRowStride % half == 0, rows.yRowStride % half == 0 {
+            // Every input in one dispatch, each weight pair unpacked once per
+            // 4 inputs; the same per-(row, input) arithmetic, so the same bits.
+            encoder.setComputePipelineState(manyXPipeline)
+            encoder.setBuffer(weights, offset: weightsOffset, index: 0)
+            encoder.setBuffer(scales, offset: scalesOffset, index: 1)
+            encoder.setBuffer(biases, offset: biasesOffset, index: 2)
+            encoder.setBuffer(x, offset: rows.xOffset, index: 3)
+            encoder.setBuffer(y, offset: rows.yOffset, index: 4)
+            var params = (
+                m, n, UInt32(rows.count), UInt32(rows.xRowStride / half),
+                UInt32(rows.yRowStride / half)
+            )
+            encoder.setBytes(&params.0, length: 4, index: 5)
+            encoder.setBytes(&params.1, length: 4, index: 6)
+            encoder.setBytes(&params.2, length: 4, index: 7)
+            encoder.setBytes(&params.3, length: 4, index: 8)
+            encoder.setBytes(&params.4, length: 4, index: 9)
+            encoder.dispatchThreadgroups(
+                MTLSize(
+                    width: (Int(m) + 7) / 8,
+                    height: (rows.count + Self.manyXBlock - 1) / Self.manyXBlock, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            encoder.endEncoding()
+            return
         }
         encoder.setComputePipelineState(pipeline)
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)

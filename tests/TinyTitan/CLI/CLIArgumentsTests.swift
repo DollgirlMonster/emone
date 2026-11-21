@@ -215,6 +215,18 @@ import TinyTitan
         }
     }
 
+    @Test func weightPatchIsOptionalAndTakesADirectory() throws {
+        let plain = try Args.parse(["--model", "m.gturbo", "--prompt", "hi"])
+        #expect(plain.weightPatch == nil)
+        let patched = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi", "--weight-patch", "patches/anti-loop",
+        ])
+        #expect(patched.weightPatch == "patches/anti-loop")
+        #expect(throws: ArgsError.missingValue(flag: "--weight-patch")) {
+            _ = try Args.parse(["--model", "m.gturbo", "--prompt", "hi", "--weight-patch"])
+        }
+    }
+
     @Test func helpListsExactlyThePublicOptions() {
         let expected: Set<String> = [
             "--model", "--prompt", "--messages-file", "--max-new", "--max-context",
@@ -223,7 +235,7 @@ import TinyTitan
             "--seed", "--stop", "--quiet", "--help", "--ignore-eos",
             "--rdadvise", "--expert-cache-slots", "--prefill-chunk", "--concise",
             "--kv-bits", "--rope-scaling", "--thinking", "--reasoning-effort",
-            "--score", "--score-out", "--live-trace",
+            "--score", "--score-out", "--live-trace", "--weight-patch",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
         let options = Set(words.map(String.init).filter { $0.hasPrefix("--") })
