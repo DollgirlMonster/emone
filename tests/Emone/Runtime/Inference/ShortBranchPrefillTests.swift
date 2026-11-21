@@ -62,13 +62,14 @@ import Testing
     }
 
     @Test func theThresholdIsTheMeasuredCrossoverAtBothEnds() {
-        #expect(ShortBranchRouting.groupedMinRows(heldContext: 0) == 37)
-        #expect(ShortBranchRouting.groupedMinRows(heldContext: 1024) == 37)
-        #expect(ShortBranchRouting.groupedMinRows(heldContext: 16384) == 61)
-        #expect(ShortBranchRouting.groupedMinRows(heldContext: 65536) == 61)
-        #expect(ShortBranchRouting.groupedMinRows(heldContext: 4096) == 37)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 0) == 15)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 1024) == 15)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 4096) == 15)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 16384) == 21)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 65536) == 21)
         // Interpolated in log2(N): 8192 is halfway from 4096 to 16384.
-        #expect(ShortBranchRouting.groupedMinRows(heldContext: 8192) == 49)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 8192) == 18)
+        #expect(ShortBranchRouting.groupedEdge(rows: 64, heldContext: 1024) == 32)
     }
 
     @Test func theThresholdNeverFallsAsTheContextGrows() {
@@ -96,12 +97,35 @@ import Testing
         #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "-1"]) == nil)
         #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "lots"]) == nil)
         #expect(R.groupedMinRows(heldContext: 1024, override: 5) == 5)
-        #expect(R.groupedMinRows(heldContext: 1024, override: nil) == 37)
+        #expect(R.groupedMinRows(heldContext: 1024, override: nil) == 15)
     }
 
     @Test func theGroupedGridCoversTheWorstCaseWorkList() {
         // One partial item per live expert plus one per full 64 rows.
         #expect(ShortBranchGroupedMoE.workCapacity(pairs: 64, numExperts: 256) == 66)
         #expect(ShortBranchGroupedMoE.workCapacity(pairs: 1024, numExperts: 256) == 273)
+    }
+
+    @Test func theEdgeOverrideTakesOnlyAnEdgeWithKernels() {
+        typealias R = ShortBranchRouting
+        #expect(R.edgeOverride(environment: [:]) == nil)
+        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "16"]) == 16)
+        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": " 32"]) == 32)
+        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "64"]) == 64)
+        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "8"]) == nil)
+        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "big"]) == nil)
+        for rows in [1, 8, 16, 37, 64, 128] {
+            for context in [0, 1024, 16384, 65536] {
+                #expect(
+                    ShortBranchGroupedMoE.edges.contains(
+                        R.groupedEdge(rows: rows, heldContext: context)))
+            }
+        }
+    }
+
+    @Test func aSmallerEdgeSizesTheGridForMoreItems() {
+        #expect(ShortBranchGroupedMoE.workCapacity(pairs: 1024, numExperts: 256, edge: 16) == 321)
+        #expect(ShortBranchGroupedMoE.workCapacity(pairs: 1024, numExperts: 256, edge: 32) == 289)
+        #expect(ShortBranchGroupedMoE.workCapacity(pairs: 64, numExperts: 256, edge: 16) == 69)
     }
 }

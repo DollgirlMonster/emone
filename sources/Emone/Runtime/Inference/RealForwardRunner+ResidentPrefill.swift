@@ -197,7 +197,7 @@ extension RealForwardRunner {
             hidden: scratch.routedX, routePartials: scratch.routePartials,
             expertAddresses: addresses, residentBuffers: residentLayers[L].buffers,
             offsets: routedOffsets, tokens: t, topK: cfg.topKExperts, d: D, f: f,
-            numExperts: cfg.numExperts,
+            numExperts: cfg.numExperts, edge: shortBranchGroupedEdge,
             split: { [self] buffer, role in try prefillSplitPoint(&buffer, role: role) })
         try prefillMoE.encodeReduceTokenMajor(
             commandBuffer: cb, routePartials: scratch.routePartials,

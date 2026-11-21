@@ -15,13 +15,16 @@ import Metal
 /// path's token-major reduce. The work list is padded to its worst case, so
 /// nothing about the grid depends on the routing and nothing is read back.
 final class ShortBranchGroupedMoE {
-    static let edge = 64
+    /// Work-item edges (rows per QMM tile) with kernels: the tile path's 64,
+    /// and 32 / 16 for branches whose experts hold few rows each.
+    static let edges = [16, 32, 64]
     static let gateUpColumns = 32
-    static let downEdge = 64
+    static let downColumns = 64
 
     private let group: MTLComputePipelineState
-    private let gateUp: MTLComputePipelineState
-    private let down: MTLComputePipelineState
+    /// Per edge: gate+up (edge x 32 tiles) and down (edge x 64).
+    private let gateUp: [Int: MTLComputePipelineState]
+    private let down: [Int: MTLComputePipelineState]
     private let gather: MTLComputePipelineState
     private let scatter: MTLComputePipelineState
     private let device: MTLDevice
@@ -38,10 +41,16 @@ final class ShortBranchGroupedMoE {
             MetalFunctionConstant(index: 78, value: .uint32(UInt32(weightBits))),
         ]
         self.group = try context.pipeline("short_branch_group_pairs")
-        self.gateUp = try context.pipeline(
-            "short_branch_qmm_gate_up_\(Self.edge)x\(Self.gateUpColumns)", constants: constants)
-        self.down = try context.pipeline(
-            "short_branch_qmm_\(Self.downEdge)x\(Self.downEdge)", constants: constants)
+        var gateUp: [Int: MTLComputePipelineState] = [:]
+        var down: [Int: MTLComputePipelineState] = [:]
+        for edge in Self.edges {
+            gateUp[edge] = try context.pipeline(
+                "short_branch_qmm_gate_up_\(edge)x\(Self.gateUpColumns)", constants: constants)
+            down[edge] = try context.pipeline(
+                "short_branch_qmm_\(edge)x\(Self.downColumns)", constants: constants)
+        }
+        self.gateUp = gateUp
+        self.down = down
         self.gather = try context.pipeline("prefill_routed_gather_rows")
         self.scatter = try context.pipeline("prefill_routed_scatter_rows")
         self.device = context.device
@@ -49,7 +58,7 @@ final class ShortBranchGroupedMoE {
 
     /// Work items the grid is sized for: at most one partial item per live
     /// expert, plus one per full `edge` rows.
-    static func workCapacity(pairs: Int, numExperts: Int) -> Int {
+    static func workCapacity(pairs: Int, numExperts: Int, edge: Int = 64) -> Int {
         min(numExperts, pairs) + pairs / edge + 1
     }
 
@@ -71,7 +80,8 @@ final class ShortBranchGroupedMoE {
         }
         sortedPairs = try make(pairs * 16, "shortBranch.grouped.pairs")
         work = try make(
-            Self.workCapacity(pairs: pairs, numExperts: numExperts) * 16, "shortBranch.grouped.work"
+            Self.workCapacity(pairs: pairs, numExperts: numExperts, edge: Self.edges.min() ?? 16)
+                * 16, "shortBranch.grouped.work"
         )
         rowsIn = try make(pairs * d * half, "shortBranch.grouped.rowsIn")
         activated = try make(pairs * f * half, "shortBranch.grouped.act")
@@ -87,7 +97,7 @@ final class ShortBranchGroupedMoE {
         hidden: MTLBuffer, routePartials: MTLBuffer,
         expertAddresses: MTLBuffer, residentBuffers: [MTLBuffer],
         offsets: MoEExpertOffsets,
-        tokens: Int, topK: Int, d: Int, f: Int, numExperts: Int,
+        tokens: Int, topK: Int, d: Int, f: Int, numExperts: Int, edge: Int = 64,
         split: (inout MTLCommandBuffer, String) throws -> Void = { _, _ in }
     ) throws {
         let pairs = tokens * topK
@@ -96,7 +106,10 @@ final class ShortBranchGroupedMoE {
         guard let sortedPairs, let work, let rowsIn, let activated, let rowsOut else {
             throw MetalError.bufferAllocationFailed("shortBranch.grouped")
         }
-        let capacity = Self.workCapacity(pairs: pairs, numExperts: numExperts)
+        guard let gateUpPSO = gateUp[edge], let downPSO = down[edge] else {
+            throw MetalError.missingFunction("short_branch_qmm edge \(edge)")
+        }
+        let capacity = Self.workCapacity(pairs: pairs, numExperts: numExperts, edge: edge)
 
         guard let g = cb.makeComputeCommandEncoder() else { throw MetalError.commandEncoderFailed }
         g.setComputePipelineState(group)
@@ -108,12 +121,12 @@ final class ShortBranchGroupedMoE {
         var k = UInt32(topK)
         var experts = UInt32(numExperts)
         var cap = UInt32(capacity)
-        var edge = UInt32(Self.edge)
+        var edgeRows = UInt32(edge)
         g.setBytes(&pairCount, length: 4, index: 4)
         g.setBytes(&k, length: 4, index: 5)
         g.setBytes(&experts, length: 4, index: 6)
         g.setBytes(&cap, length: 4, index: 7)
-        g.setBytes(&edge, length: 4, index: 8)
+        g.setBytes(&edgeRows, length: 4, index: 8)
         g.dispatchThreadgroups(
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(
@@ -136,8 +149,8 @@ final class ShortBranchGroupedMoE {
             offsets.downWOff, offsets.downSOff, offsets.downBOff, 0, 0, 0, 64,
         ]
         for (pso, x, y, params, n, columns, role) in [
-            (gateUp, rowsIn, activated, gateUpParams, f, Self.gateUpColumns, "gate_up"),
-            (down, activated, rowsOut, downParams, d, Self.downEdge, "down"),
+            (gateUpPSO, rowsIn, activated, gateUpParams, f, Self.gateUpColumns, "gate_up"),
+            (downPSO, activated, rowsOut, downParams, d, Self.downColumns, "down"),
         ] {
             guard let enc = cb.makeComputeCommandEncoder() else {
                 throw MetalError.commandEncoderFailed

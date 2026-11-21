@@ -323,6 +323,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     var shortBranchGroupedStorage: ShortBranchGroupedMoE?
     /// Set by a short branch whose row count the router sends to the grouped stage.
     var shortBranchGroupedChosen = false
+    /// Rows per QMM tile the grouped stage uses for this branch.
+    var shortBranchGroupedEdge = 64
     let prefillFinalRowHead: PrefillFinalRowHeadInt4
 
     // Scratch — preallocated per spec'd D / F / vocab.
