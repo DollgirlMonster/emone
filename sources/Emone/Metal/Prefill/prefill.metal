@@ -904,8 +904,11 @@ static inline void prefill_routed_qmm_body(
         threadgroup_barrier(mem_flags::mem_threadgroup);
         // Each task: 8 halves of one row of the step (4 tasks per row).
         _Pragma("clang loop unroll(full)")
-        for (short t = 0; t < BM / 32; ++t) {
+        // BM >= 32: BM / 32 passes of all 128 threads (unchanged). BM = 16
+        // (the short branch's small tiles): one pass of the first 64.
+        for (short t = 0; t < (BM >= 32 ? BM / 32 : 1); ++t) {
             const uint task = lid + t * 128u;
+            if (BM < 32 && task >= uint(BM) * 4u) break;
             const uint lr = task / 4u;
             const uint lk = (task % 4u) * 8u;
             threadgroup half* dx = xs + lr * kRoutedQMMLd + lk;
@@ -1181,6 +1184,10 @@ kernel void short_branch_qmm_##BM_##x##BN_(                                     
 }
 SHORT_BRANCH_QMM(64, 32)
 SHORT_BRANCH_QMM(64, 64)
+SHORT_BRANCH_QMM(32, 32)
+SHORT_BRANCH_QMM(32, 64)
+SHORT_BRANCH_QMM(16, 32)
+SHORT_BRANCH_QMM(16, 64)
 #undef SHORT_BRANCH_QMM
 
 /// The same tile for a dense projection: y[M, N] = x[M, K] . w[N, K]^T, with

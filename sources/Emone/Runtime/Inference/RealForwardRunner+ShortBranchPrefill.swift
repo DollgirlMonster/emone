@@ -89,26 +89,33 @@ public struct ShortBranchPrefillReport: Sendable, Equatable {
     public let gpuElapsedNanos: UInt64
     /// Rows above which this call's routed stage was routed to the grouped stage.
     public let groupedMinRows: Int
+    /// Rows per QMM tile of the grouped stage (meaningful when it ran).
+    public let groupedEdge: Int
 }
 
 /// Which routed stage a resident short branch takes: per row up to
-/// `groupedMinRows(heldContext:)` rows, grouped by expert above.
+/// `groupedMinRows(heldContext:)` rows, grouped by expert above, on 32-row
+/// QMM tiles (`groupedEdge`).
 ///
-/// The per-row stage costs ~5.5-6.5 ms a row on ~40-55 ms fixed; the grouped
-/// one ~2.4-3.8 ms a row on ~160 ms fixed, so it wins only past a crossover,
-/// which moves up with the held context. Measured on the M1 Max, Qwen 3.6
-/// 35B-A3B 4-bit, `fastpath` exact-row sweep, 2026-11-21 (per-process median
-/// of 5, median of 3 interleaved rounds; per-row / grouped ms):
-/// - N = 1024: 32 rows 216.5 / 230.3, 40 rows 275.3 / 268.3 -> 37 rows.
-/// - N = 4096: 32 rows 217.1 / 237.8, 40 rows 278.1 / 273.2, 48 rows
-///   317.6 / 290.6 -> 37 rows, the same as 1k.
-/// - N = 16384: 56 rows 384.4 / 392.6, 64 rows 429.5 / 428.8 -> 61 rows.
+/// The per-row stage reads every picked expert once per row; the grouped one
+/// once per call but pays a fixed cost for its tiles, so it wins past a
+/// crossover that moves up with the held context. Measured on the M1 Max,
+/// Qwen 3.6 35B-A3B 4-bit, `fastpath` exact-row sweep, 2026-11-21 (median of 5
+/// per process, median of 3 interleaved rounds; per-row / grouped at edge 32,
+/// ms):
+/// - N = 1024: 16 rows 137.1 / 137.9, 24 rows 178.2 / 154.1 -> 15 rows (a
+///   tie at 16).
+/// - N = 4096 (two rounds): 16 rows 139.5-143.4 / 136.2-136.4 -> grouped from
+///   16; 8 rows not measured, so 15 as at 1k.
+/// - N = 16384: 16 rows 148.7 / 163.5, 24 rows 191.5 / 184.8 -> 21 rows.
 /// Between 4k and 16k the threshold is interpolated in log2(N), not measured.
+/// Edge 32 is the fastest grouped edge from 16 rows up (16 is within 1.7 ms at
+/// 8 rows, where per-row wins anyway; 64 is 100-130 ms slower at 96-128 rows).
 public enum ShortBranchRouting {
     static let nearContext = 4096
-    static let nearRows = 37
+    static let nearRows = 15
     static let farContext = 16384
-    static let farRows = 61
+    static let farRows = 21
 
     /// Rows above which the grouped stage is faster at `heldContext` tokens.
     public static func groupedMinRows(heldContext: Int) -> Int {
@@ -138,6 +145,19 @@ public enum ShortBranchRouting {
     public static func groupedMinRows(heldContext: Int, override: Int?) -> Int {
         override ?? groupedMinRows(heldContext: heldContext)
     }
+
+    /// The grouped stage's work-item edge (rows per QMM tile): 32 at every
+    /// measured size (see the type comment).
+    public static func groupedEdge(rows: Int, heldContext: Int) -> Int { 32 }
+
+    /// `EMONE_SHORT_BRANCH_GROUPED_EDGE=16|32|64`; nil for unset or any other value.
+    public static func edgeOverride(environment: [String: String]) -> Int? {
+        guard let raw = environment["EMONE_SHORT_BRANCH_GROUPED_EDGE"],
+            let edge = Int(raw.trimmingCharacters(in: .whitespaces)),
+            ShortBranchGroupedMoE.edges.contains(edge)
+        else { return nil }
+        return edge
+    }
 }
 
 extension RealForwardRunner {
@@ -149,6 +169,8 @@ extension RealForwardRunner {
     static let shortBranchForChunkedPrefill =
         ProcessInfo.processInfo.environment["EMONE_SHORT_BRANCH"] == "1"
     static let shortBranchGroupedOverride = ShortBranchRouting.override(
+        environment: ProcessInfo.processInfo.environment)
+    static let shortBranchGroupedEdgeOverride = ShortBranchRouting.edgeOverride(
         environment: ProcessInfo.processInfo.environment)
 
     /// Prefills a short branch of `tokens` at `startPosition` of `slot`,
@@ -204,6 +226,9 @@ extension RealForwardRunner {
         let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         residentPrefillDeferLastWait = short
         shortBranchGroupedChosen = short && t > groupedMinRows
+        shortBranchGroupedEdge =
+            Self.shortBranchGroupedEdgeOverride
+            ?? ShortBranchRouting.groupedEdge(rows: t, heldContext: startPosition)
         let result: PrefillResult
         let span: ResidentPrefillGPUSpan
         do {
@@ -237,7 +262,7 @@ extension RealForwardRunner {
             warmedExperts: warmedExperts, warmNanos: warmNanos, wallNanos: wall,
             gpuBusyNanos: UInt64(max(0, span.busySeconds) * 1e9),
             gpuElapsedNanos: UInt64(max(0, span.elapsedSeconds) * 1e9),
-            groupedMinRows: groupedMinRows)
+            groupedMinRows: groupedMinRows, groupedEdge: shortBranchGroupedEdge)
         if Self.shortBranchTrace { writeShortBranchTrace(report, startPosition: startPosition) }
         return report
     }
@@ -288,7 +313,8 @@ extension RealForwardRunner {
             + " wall_ms=\(ms(report.wallNanos))"
             + " gpu_busy_ms=\(ms(report.gpuBusyNanos))"
             + " gpu_elapsed_ms=\(ms(report.gpuElapsedNanos))"
-            + " grouped_min_rows=\(report.groupedMinRows == Int.max ? "never" : String(report.groupedMinRows))\n"
+            + " grouped_min_rows=\(report.groupedMinRows == Int.max ? "never" : String(report.groupedMinRows))"
+            + " grouped_edge=\(report.groupedEdge)\n"
         FileHandle.standardError.write(Data(line.utf8))
     }
 }
