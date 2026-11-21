@@ -8,7 +8,7 @@ arch-path) pass. Everything below marked *to measure* is a prediction.
 ## The problem
 
 Rev2's lmw.15 extraction (M1 Max, Qwen 3.6 35B-A3B 4-bit, ANE off, small QMM
-on, `TinyTitanCLI features`, 825 decision-v7 test questions) fitted wall time
+on, `EmoneCLI features`, 825 decision-v7 test questions) fitted wall time
 per prefill call:
 
 | call | fixed per call | per token | typical size |
@@ -73,13 +73,13 @@ call of at most 128 tokens that fits one chunk it:
 
 Switches (renamed `EMONE_*` after the rename):
 
-- `TINYTITAN_SHORT_BRANCH=1` sends every `prefillChunked` call of at most 128
+- `EMONE_SHORT_BRANCH=1` sends every `prefillChunked` call of at most 128
   tokens through `runShortBranchPrefill`. Off by default. It exists so the
   uncommitted fork harness (`fastpath`, `features`) can A/B the path on one
   binary without code changes.
-- `TINYTITAN_SHORT_BRANCH_TRACE=1` prints one line per call:
+- `EMONE_SHORT_BRANCH_TRACE=1` prints one line per call:
   `[short-branch] rows= start= stage= warm_ms= warmed= wall_ms= gpu_busy_ms= gpu_elapsed_ms=`.
-- `TINYTITAN_PREFILL_RESIDENT_ROWS=0` still turns the per-row stage off
+- `EMONE_PREFILL_RESIDENT_ROWS=0` still turns the per-row stage off
   everywhere, short branches included; a smaller value caps them too.
 
 Not changed: attention, GDN, the shared expert, the dense projections, the

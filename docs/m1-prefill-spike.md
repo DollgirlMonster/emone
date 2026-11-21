@@ -13,7 +13,7 @@ internal SSD; this is the first record from an M1. Driver: `tools/m1_spike.sh`
 | base | 199.23, 202.44 | -- | **39 tok/s** |
 | s128 (128 expert slots) | 209.42, 194.46 | +0.6% | noise |
 | s256 (256 slots, ~34 GiB) | 211.58, 197.34 | +1.8% | swapped 8 GB, 2x sys time |
-| nobound (`TINYTITAN_BOUNDED_IO=0`) | 199.91, 199.01 | -0.7% | noise |
+| nobound (`EMONE_BOUNDED_IO=0`) | 199.91, 199.01 | -0.7% | noise |
 | s256nobound | 217.60, 214.86 | +7.7% | decode collapsed (0.1 tok/s) |
 | c2048 (half chunk) | 221.93, 234.36 | +13.6% | ~13 s per extra chunk |
 
@@ -38,23 +38,23 @@ real: going 4096 -> 2048 added ~8 s of GPU and ~19 s of non-GPU time.
   sigmoid) runs one GEMV plus one elementwise dispatch per token, each in its own
   encoder: 8,192 encoders per layer-chunk. The per-token GEMV fallback for a
   q-family projection (attention `q_proj`, GDN `in_proj_qkv`) and for
-  bf16-promoted projections does the same. `TINYTITAN_PREFILL_COALESCE=1` keeps
+  bf16-promoted projections does the same. `EMONE_PREFILL_COALESCE=1` keeps
   every kernel, argument and grid and puts a loop's dispatches in one encoder
   (`GEMVRows`); `GEMVRowsTests` requires the result to be byte-identical.
 - **Which projection path an M1 takes was never logged.** The Metal 4 tensor-op
   QMM (`MPPPrefillInt4QMM`) is optional; when it does not compile, `.q` falls to
-  one GEMV per token. With `TINYTITAN_KERNEL_STATS` the runner now prints a
+  one GEMV per token. With `EMONE_KERNEL_STATS` the runner now prints a
   `prefill paths:` line naming the path per family and the MPP state.
-- **`TINYTITAN_PREFILL_Q_QMM=1`** serves `.q` with the batched QMM instead. It sums
+- **`EMONE_PREFILL_Q_QMM=1`** serves `.q` with the batched QMM instead. It sums
   in a different order, so it can change the output and needs a quality check
   (`benchmark/quant_perplexity_ab.py`) before it could become a default.
-- **`TINYTITAN_PREFILL_SPLIT=1`** (diagnostic) commits and times each stage of a
+- **`EMONE_PREFILL_SPLIT=1`** (diagnostic) commits and times each stage of a
   prefill layer as `prefill_split_*` roles: `hc_in`, `attn_qkv_proj`,
   `attn_rope_kv`, `attn_core`, `attn_o_proj`, `gdn_in_proj`, `gdn_scan`,
   `gdn_out_proj`, `hc_out`. The waits serialize stages; read the roles, not
   the wall clock.
 - Two existing switches, off by default pending proof of identical output, are
-  spike arms: `TINYTITAN_HC_FUSED=1` and `TINYTITAN_QSA_GPU_SELECT=1` (QSA key
+  spike arms: `EMONE_HC_FUSED=1` and `EMONE_QSA_GPU_SELECT=1` (QSA key
   selection otherwise runs on the CPU between the indexer and attention).
 
 ## Not pursued, with the reason
@@ -69,7 +69,7 @@ real: going 4096 -> 2048 added ~8 s of GPU and ~19 s of non-GPU time.
 
 Every arm produced the same output as base, `coalesce` included (it is
 bit-identical by construction and `GEMVRowsTests` says so), and so did
-`TINYTITAN_HC_FUSED=1` and `TINYTITAN_QSA_GPU_SELECT=1`, which were off only until
+`EMONE_HC_FUSED=1` and `EMONE_QSA_GPU_SELECT=1`, which were off only until
 that was shown. The M1 compiles the Metal 4 tensor-op QMM: every attention and
 GDN projection already takes it (`prefill paths: mpp_int4=available attn_q=mpp/4b
 gdn_in=mpp/4b kv=mpp/4b o=mpp/4b`), so the per-token q GEMV never runs here and
@@ -91,7 +91,7 @@ together. `powermetrics` during prefill showed 93-98% GPU residency at
 separable from that; `m1_spike.sh --gpu-clock` now reports busy x clock
 (Gcycles) so the next comparison is.
 
-Where the GPU time goes (`TINYTITAN_PREFILL_SPLIT=1`, mean of two rounds, s):
+Where the GPU time goes (`EMONE_PREFILL_SPLIT=1`, mean of two rounds, s):
 
 | stage | s | share | note |
 | --- | ---: | ---: | --- |
@@ -117,7 +117,7 @@ Two findings from reading the code behind spike 2's split:
   `PrefillSharedExpert.encodeBlock` runs gate, up, activation and down for each
   of a chunk's 4,096 tokens through a one-row scratch, so every token's four
   dispatches wait on the previous token's. Coalescing never touched this loop,
-  which is why it did nothing for the 12.9 s. `TINYTITAN_PREFILL_MPP_WIDE=1` runs
+  which is why it did nothing for the 12.9 s. `EMONE_PREFILL_MPP_WIDE=1` runs
   it as three MPP GEMMs over the chunk plus one elementwise activation, and
   routes the other projections still on the scalar `prefillQMM`
   (hyper-connection gates, QSA indexer, PLE) to MPP. It sums in a different
@@ -133,7 +133,7 @@ Two findings from reading the code behind spike 2's split:
   kernel; the Apple10 tensor-ops attention path cannot help here, because a
   selection is present for every 4,096-token chunk and forces the tiled kernel.
 
-### The grouped QSA kernel (`TINYTITAN_PREFILL_QSA_GQA=1`)
+### The grouped QSA kernel (`EMONE_PREFILL_QSA_GQA=1`)
 
 `attention_prefill_causal_qsa_gqa` runs one threadgroup per (token, KV head) for
 all of its query heads (12 for Qwen3.8, at most 16, head dim at most 256). It
@@ -205,7 +205,7 @@ still precedes the first GPU command buffer.
 
 ## After spike 3: what changed, and spike 4
 
-- **The grouped QSA kernel is the default** (`TINYTITAN_PREFILL_QSA_GQA=0` restores
+- **The grouped QSA kernel is the default** (`EMONE_PREFILL_QSA_GQA=0` restores
   the per-head one). Its byte-equality test now also covers int4 and fp16 KV.
 - **The chunk ceiling is 16,384** (`--prefill-chunk 8192|16384`; the default stays
   4,096 until spike 4 measures it). Everything a chunk sizes was already sized
@@ -276,7 +276,7 @@ Where a 16.9K-token prefill goes at c16384 (round 2, 394 s):
 | dense layers on the GPU (attention + GDN + routers) | ~150 | |
 | host time inside the dense phase | ~68 | grows with context: QSA selection runs on the CPU |
 | routed tiles (GPU) | ~66 | |
-| shared expert, per-token path | ~28 | `TINYTITAN_PREFILL_MPP_WIDE=1` makes it ~10 |
+| shared expert, per-token path | ~28 | `EMONE_PREFILL_MPP_WIDE=1` makes it ~10 |
 | drive stall in the routed phase | ~11 | |
 | PLE gather | ~69 | now concurrent |
 
@@ -292,7 +292,7 @@ Where a 16.9K-token prefill goes at c16384 (round 2, 394 s):
 **The PLE gather fix measured:** base 419-451 s in spike 4 -> 353-389 s, and the
 time outside the layer phases 69 s -> ~10 s, as predicted.
 
-**`TINYTITAN_QSA_GPU_SELECT` is decode-only** (`RealForwardRunner+Residual`
+**`EMONE_QSA_GPU_SELECT` is decode-only** (`RealForwardRunner+Residual`
 reads it in the decode QSA path alone), so `c8192qsa` was a second `c8192` --
 which is what it measured. The spike-4 table's "~68 s of QSA selection" was also
 wrong in its size: it left out `prefill_qsa_index` (20-23 s of GPU).
@@ -351,13 +351,13 @@ otherwise for the dense projections: `gdn_in_proj` + `gdn_out_proj` did
 ~33 TFLOP in 8.4 s at 7.9K tokens, ~3.9 TFLOPS on MPP. What is genuinely slow:
 
 - **the routed tiles**, ~80 TFLOP in ~70 s, ~1.2 TFLOPS: one output element
-  per thread, a full dot product each. `TINYTITAN_PREFILL_ROUTED_MPP=1`
+  per thread, a full dot product each. `EMONE_PREFILL_ROUTED_MPP=1`
   (`PrefillRoutedExpertGEMM`) runs each tile as grouped MPP GEMMs instead --
   gather the tile's token rows, gate and up per expert, one activation over
   the tile, down per expert, scatter to the same route-partial slots.
 - **the shared expert's scalar gate**: ~2 GFLOP of work, but 2 x 8,192 one-token
   encoders per layer-chunk, most of `shared_expert`'s ~11 s under MPP.
-  `TINYTITAN_PREFILL_COALESCE` (bit-identical, spike 2) is now on by default.
+  `EMONE_PREFILL_COALESCE` (bit-identical, spike 2) is now on by default.
 
 ## Spike 8 (commit 8ad4c17, two rounds, 16,931-token prompt, on battery)
 
@@ -382,7 +382,7 @@ are timed as `prefill_routed_gemm`.
 | arm | mean NLL | perplexity |
 | --- | ---: | ---: |
 | A: no switches | 2.21386 | 9.1510 |
-| B: `TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1` | 2.21293 | 9.1425 |
+| B: `EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1` | 2.21293 | 9.1425 |
 
 B - A: mean dNLL -0.00093, se 0.01676, t -0.06 (perplexity -0.09%): no
 measurable change; at this length the test resolves about +/-3.4% perplexity
@@ -412,13 +412,13 @@ Spike 9's 214 s splits roughly: QSA attention ~71 s, GDN ~45 s, routed ~35 s,
 QSA indexer ~17 s, shared expert ~8.5 s, off-GPU ~45 s. Three switches, each
 arm adding one:
 
-- `c8192fast`: `TINYTITAN_QSA_SCORE_MMA=1`, the indexer's block scores
+- `c8192fast`: `EMONE_QSA_SCORE_MMA=1`, the indexer's block scores
   (`qsa_block_scores_rows_mma`) on the matrix units; previously ~26 GFLOPS.
   Float sums in another order only.
 - `c16384fast`: the same at chunk 16,384. The ~16K prompt then sweeps the
   routed experts twice instead of three times; this tells whether the
   drive-bound tail chunk is worth the larger scratch.
-- `c8192attn` / `c16384attn`: plus `TINYTITAN_PREFILL_QSA_MMA=1`, QSA attention
+- `c8192attn` / `c16384attn`: plus `EMONE_PREFILL_QSA_MMA=1`, QSA attention
   (`attention_prefill_causal_qsa_gqa_mma`) on the matrix units. Q is padded
   to 16 rows per KV head; for each 16 selected keys, QK^T and P.V run as 8x8
   float matrix products over four simdgroups. The online softmax rescales every
@@ -438,7 +438,7 @@ remains the bottleneck after these.
 | c8192attn | 180.4, 170.5 | 96.6 | 163 | 3 | 97.5 / 63.5 |
 | c16384attn | 156.6, 156.1 | 108.4 | 160 | 2 | 98.7 / 48.0 |
 
-- **Indexer on the matrix units** (`TINYTITAN_QSA_SCORE_MMA`):
+- **Indexer on the matrix units** (`EMONE_QSA_SCORE_MMA`):
   `prefill_qsa_index` fell from 17.0 s to 1.3 s. The time did not go away at
   8,192: the dense phase dropped ~14 s, but the routed phase rose by about as
   much, because the expert prefetch no longer overlaps as much dense work and
@@ -446,7 +446,7 @@ remains the bottleneck after these.
 - **Chunk 16,384**: one routed sweep fewer, so the routed phase drops from
   ~64-79 s to ~48 s, and GPU occupancy rises to 86%. It costs 0.6 GiB more RSS
   and no swap.
-- **QSA attention on the matrix units** (`TINYTITAN_PREFILL_QSA_MMA`):
+- **QSA attention on the matrix units** (`EMONE_PREFILL_QSA_MMA`):
   `prefill_attn_router` fell from 72 s to 45.5 s, a 27% cut in GPU work
   overall. The output changes, as expected from rounding, and stays coherent.
   Decode tok/s in these arms (4.2-4.4 against 3.7) follows from generating
@@ -484,8 +484,8 @@ against 2.134). `--text <earlier run>/text.txt` now pins the text.
 
 Launch configuration (108 tok/s prefill on the ~17K prompt):
 
-    TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 \
-    TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1 ... --prefill-chunk 16384
+    EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1 \
+    EMONE_QSA_SCORE_MMA=1 EMONE_PREFILL_QSA_MMA=1 ... --prefill-chunk 16384
 
 ## Spike 11 (2026-09-30, three rounds, 16,931-token prompt): 32,768-token chunks
 
@@ -523,14 +523,14 @@ machines where they were.
 
 ## Spike 13 (2026-10-01, two rounds): a chunked Gated-DeltaNet scan, scalar v1 -- slower
 
-The GDN split (`TINYTITAN_PREFILL_SPLIT=1`, one round) put the delta-rule scan
+The GDN split (`EMONE_PREFILL_SPLIT=1`, one round) put the delta-rule scan
 at ~11.3 s of the ~46 s the 36 GDN layers take (input projection 13.0 s, rest
 of layer 11.3 s, output projection 4.8 s). The 2026 kernels (fla, SGLang,
 llama.cpp) replace the per-token recurrence with 64-row chunks: a parallel
 prep per (head, chunk) builds T = (I + A)^-1, W = T diag(beta Gamma) K,
 Ub = T diag(beta) V and the decayed Q.K^T, then a sequential pass per head
 applies them against the carried state. Implemented as scalar-per-thread
-Metal (`gdn_chunk_prep`, `gdn_chunk_apply`, opt-in `TINYTITAN_GDN_CHUNKED=1`);
+Metal (`gdn_chunk_prep`, `gdn_chunk_apply`, opt-in `EMONE_GDN_CHUNKED=1`);
 against the sequential kernel on random inputs it agreed to 6e-5 (y, one fp16
 step) and 2e-7 (state).
 
@@ -596,14 +596,14 @@ against 27.4 s of routed GEMMs. That host time is now the largest prefill item.
 Surprisal (benchmark/surprisal/20261003-024508, the pinned 2026-09-26 text,
 19,087 tokens of context, 512 scored): B - A mean dNLL +0.00715, se 0.01383,
 t +0.52 (perplexity +0.72%): no measurable change. Qwen3.8 4-bit's profile row
-now ships it (`ModelProfile.prefillGDNChunked`, `TINYTITAN_PREFILL_GDN_CHUNK`
+now ships it (`ModelProfile.prefillGDNChunked`, `EMONE_PREFILL_GDN_CHUNK`
 overrides either way); the other GDN families keep the sequential kernel until
 their own check.
 
 ## Spike 15 (2026-10-03): where the "idle" GPU went
 
 Spike 14 reported the GPU busy 61% of the span, which read as ~35 s of host
-time in the dense phase. A per-layer trace (`TINYTITAN_PREFILL_LAYER_TRACE=1`:
+time in the dense phase. A per-layer trace (`EMONE_PREFILL_LAYER_TRACE=1`:
 host encode, queue, GPU, wake-up and route planning per layer) found every
 full-attention layer's router buffer waiting ~3.1 s *in the queue* before the
 GPU started it. That wait was GPU work: `PrefillAttention.encodeCausalTiled`
@@ -668,7 +668,7 @@ End to end, 16,931-token prompt, chunk 32768: attention 44.7 -> 20.5 s of GPU
 was 152.7 s. Surprisal A/B (benchmark/surprisal/20261003-114755, pinned
 text, 19,087 context, 512 scored, chunk 8192): dNLL -0.0073, se 0.0132,
 t -0.55, no measurable change. Shipped on the Qwen3.8 4-bit row
-(`prefillQSAFlash`); `TINYTITAN_PREFILL_QSA_FLASH=0` restores the gathered
+(`prefillQSAFlash`); `EMONE_PREFILL_QSA_FLASH=0` restores the gathered
 kernel.
 
 ## Spike 17 (2026-10-03): GPU key selection, tiled QMMs, layer readahead
@@ -691,7 +691,7 @@ row is the previous row plus one change; output starts identically on all.
   whenever the masked flash attention runs; the ANE and the activation dump
   keep the host path, which they need for the index list.
 - **Tiled QMM** (`prefill_routed_qmm_gate_up`, `prefill_routed_qmm`,
-  `prefill_dense_qmm`): MLX's steel QMM tiling in TinyTitan's weight layout.
+  `prefill_dense_qmm`): MLX's steel QMM tiling in emone's weight layout.
   32 x 32 output tiles, four simdgroups of 16 x 16, K in steps of 32
   dequantized to half in threadgroup memory, fp32 accumulation. The routed
   form takes a whole streamed tile in one launch per phase (32-row work items,
@@ -773,7 +773,7 @@ the QMM's ~7 TFLOPS). The dense layers' attention buffers are now timed
 
 ## Spike 21 (2026-10-03): the router was 15 s
 
-A split-timing run (`TINYTITAN_PREFILL_SPLIT=1`) put ~317 ms per layer after
+A split-timing run (`EMONE_PREFILL_SPLIT=1`) put ~317 ms per layer after
 the last projection: the MoE router. `prefill_router_block` gave each of the
 512 experts a thread that streamed the token's whole hidden row and its own
 weight row (~6 MB of cache traffic per token), one threadgroup per token.
@@ -858,7 +858,7 @@ at 95K (`server-live-trace.log`). Dense full attention ran the serial
 chunks per query head; the simdgroup pass 1 was only selected under a QSA keep
 mask, so no dense model ever reached it.
 
-`TINYTITAN_ATTN_DECODE_LONG=1` (7ab3a824) takes the simd pass 1 past 4,096 keys
+`EMONE_ATTN_DECODE_LONG=1` (7ab3a824) takes the simd pass 1 past 4,096 keys
 and one chunk per 1,024 keys, up to 64. Live, same conversation:
 
 | context | before | after |
@@ -913,7 +913,7 @@ layer unread (248.5 of 256 active at 8.5K tokens). When 512 or fewer are
 missing they are read before the token; a cold cache is filled 32 experts a
 token with the reads submitted at the token's start and waited on at its end.
 Reading them on the token's own time instead cost 11% of cold decode (19.9
-against 22.3). `TINYTITAN_DECODE_RESIDENT=0` turns the path off.
+against 22.3). `EMONE_DECODE_RESIDENT=0` turns the path off.
 
 ## Spike 27 (2026-11-10): short chunks on the decode routed kernels
 
@@ -940,23 +940,23 @@ pair measured 202 ms at 21 rows.
 The batched kernels are bit-identical to the single-row decode kernels (unit
 test). They are not the tile path's arithmetic, and the output can differ: 40
 greedy requests of 64 tokens (24 prompts, a third with two follow-ups), logits
-traced with `TINYTITAN_LOGIT_TRACE=1`, an empty prompt cache per arm.
+traced with `EMONE_LOGIT_TRACE=1`, an empty prompt cache per arm.
 
 - Tiles against tiles: 2,560 tokens and logits identical.
 - Tiles against per-row: 7 of 24 conversations pick a different token, each at
   a top-2 margin of 0.30 or less; median top-logit shift 0.047, 99th
   percentile 0.59, no growth with position.
 - Against a prompt run through the decode step token by token
-  (`TINYTITAN_PREFILL_SEQUENTIAL=1`), over 1,736 positions with a shared
+  (`EMONE_PREFILL_SEQUENTIAL=1`), over 1,736 positions with a shared
   history: tiles median 0.062, mean 0.094; per-row median 0.047, mean 0.097;
   per-row closer at 738 positions, tiles at 780. Neither is closer.
 
-Shipped on. `TINYTITAN_PREFILL_RESIDENT_ROWS=0` turns it off. It engages only
+Shipped on. `EMONE_PREFILL_RESIDENT_ROWS=0` turns it off. It engages only
 on a fully resident cache, so a cold prefill (the CLI, the golden check) is
 unchanged, and the same prompt can now be prefilled by either path depending
 on whether the cache is warm.
 
-What is left of the 184 ms at 21 rows, from `TINYTITAN_PREFILL_SPLIT=1`:
+What is left of the 184 ms at 21 rows, from `EMONE_PREFILL_SPLIT=1`:
 routed rows 94 ms, linear-attention projections ~50, router 17, shared expert
 9, full attention ~16.
 
@@ -968,5 +968,5 @@ threadgroups, same sums in the same order, picks and weights bit-identical
 (unit test, and the probe's replies are unchanged). Router stage 17.0 ->
 13.9 ms; whole prefill, quiet interleaved round: 21 tokens 178-179 ->
 175-176 ms, 26: 214 -> 211, 30: 321 -> 318, 32: 197 -> 194.
-`TINYTITAN_ROUTER_SMALL_TILES=0` keeps the old tile. The scalar rows router
-(`TINYTITAN_PREFILL_ROUTER_LOGITS=0`) is slower here: 22.3 ms.
+`EMONE_ROUTER_SMALL_TILES=0` keeps the old tile. The scalar rows router
+(`EMONE_PREFILL_ROUTER_LOGITS=0`) is slower here: 22.3 ms.

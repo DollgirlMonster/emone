@@ -24,7 +24,7 @@ qwen3.5_2B_4Bit/
 ```
 
 Everything is little-endian. Every field is read and written in one place,
-`GTurboBinary` (`sources/TinyTitanRepack/Core/Format/GTurboEncoders.swift`), so the
+`GTurboBinary` (`sources/EmoneRepack/Core/Format/GTurboEncoders.swift`), so the
 on-disk layout changes only there.
 
 ## Why the format exists
@@ -259,7 +259,7 @@ byte extent determines its width exactly — a word holds `32 / bits` values, so
 nothing else — which makes the payload the authority and the manifest the thing
 that gets checked.
 
-`TinyTitanRepack --verify-install` does that, in
+`EmoneRepack --verify-install` does that, in
 `VerifiedInstallTool.validateQuantAgainstResident`. For every `dtype 0` entry it
 computes the implied width from the bytes and requires the width the reader
 would resolve to equal it. The reader's rule is reproduced deliberately, because
@@ -294,10 +294,10 @@ and only a comparison against the payload can see that.
 
 ```bash
 # From a Hugging Face source, streamed, no full local checkpoint:
-swift run -c release TinyTitanRepack --output models/qwen3.6_35B_A3B_4Bit
+swift run -c release EmoneRepack --output models/qwen3.6_35B_A3B_4Bit
 
 # From a completed local affine snapshot (how the dense models are built):
-swift run -c release TinyTitanRepack --input-snapshot .build/qwen35-2b-affine-4bit \
+swift run -c release EmoneRepack --input-snapshot .build/qwen35-2b-affine-4bit \
     --model-id qwen3.5-2b --output models/qwen3.5_2B_4Bit
 ```
 
@@ -308,7 +308,7 @@ verification exact:
 
 - `tools/gturbo_diff_snapshot.py <install> <snapshot>` compares every resident
   tensor, weight plus scales plus biases, byte for byte;
-- `tests/TinyTitan/CPUEngine/DenseGTurboEquivalenceTests.swift` loads both and
+- `tests/Emone/CPUEngine/DenseGTurboEquivalenceTests.swift` loads both and
   requires **identical logits**.
 
 The second is the one that matters. The first proves the bytes are right, which
@@ -319,7 +319,7 @@ read at the wrong width. `tools/repack_dense.sh` runs both, in that order, then
 ## Building one
 
 ```bash
-swift run -c release TinyTitanRepack --verify-install --input-gturbo models/qwen3.5_2B_4Bit
+swift run -c release EmoneRepack --verify-install --input-gturbo models/qwen3.5_2B_4Bit
 ```
 
 Never hand-edit the receipt to match a new path. The binding is the check;

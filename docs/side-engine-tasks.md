@@ -178,7 +178,7 @@ of a model that is not reading the question.
 ## What the measurement found — 2026-09-18
 
 Run over the 60 cases the script can build here, greedy, through
-`TinyTitanBench cpu35batch`. T1 is not in this run: its cases come from the
+`EmoneBench cpu35batch`. T1 is not in this run: its cases come from the
 memory guard's recorded journals, which this checkout does not carry, so T1
 keeps its 92% from 2026-09-11.
 
@@ -189,7 +189,7 @@ So the shipped prompts were run at all three sizes, the second draft (v2) on the
 
 ```bash
 python3.13 benchmark/side_engine_tasks.py --prepare /tmp/jobs.jsonl
-.build/release/TinyTitanBench cpu35batch models/qwen3.5_4B_4Bit /tmp/jobs.jsonl /tmp/done.jsonl
+.build/release/EmoneBench cpu35batch models/qwen3.5_4B_4Bit /tmp/jobs.jsonl /tmp/done.jsonl
 python3.13 benchmark/side_engine_tasks.py --score /tmp/done.jsonl
 ```
 
@@ -239,7 +239,7 @@ side-engine. The 4B 4-bit is the default and the verification instrument; the
 9B is optional and chosen on quality benchmark results — it buys the reply check
 and gives up durability — never for size on its own.
 
-Runs made 2026-09-18 with the release `TinyTitanBench` built from `036f98c`;
+Runs made 2026-09-18 with the release `EmoneBench` built from `036f98c`;
 60 jobs, 7,276 tokens except where a draft changed the case count: 2B 386.2 s
 (18.8 tok/s), 4B 1,131.3 s (6.4), 4B v2 1,168.3 s (6.6), 9B 2,244.1 s (3.2),
 4B v3 26 cases in 688.4 s (7.1), 9B v3 the same cases in 1,268.8 s (3.8).
@@ -294,7 +294,7 @@ in the value:
 
 ```bash
 python3.13 benchmark/side_engine_recall.py --prepare /tmp/recall.jsonl
-.build/release/TinyTitanBench cpu35batch models/qwen3.5_4B_4Bit /tmp/recall.jsonl /tmp/done.jsonl
+.build/release/EmoneBench cpu35batch models/qwen3.5_4B_4Bit /tmp/recall.jsonl /tmp/done.jsonl
 python3.13 benchmark/side_engine_recall.py --score /tmp/done.jsonl
 ```
 
@@ -318,13 +318,13 @@ Runs made 2026-09-18: 60 judgements, 6,768 tokens, 4B 950.1 s (7.1 tok/s), 9B
 ## Where it is wired
 
 The port is `MemorySideEngine`
-(`sources/TinyTitanMemory/MemorySideEngine.swift`), and the server adapts
-`SideEngine` to it (`sources/TinyTitanServer/Core/SideEngineService.swift`).
+(`sources/EmoneMemory/MemorySideEngine.swift`), and the server adapts
+`SideEngine` to it (`sources/EmoneServer/Core/SideEngineService.swift`).
 Only the tasks the matrix above says are ready have a method, and `nil` means
 "no decision", so an engine that is absent, shut down, or confused leaves the
 deterministic path exactly as it was.
 
-The model is `TINYTITAN_SIDE_ENGINE` — an install name under
+The model is `EMONE_SIDE_ENGINE` — an install name under
 `--models-directory`, a directory, or `0` — and defaults to the 4B. The weights
 load on the first judgement, and the width comes from the server's
 `ServerCoordinator.generating` signal.

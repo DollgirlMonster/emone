@@ -14,7 +14,7 @@ the target's own words where they can, name the attribute rather than the
 holder, or ask about the value through the key.
 
     python3.13 benchmark/side_engine_recall.py --prepare jobs.jsonl
-    .build/release/TinyTitanBench cpu35batch <install> jobs.jsonl done.jsonl
+    .build/release/EmoneBench cpu35batch <install> jobs.jsonl done.jsonl
     python3.13 benchmark/side_engine_recall.py --score done.jsonl
 
 Only an authored set can do this — the book's records have no questions

@@ -253,7 +253,7 @@ Where it could pay:
   and Google's drafter is tiny. This is the best candidate by far.
 - **Qwen3.8 on this machine.** Re-run the gate before believing -43%: that was
   an M3 at `--ram 8`, and this M1 Max holds a far larger expert cache. It is
-  one command (`benchmark/tinytitan_mtp_b3_qualification.py --target <install>
+  one command (`benchmark/emone_mtp_b3_qualification.py --target <install>
   --sidecar <mtp> --presence-penalty 0`).
 
 A plan, in order:

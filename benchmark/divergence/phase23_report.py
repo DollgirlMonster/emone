@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tabulate phases 2 and 3 of the divergence overview (TinyTitan-8d0).
+"""Tabulate phases 2 and 3 of the divergence overview (Emone-8d0).
 
 Phase 2, token flips, every arm against `base` on the same model: per turn,
 whether the greedy tokens are identical, the step of the first different token,

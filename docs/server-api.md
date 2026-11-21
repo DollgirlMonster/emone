@@ -1,6 +1,6 @@
 # The server's APIs
 
-TinyTitanServer speaks three client protocols over one generation path. A request
+EmoneServer speaks three client protocols over one generation path. A request
 on any of them becomes the same validated chat request, runs through the same
 queue, prompt cache, memory decorator and decoder, and is answered in the
 protocol's own object and event shapes. What the model can do is identical on
@@ -329,7 +329,7 @@ look for it sees an ordinary reply.
   in either mode: a probe resets the runner, which would take other in-flight
   sequences with it, and the capture hook is per runner, not per sequence;
 - chunked prefill switched off (the hook lives in it);
-- `TINYTITAN_SEQUENTIAL_HC_PREFILL=1`, which prefills one token at a time and
+- `EMONE_SEQUENTIAL_HC_PREFILL=1`, which prefills one token at a time and
   has no layer-by-layer chunk to read;
 - a model served on the CPU engine.
 
@@ -494,6 +494,6 @@ against the server with the model replaced by a scripted backend, which is
 what caught the fields the unit tests never wrote (Codex's `namespace` and
 `web_search` tools, Claude Code's `context_management` and `adaptive`
 thinking); it skips when a CLI is not installed. None of them needs a model.
-For hand runs, `TINYTITAN_STUB_SERVER_SECONDS=600 swift test --filter
+For hand runs, `EMONE_STUB_SERVER_SECONDS=600 swift test --filter
 StubServerForManualRuns` keeps such a server up and writes its port to
-`/tmp/tinytitan-stub-port`.
+`/tmp/emone-stub-port`.

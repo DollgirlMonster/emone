@@ -23,9 +23,9 @@
 #   3. byte-diff the residents against the snapshot with
 #      tools/gturbo_diff_snapshot.py -- a repack is a byte copy, so this is an
 #      exact comparison and not a tolerance;
-#   4. re-issue and check the receipt (TinyTitanRepack --verify-install);
+#   4. re-issue and check the receipt (EmoneRepack --verify-install);
 #   5. run the CPU equivalence gate, which loads both and requires identical
-#      logits (tests/TinyTitan/CPUEngine/DenseGTurboEquivalenceTests.swift).
+#      logits (tests/Emone/CPUEngine/DenseGTurboEquivalenceTests.swift).
 #
 # Step 5 is the one that matters. Steps 3 and 4 prove the bytes are right and
 # the receipt is right; only step 5 proves the reader interprets them right, and
@@ -37,7 +37,7 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 MODELS="$ROOT/models"
 STAGE="$ROOT/.build"
-BIN="$ROOT/.build/release/TinyTitanRepack"
+BIN="$ROOT/.build/release/EmoneRepack"
 
 which="${1:-}"
 widths="${2:-4}"
@@ -123,7 +123,7 @@ fi
 joined=$(IFS=,; echo "${pairs[*]+"${pairs[*]}"}")
 echo
 echo "logit equivalence gate over ${#pairs[@]} model(s)"
-TINYTITAN_DENSE_EQUIV=1 TINYTITAN_DENSE_EQUIV_PAIRS="$joined" \
+EMONE_DENSE_EQUIV=1 EMONE_DENSE_EQUIV_PAIRS="$joined" \
     swift test --no-parallel --filter DenseGTurboEquivalenceTests
 
 echo

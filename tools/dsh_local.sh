@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# TinyTitan's own, isolated DeepSeek Harness.
+# Emone's own, isolated DeepSeek Harness.
 #
 # `dsh web` is the optional browser window the installer can set up: a local
-# page with a prompt box, pointed at the TinyTitan server. This script owns that
+# page with a prompt box, pointed at the Emone server. This script owns that
 # runtime and nothing else.
 #
 # **Isolation is the point.** A user may already run DeepSeek Harness — their
@@ -24,13 +24,13 @@
 #     the agent works inside the user's repositories, so it must be able to
 #     *read* their git identity and their `gh`/registry credentials. Isolation is
 #     about what this bundle writes, not about blinding the tools it drives;
-#   * the browser UI binds 7788 (TINYTITAN_DSH_PORT), not DSH's default 3080,
+#   * the browser UI binds 7788 (EMONE_DSH_PORT), not DSH's default 3080,
 #     and steps up to the next free port if 7788 is already taken. A port held
 #     by an earlier run of *this* install is stopped and reused; a port held by
 #     anything else is left alone and the search moves on.
 #
 # Node is reused when the machine already has one, and only fetched into
-# ~/.tinytitan/dsh/node when it does not, so this never runs `brew install` and
+# ~/.emone/dsh/node when it does not, so this never runs `brew install` and
 # never writes a global npm prefix.
 #
 # The DeepSeek Harness version is **pinned**. It is the version this project
@@ -54,17 +54,17 @@
 #   tools/dsh_local.sh --help
 #
 # Environment:
-#   TINYTITAN_DSH_ROOT            private root (default ~/.tinytitan/dsh)
-#   TINYTITAN_DSH_VERSION         pinned DeepSeek Harness version
-#   TINYTITAN_DSH_NODE_VERSION    pinned Node, used only when the Mac has none
-#   TINYTITAN_DSH_PNPM_VERSION    pinned pnpm, installed into the private prefix
-#   TINYTITAN_DSH_PORT            browser UI port (default 7788)
-#   TINYTITAN_DSH_DRY_RUN=1       print what would happen, change nothing
+#   EMONE_DSH_ROOT            private root (default ~/.emone/dsh)
+#   EMONE_DSH_VERSION         pinned DeepSeek Harness version
+#   EMONE_DSH_NODE_VERSION    pinned Node, used only when the Mac has none
+#   EMONE_DSH_PNPM_VERSION    pinned pnpm, installed into the private prefix
+#   EMONE_DSH_PORT            browser UI port (default 7788)
+#   EMONE_DSH_DRY_RUN=1       print what would happen, change nothing
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PLUGIN_DIR="$REPO_ROOT/plugins/dsh-tinytitan"
+PLUGIN_DIR="$REPO_ROOT/plugins/dsh-emone"
 
 # Where the installed models are. A checkout keeps them in `<repo>/models`; an
 # install from the release tarball keeps them one level above the tools
@@ -74,8 +74,8 @@ PLUGIN_DIR="$REPO_ROOT/plugins/dsh-tinytitan"
 # `<repo>/models` is `<root>/src/models`, which holds no models, and the
 # plugin's boot-time route refresh then dies with "no catalog (it lists no
 # installed models)". Measured in a simulated install on 2026-09-25.
-if [[ -n "${TINYTITAN_MODELS_DIR:-}" ]]; then
-  MODELS_DIR="$TINYTITAN_MODELS_DIR"
+if [[ -n "${EMONE_MODELS_DIR:-}" ]]; then
+  MODELS_DIR="$EMONE_MODELS_DIR"
 elif [[ -d "$REPO_ROOT/models" ]]; then
   MODELS_DIR="$REPO_ROOT/models"
 elif [[ -d "$REPO_ROOT/../models" ]]; then
@@ -94,13 +94,13 @@ fi
 # 0.1.5-rc.2, and this one sits under the `alpha` tag. The pin is exact, so that
 # costs nothing here — but nothing gets it by accident either, which is the
 # point of pinning.
-DSH_VERSION="${TINYTITAN_DSH_VERSION:-0.1.6-alpha.2}"
+DSH_VERSION="${EMONE_DSH_VERSION:-0.1.6-alpha.2}"
 # The notice version the pinned harness gates its first-run modal on. Held here
 # next to the pin it belongs to: they move together.
 WELCOME_NOTICE_VERSION="2026-08-13.1"
-NODE_VERSION="${TINYTITAN_DSH_NODE_VERSION:-26.8.2}"
-PNPM_VERSION="${TINYTITAN_DSH_PNPM_VERSION:-12.4.2}"
-DSH_PORT="${TINYTITAN_DSH_PORT:-7788}"
+NODE_VERSION="${EMONE_DSH_NODE_VERSION:-26.8.2}"
+PNPM_VERSION="${EMONE_DSH_PNPM_VERSION:-12.4.2}"
+DSH_PORT="${EMONE_DSH_PORT:-7788}"
 # The served id the harness should open on. Empty means "the first one the route
 # serves", which is what a bare `ensure` from the installer uses.
 DEFAULT_MODEL_ID=""
@@ -115,7 +115,7 @@ DEFAULT_MODEL_ID=""
 # hour. `off` matches the launcher's own default.
 REASONING="off"
 
-DSH_ROOT="${TINYTITAN_DSH_ROOT:-$HOME/.tinytitan/dsh}"
+DSH_ROOT="${EMONE_DSH_ROOT:-$HOME/.emone/dsh}"
 DSH_HOME_DIR="$DSH_ROOT/home"
 DSH_PREFIX="$DSH_ROOT/npm-prefix"
 DSH_NODE_DIR="$DSH_ROOT/node"
@@ -147,17 +147,17 @@ DSH_XDG_STATE="$DSH_ROOT/xdg-state"
 DSH_PNPM_HOME="$DSH_ROOT/pnpm-home"
 
 DRY_RUN=0
-[[ "${TINYTITAN_DSH_DRY_RUN:-0}" == "1" ]] && DRY_RUN=1
+[[ "${EMONE_DSH_DRY_RUN:-0}" == "1" ]] && DRY_RUN=1
 
 # Whether `web` lets DSH open the default browser. `--no-open` or
-# TINYTITAN_DSH_NO_OPEN=1 turns it off, for an SSH session or a test that must
+# EMONE_DSH_NO_OPEN=1 turns it off, for an SSH session or a test that must
 # not hijack whatever browser happens to be running.
 DSH_OPEN=1
-[[ "${TINYTITAN_DSH_NO_OPEN:-0}" == "1" ]] && DSH_OPEN=0
+[[ "${EMONE_DSH_NO_OPEN:-0}" == "1" ]] && DSH_OPEN=0
 
 # The server port the route should point at: the launcher's default, overridden
-# by TINYTITAN_PORT, and set by `ensure --port`.
-SERVER_PORT="${TINYTITAN_PORT:-8080}"
+# by EMONE_PORT, and set by `ensure --port`.
+SERVER_PORT="${EMONE_PORT:-8080}"
 
 say()  { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
@@ -229,7 +229,7 @@ private_env() {
   mkdir -p "$DSH_NPM_CACHE" "$DSH_XDG_CACHE" "$DSH_XDG_STATE" "$DSH_PNPM_HOME"
   if [[ ! -f "$DSH_NPMRC" ]]; then
     {
-      echo "# TinyTitan's private npm config, written by tools/dsh_local.sh."
+      echo "# Emone's private npm config, written by tools/dsh_local.sh."
       echo "# The user's own ~/.npmrc is deliberately not read: a pinned install"
       echo "# must not depend on their registry, proxy or prefix settings."
     } > "$DSH_NPMRC"
@@ -252,7 +252,7 @@ install_node() {
   fi
 
   [[ "$(uname -m)" == "arm64" ]] \
-    || die "TinyTitan is Apple Silicon only; this Mac reports $(uname -m)."
+    || die "Emone is Apple Silicon only; this Mac reports $(uname -m)."
   command -v curl >/dev/null 2>&1 || die "curl is required to fetch Node."
 
   local tarball="node-v${NODE_VERSION}-darwin-arm64.tar.gz"
@@ -339,7 +339,7 @@ install_pnpm() {
   if [[ -x "$native" ]]; then
     cat > "$shim" <<SHIM
 #!/bin/sh
-# TinyTitan's private pnpm, written by tools/dsh_local.sh.
+# Emone's private pnpm, written by tools/dsh_local.sh.
 # Execs the native binary directly: the npm package's own shim has no shebang,
 # which macOS refuses to exec (ENOEXEC) when a program spawns it without a shell.
 exec "$native" "\$@"
@@ -349,7 +349,7 @@ SHIM
     [[ -n "$node" ]] || die "no node to run pnpm with."
     cat > "$shim" <<SHIM
 #!/bin/sh
-# TinyTitan's private pnpm, written by tools/dsh_local.sh.
+# Emone's private pnpm, written by tools/dsh_local.sh.
 # The native binary was not installed, so hand over to the package's own entry.
 exec "$node" "$mjs" "\$@"
 SHIM
@@ -379,9 +379,9 @@ ensure_home() {
     (( DRY_RUN )) && { echo "  would create $DSH_HOME_DIR/settings.yaml"; return 0; }
     mkdir -p "$DSH_HOME_DIR"
     cat > "$DSH_HOME_DIR/settings.yaml" <<'YAML'
-# TinyTitan's private DeepSeek Harness settings.
+# Emone's private DeepSeek Harness settings.
 #
-# This file belongs to the TinyTitan install under ~/.tinytitan, not to your own
+# This file belongs to the Emone install under ~/.emone, not to your own
 # ~/.dsh. The llm-pi-ai route below is generated by tools/dsh_route.sh from the
 # models installed in the checkout.
 YAML
@@ -393,10 +393,10 @@ YAML
 # until one is chosen: the composer is disabled and reads "Choose a workspace to
 # start". That is a dead first run for someone who was promised a window they can
 # type in, so one is seeded — the checkout by default, since it exists and is the
-# folder TinyTitan is installed in. The person can change or add workspaces in the
+# folder Emone is installed in. The person can change or add workspaces in the
 # UI; this only removes the empty state. Found by driving the real page.
 seed_workspace() {
-  local ws="${TINYTITAN_WORKSPACE:-$REPO_ROOT}"
+  local ws="${EMONE_WORKSPACE:-$REPO_ROOT}"
   if (( DRY_RUN )); then
     echo "  would seed the workspace $ws"
     return 0
@@ -439,12 +439,12 @@ PY
 install_plugin() {
   [[ -d "$PLUGIN_DIR" ]] || die "plugin not found at $PLUGIN_DIR"
   private_env
-  say "Installing the TinyTitan plugin into the private profile"
+  say "Installing the Emone plugin into the private profile"
   # `--store-dir` is passed straight through to pnpm, and it is the only lever
   # that works: pnpm ignores `npm_config_store_dir` and `PNPM_STORE_DIR`, and a
   # `.npmrc` beside the profile did not move the store either. Without it the
   # ~36 MB native pnpm binary would land in the user's own ~/Library/pnpm store.
-  run "add dsh-tinytitan from the checkout" \
+  run "add dsh-emone from the checkout" \
     env DSH_HOME="$DSH_HOME_DIR" \
         PATH="$(tool_path)" \
         npm_config_cache="$DSH_NPM_CACHE" \
@@ -454,15 +454,15 @@ install_plugin() {
         PNPM_HOME="$DSH_PNPM_HOME" \
         "$(dsh_bin)" plugin --profile web add --store-dir "$DSH_STORE" "file:$PLUGIN_DIR"
   (( DRY_RUN )) && return 0
-  [[ -e "$DSH_HOME_DIR/profiles/web/node_modules/dsh-tinytitan" ]] \
+  [[ -e "$DSH_HOME_DIR/profiles/web/node_modules/dsh-emone" ]] \
     || die "the plugin did not install into the private profile."
   ok "Plugin installed (pinned to this checkout)"
 }
 
-# The route is what points DSH at the TinyTitan server. It is generated from the
+# The route is what points DSH at the Emone server. It is generated from the
 # installs under models/, so the model the user chose is the model DSH offers.
 write_route() {
-  say "Writing the TinyTitan route (port $SERVER_PORT)"
+  say "Writing the Emone route (port $SERVER_PORT)"
   if ! run "generate the llm-pi-ai route into the private settings.yaml" \
       "$REPO_ROOT/tools/dsh_route.sh" --write \
       --settings "$DSH_HOME_DIR/settings.yaml" --port "$SERVER_PORT" \
@@ -629,7 +629,7 @@ cmd_paths() {
 }
 
 cmd_status() {
-  say "TinyTitan's private DeepSeek Harness"
+  say "Emone's private DeepSeek Harness"
   echo
   local node; node="$(node_bin || true)"
   if [[ -n "$node" ]]; then
@@ -652,7 +652,7 @@ cmd_status() {
   else
     warn "home: not initialised"
   fi
-  if [[ -e "$DSH_HOME_DIR/profiles/web/node_modules/dsh-tinytitan" ]]; then
+  if [[ -e "$DSH_HOME_DIR/profiles/web/node_modules/dsh-emone" ]]; then
     ok "plugin: installed"
   else
     warn "plugin: not installed"
@@ -674,9 +674,9 @@ cmd_status() {
 
 cmd_ensure() {
   if [[ ! -f "$REPO_ROOT/Package.swift" ]]; then
-    warn "This does not look like a TinyTitan checkout; continuing anyway."
+    warn "This does not look like a Emone checkout; continuing anyway."
   fi
-  say "Setting up TinyTitan's private DeepSeek Harness"
+  say "Setting up Emone's private DeepSeek Harness"
   echo "  Private root: $DSH_ROOT"
   echo "  Nothing outside it is touched; a dsh you already run is left alone."
   echo
@@ -689,12 +689,12 @@ cmd_ensure() {
   write_route
   local model="$DEFAULT_MODEL_ID"
   [[ -n "$model" ]] || model="$(first_served_model)"
-  write_default_model "tinytitan" "$model"
+  write_default_model "emone" "$model"
   suppress_welcome_notice
   echo
   say "Done."
   echo "  Start it with:  $REPO_ROOT/tools/server_launcher.sh --web"
-  echo "  Or from the launcher the installer wrote:  ~/.local/bin/tinytitan-web"
+  echo "  Or from the launcher the installer wrote:  ~/.local/bin/emone-web"
 }
 
 cmd_web() {
@@ -703,10 +703,10 @@ cmd_web() {
   local port; port="$(resolve_port "$DSH_PORT")"
   local open=()
   (( DSH_OPEN )) || open=(--no-open)
-  # TINYTITAN_PORT / TINYTITAN_REASONING / TINYTITAN_REPO / TINYTITAN_MODELS_DIR
-  # are not decoration: the dsh-tinytitan plugin refreshes the route at **every**
-  # boot. With TINYTITAN_PORT unset it regenerates the baseURL for the default
-  # 8080; with TINYTITAN_REASONING unset it puts back `medium`, i.e. thinking on,
+  # EMONE_PORT / EMONE_REASONING / EMONE_REPO / EMONE_MODELS_DIR
+  # are not decoration: the dsh-emone plugin refreshes the route at **every**
+  # boot. With EMONE_PORT unset it regenerates the baseURL for the default
+  # 8080; with EMONE_REASONING unset it puts back `medium`, i.e. thinking on,
   # against a server started with thinking off. The first makes the page say
   # "Retrying model request"; the second makes it sit on "Deep diving..." while
   # the model spends 32768 tokens reasoning and never answers. Both were found by
@@ -718,10 +718,10 @@ cmd_web() {
   # credentials *readable*. Writing is what isolation is about.
   private_env
   exec env DSH_HOME="$DSH_HOME_DIR" \
-           TINYTITAN_PORT="$SERVER_PORT" \
-           TINYTITAN_REASONING="$REASONING" \
-           TINYTITAN_REPO="$REPO_ROOT" \
-           TINYTITAN_MODELS_DIR="$MODELS_DIR" \
+           EMONE_PORT="$SERVER_PORT" \
+           EMONE_REASONING="$REASONING" \
+           EMONE_REPO="$REPO_ROOT" \
+           EMONE_MODELS_DIR="$MODELS_DIR" \
            XDG_CACHE_HOME="$DSH_XDG_CACHE" \
            XDG_STATE_HOME="$DSH_XDG_STATE" \
            PNPM_HOME="$DSH_PNPM_HOME" \
@@ -782,7 +782,7 @@ smoke_cleanup() {
 cmd_smoke() {
   [[ -x "$(dsh_bin)" ]] || die "DeepSeek Harness is not installed. Run: tools/dsh_local.sh ensure"
   if ! curl -s --max-time 3 "http://127.0.0.1:${SERVER_PORT}/health" >/dev/null 2>&1; then
-    die "no TinyTitan server on port $SERVER_PORT.
+    die "no Emone server on port $SERVER_PORT.
      Start one first, in another window:
        $REPO_ROOT/tools/server_launcher.sh --client server --port $SERVER_PORT"
   fi
@@ -794,10 +794,10 @@ cmd_smoke() {
   # Same environment `web` uses, so the plugin's boot-time route refresh keeps
   # this server's address and reasoning level (see the note in cmd_web).
   env DSH_HOME="$DSH_HOME_DIR" \
-      TINYTITAN_PORT="$SERVER_PORT" \
-      TINYTITAN_REASONING="$REASONING" \
-      TINYTITAN_REPO="$REPO_ROOT" \
-      TINYTITAN_MODELS_DIR="$MODELS_DIR" \
+      EMONE_PORT="$SERVER_PORT" \
+      EMONE_REASONING="$REASONING" \
+      EMONE_REPO="$REPO_ROOT" \
+      EMONE_MODELS_DIR="$MODELS_DIR" \
       PATH="$(tool_path)" \
       "$(dsh_bin)" web --no-open --port "$port" >"$SMOKE_WEB_LOG" 2>&1 &
   SMOKE_WEB_PID=$!

@@ -57,7 +57,7 @@ Written down because it gets asked: all three are **dense**, and all three are
 
 ## Where it actually got to (2026-09-11)
 
-**Stages 1 and 2 are done, and the migration is done.** `TinyTitanRepack
+**Stages 1 and 2 are done, and the migration is done.** `EmoneRepack
 --input-snapshot` accepts a dense snapshot; all six dense installs (2B/4B/9B at
 4-bit and 8-bit) repack into a `.gturbo` that is byte-identical to its source and
 logit-identical through the CPU engine. `tools/repack_dense.sh` runs the whole
@@ -143,7 +143,7 @@ came back as `qwen3.5-2b_4-Bit` and the catalog skipped them as duplicates of
 the 4-bit ones — an 8-bit install that installs, verifies, loads, and cannot be
 selected. Initialising the slot from the source's base affine width fixes it,
 and the 4-bit manifests are byte-unchanged, which is how the fix was confirmed
-to be scoped. It was caught by reading `TinyTitanServer --catalog` output rather
+to be scoped. It was caught by reading `EmoneServer --catalog` output rather
 than by a test; nothing in the suite compares a manifest's slots to its
 contents.
 
@@ -167,7 +167,7 @@ run reports it as installed and touches nothing.
   produces `models/qwen3.5_*Bit/` with `manifest.json`, `packed_experts/`, and
   `verified-install.json`. **Done.** The installer converts and repacks, drops
   the intermediate snapshot, and migrates a legacy snapshot in place.
-- `TinyTitanRepack --verify-install --input-gturbo <dir>` passes on all six.
+- `EmoneRepack --verify-install --input-gturbo <dir>` passes on all six.
   **Done.**
 - The catalog lists them, the CPU engine serves them, and the equivalence check
   holds for each. **Done** — six distinct ids on the `cpu` backend, and the
@@ -181,7 +181,7 @@ run reports it as installed and touches nothing.
   packed tensor's declared width against the width its own byte extent implies.
   The installer runs that after every repack and a receipt cannot be issued by a
   run that failed, so an install that serves has passed it. Covered by
-  `tests/TinyTitanRepack/Core/Verification/QuantManifestPayloadAgreementTests.swift`,
+  `tests/EmoneRepack/Core/Verification/QuantManifestPayloadAgreementTests.swift`,
   which needs no model and runs in under a second; reintroducing the writer bug
   makes it fail.
 - Not done, and worth knowing: the **logit** equivalence gate is still not part
@@ -195,7 +195,7 @@ run reports it as installed and touches nothing.
 
 Historical, and kept because the shape of the mistake is the useful part.
 
-`TinyTitanRepack --input-snapshot` refused a dense snapshot with
+`EmoneRepack --input-snapshot` refused a dense snapshot with
 `config.json invalid: no text_config`, and `ArchInfo.load` accepted only
 `qwen3_5_moe`, `qwen3_5_mtp` and `qwen4_exp` (`ArchInfo.swift:162-183`). At
 that point the honest reading was "the repacker cannot express this

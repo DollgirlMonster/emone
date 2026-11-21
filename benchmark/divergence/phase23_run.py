@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Phases 2 and 3 of the divergence overview (TinyTitan-8d0), one server per arm.
+"""Phases 2 and 3 of the divergence overview (Emone-8d0), one server per arm.
 
-Each arm starts its own TinyTitanServer (tools/serve.sh) with one switch set,
+Each arm starts its own EmoneServer (tools/serve.sh) with one switch set,
 an empty prompt cache of its own (so no arm restores another arm's state) and
-TINYTITAN_LOGIT_TRACE=1, warms the expert cache until every expert is resident,
+EMONE_LOGIT_TRACE=1, warms the expert cache until every expert is resident,
 then runs, greedy at temperature 0:
 
   phase 2  24 three-turn conversations (phase23_sets.conversations), each turn
@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SMOKE = os.environ.get("PHASE23_SMOKE") == "1"
 OUT = Path(__file__).resolve().parent / ("phase23-smoke" if SMOKE else "phase23-20261120")
 PORT = 8089
-GUARD = "TinyTitanServer|TinyTitanCLI|TinyTitanPackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
+GUARD = "EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
 
 MODELS = {
     "qwen36": ("models/qwen3.6_35B_A3B_4Bit", "qwen3.6-35b-a3b_4-Bit"),
@@ -45,16 +45,16 @@ MODELS = {
 }
 
 SHIPPED_OFF = {
-    "TINYTITAN_ROUTER_TOPK_SIMD": "0",
-    "TINYTITAN_PREFILL_ROUTED_MPP": "0",
-    "TINYTITAN_PREFILL_ROUTED_QMM": "0",
-    "TINYTITAN_PREFILL_GDN_CHUNK": "0",
-    "TINYTITAN_PREFILL_SG_QMM": "0",
-    "TINYTITAN_PREFILL_DENSE_FLASH": "0",
-    "TINYTITAN_PREFILL_ROUTER_LOGITS": "0",
-    "TINYTITAN_ATTN_DECODE_LONG": "0",
-    "TINYTITAN_PREFILL_RESIDENT_ROWS": "0",
-    "TINYTITAN_ROUTER_SMALL_TILES": "0",
+    "EMONE_ROUTER_TOPK_SIMD": "0",
+    "EMONE_PREFILL_ROUTED_MPP": "0",
+    "EMONE_PREFILL_ROUTED_QMM": "0",
+    "EMONE_PREFILL_GDN_CHUNK": "0",
+    "EMONE_PREFILL_SG_QMM": "0",
+    "EMONE_PREFILL_DENSE_FLASH": "0",
+    "EMONE_PREFILL_ROUTER_LOGITS": "0",
+    "EMONE_ATTN_DECODE_LONG": "0",
+    "EMONE_PREFILL_RESIDENT_ROWS": "0",
+    "EMONE_ROUTER_SMALL_TILES": "0",
 }
 
 # name: (environment, extra server args)
@@ -62,10 +62,10 @@ ARMS = {
     "base": ({}, []),
     "base_rep": ({}, []),
     "all_shipped_off": (SHIPPED_OFF, []),
-    "off_resident_rows": ({"TINYTITAN_PREFILL_RESIDENT_ROWS": "0"}, []),
-    "on_small_qmm": ({"TINYTITAN_PREFILL_SMALL_QMM": "1"}, []),
-    "on_flash_split": ({"TINYTITAN_PREFILL_FLASH_SPLIT": "1"}, []),
-    "cand": ({"TINYTITAN_PREFILL_SMALL_QMM": "1", "TINYTITAN_PREFILL_FLASH_SPLIT": "1"}, []),
+    "off_resident_rows": ({"EMONE_PREFILL_RESIDENT_ROWS": "0"}, []),
+    "on_small_qmm": ({"EMONE_PREFILL_SMALL_QMM": "1"}, []),
+    "on_flash_split": ({"EMONE_PREFILL_FLASH_SPLIT": "1"}, []),
+    "cand": ({"EMONE_PREFILL_SMALL_QMM": "1", "EMONE_PREFILL_FLASH_SPLIT": "1"}, []),
     "kv16": ({}, ["--kv-bits", "16"]),
     "kv4": ({}, ["--kv-bits", "4"]),
 }
@@ -117,7 +117,7 @@ def arm_server(out: Path, model_key: str, arm: str):
     cache.mkdir(parents=True)
     env = dict(os.environ)
     env.update(env_over)
-    env.update({"TINYTITAN_LOGIT_TRACE": "1", "TINYTITAN_PROMPT_CACHE_ROOT": str(cache)})
+    env.update({"EMONE_LOGIT_TRACE": "1", "EMONE_PROMPT_CACHE_ROOT": str(cache)})
     cmd = ["script", "-q", "/dev/null", "tools/serve.sh", install, "--reasoning", "off",
            "--no-live-trace", "--no-catalog", "--idle", "7200", "--port", str(PORT)]
     if extra:
@@ -136,7 +136,7 @@ def arm_server(out: Path, model_key: str, arm: str):
         print(f"{time.strftime('%H:%M:%S')} {model_key}/{arm}: warm", flush=True)
         yield model_id
     finally:
-        pids = subprocess.run(["pgrep", "-f", "Release/TinyTitanServer"], capture_output=True,
+        pids = subprocess.run(["pgrep", "-f", "Release/EmoneServer"], capture_output=True,
                               text=True).stdout.split()
         for pid in pids:
             os.kill(int(pid), signal.SIGTERM)

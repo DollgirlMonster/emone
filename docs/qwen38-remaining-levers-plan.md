@@ -56,7 +56,7 @@ against the shipped arm):
    `top-M x ahead` inside the same budget; a larger resident set changes what
    the ring can hold or how often an adopted read is still in flight
    (`io_hidden_pct` tripling while `wait` rises is the signature). Checks:
-   96 slots with `PREDICTIVE_PREFETCH=0`; 80 slots; `TINYTITAN_PREFETCH_TRACE=1`
+   96 slots with `PREDICTIVE_PREFETCH=0`; 80 slots; `EMONE_PREFETCH_TRACE=1`
    on both sizes.
 2. **Slot-search and lease cost scaling with resident slots.** `cache_plan_ms`
    rose 2.91 -> 4.49, but that is 1.6 ms of a 54 ms regression, so this is at

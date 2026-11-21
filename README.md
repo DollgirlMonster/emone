@@ -1,6 +1,6 @@
 # This fork: what differs from upstream
 
-This is [DollgirlMonster/TinyTitan](https://github.com/DollgirlMonster/TinyTitan),
+This is [DollgirlMonster/emone](https://github.com/DollgirlMonster/emone),
 a private-use fork of [Pummelchen/TinyTitan](https://github.com/Pummelchen/TinyTitan).
 Everything below this section is upstream's README, unchanged. Its benchmarks were
 measured on upstream's 24 GB M3, not here. The fork's own changes:
@@ -75,8 +75,8 @@ record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
 - **Where the settings live.** The two QSA matrix-unit kernels are on by
   default, and only Qwen3.8 uses QSA. The MPP switches and the 32K chunk are
   set in Qwen3.8 4-bit's `ModelProfile` row, so no other model's output
-  changes. `TINYTITAN_PREFILL_MPP_WIDE`, `TINYTITAN_PREFILL_ROUTED_MPP`,
-  `TINYTITAN_QSA_SCORE_MMA` and `TINYTITAN_PREFILL_QSA_MMA` (each `0` or `1`)
+  changes. `EMONE_PREFILL_MPP_WIDE`, `EMONE_PREFILL_ROUTED_MPP`,
+  `EMONE_QSA_SCORE_MMA` and `EMONE_PREFILL_QSA_MMA` (each `0` or `1`)
   override them. The profile's chunk is lowered to what a YaRN context allows.
 - **Prefill chunks of 8,192, 16,384 and 32,768 tokens are allowed.** Each chunk
   streams nearly the whole routed-expert corpus, so the number of chunks is
@@ -92,9 +92,9 @@ record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
   progress.
 - **Measurement tools.** `tools/m1_spike.sh` builds, tests and runs
   interleaved A/B prefill arms, reporting GPU work in gigacycles.
-  `TinyTitanCLI --score` and `tools/prefill_surprisal_ab.sh` run the paired
+  `EmoneCLI --score` and `tools/prefill_surprisal_ab.sh` run the paired
   surprisal test for any prefill numerics change.
-- **`TinyTitanCLI --live-trace`: a live view of decode, off by default.** On a
+- **`EmoneCLI --live-trace`: a live view of decode, off by default.** On a
   terminal (stdout is a TTY, `TERM` is not `dumb`, at least 78 columns and
   about 31 rows) it draws, in place and below your scrollback, the expert grid
   of the layer being computed, the router's picks, a one-line ribbon of the
@@ -129,27 +129,27 @@ record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
   picked leaving first, not the engine's slot table) exist only in the renderer
   and are never read by routing, caching, prefetch or anything else in the
   engine; treat them as estimates. Build with
-  `-Xswiftc -DTINYTITAN_NO_EXPERT_TRACE` to remove the hook entirely, for an A/B
+  `-Xswiftc -DEMONE_NO_EXPERT_TRACE` to remove the hook entirely, for an A/B
   against a build without it.
 
 ---
 
 <p align="center">
-  ✨ NVMAI is now TinyTitan ! ✨
+  ✨ NVMAI is now emone ! ✨
 </p>
 
 <p align="center">
   <img width="1254" height="1254" alt="1" src="https://github.com/user-attachments/assets/2a990de5-af24-48cd-b673-e875755741cc" />
 </p>
 
-# TinyTitan
+# emone
 
 [![Stars](https://img.shields.io/github/stars/Pummelchen/TinyTitan?style=flat-square&logo=github&label=Stars&color=e3b341)](https://github.com/Pummelchen/TinyTitan/stargazers)
 [![Views (14d)](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Pummelchen/TinyTitan/main/.github/traffic.json)](https://github.com/Pummelchen/TinyTitan)
 [![Last Commit](https://img.shields.io/github/last-commit/Pummelchen/TinyTitan?style=flat-square&logo=git&label=Last%20Commit&color=2ea44f)](https://github.com/Pummelchen/TinyTitan/commits/main)
 [![Contact](https://img.shields.io/badge/Contact-0xa0b1%40gmail.com-blue?style=flat-square&logo=gmail&logoColor=white)](mailto:0xa0b1@gmail.com)
 
-TinyTitan is the fastest SSD streamer for AI models on a Mac.
+emone is the fastest SSD streamer for AI models on a Mac.
 
 What is new in each release lives in the
 [Changelog](https://github.com/Pummelchen/TinyTitan/wiki/Changelog).
@@ -157,7 +157,7 @@ What is new in each release lives in the
 <br>
 
 ✨ Full DeepSeek Harness Support with Plugins: <br>
-TinyTitan now is a first class member of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) - including a Qwen 3.8 plugin with specific optimizations for TinyTitan.
+emone now is a first class member of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) - including a Qwen 3.8 plugin with specific optimizations for emone.
 Awesome: You can also manage dsh workspaces and sessions which are distributed over many Mac's in your LAN/Tailscale network using our dsh plugin "dsh-lan-manager" and the manager cli. 
 
 
@@ -221,7 +221,7 @@ long context, the CPU engine — with the output you should expect.
 
 ```bash
 tools/install_models.sh                                         # what is installed
-.build/release/TinyTitanCLI --model models/qwen3.5_2B_4Bit \
+.build/release/EmoneCLI --model models/qwen3.5_2B_4Bit \
   --prompt "The capital of France is" --max-new 32 --temperature 0
 tools/server_launcher.sh --client codex --model qwen38 --bits 4   # API + Codex
 ```
@@ -230,37 +230,37 @@ Generated text goes to **stdout**; the timing footer goes to **stderr**, so a
 pipeline sees only the answer. Nothing installed yet? Start with
 [Getting Started](https://github.com/Pummelchen/TinyTitan/wiki/Getting-Started).
 
-- **Easiest install:** one command checks the Mac, downloads TinyTitan's
+- **Easiest install:** one command checks the Mac, downloads emone's
   prebuilt arm64 binaries, optionally downloads a model, and leaves a
-  `tinytitan` command that starts the server — then offers to start it, so you
+  `emone` command that starts the server — then offers to start it, so you
   finish with a base URL to point a client at. Safe to re-run; a second run
   updates what is already installed instead of fetching it twice.
   ```bash
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/Pummelchen/TinyTitan/main/tools/install_tinytitan.sh)"
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/Pummelchen/TinyTitan/main/tools/install_emone.sh)"
   ```
   **Use that form, not `curl … | bash`.** A pipe makes the script's stdin the
   pipe, so it cannot ask anything and takes the default at every step — including
   the model download and the browser window. `bash -c "$(curl …)"` downloads the
   script first and runs it with your terminal still on stdin, so the questions
-  work. From a clone or an unzipped download, `bash tools/install_tinytitan.sh`
+  work. From a clone or an unzipped download, `bash tools/install_emone.sh`
   does the same and never needs `chmod +x`, and `--help` lists its flags.
   **Nothing needs Homebrew, Xcode, git or Node**, and no Python is needed to
   install or to start the server: the engine arrives built for `arm64`. Only the
   model *converters* use Python, and for the models the repacker streams itself
   the installer prints the command that needs none.
-- **A chat window, if you want one:** the installer can also set up TinyTitan's
+- **A chat window, if you want one:** the installer can also set up emone's
   own [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — a
   local page in your browser with a prompt box, already pointed at the model you
   installed. `--web` does it in one step, or answer yes when the installer asks.
-  It opens with `~/.local/bin/tinytitan-web` (or
-  `tools/server_launcher.sh --web`). It is installed under `~/.tinytitan`, pinned
+  It opens with `~/.local/bin/emone-web` (or
+  `tools/server_launcher.sh --web`). It is installed under `~/.emone`, pinned
   to a tested DeepSeek Harness version, and kept isolated from any DeepSeek
   Harness you run yourself, so our copy and yours never share a config, a
   session or a port; see [tools/dsh_local.sh](tools/dsh_local.sh). This is a
   client in the browser, not a bundled app — the engine and its server remain the
   product.
 - **OpenAI-compatible server:** A loopback Chat Completions and Responses API
-  for starting TinyTitan and connecting supported coding clients.
+  for starting emone and connecting supported coding clients.
 - **One server, one port, one launcher:** `tools/server_launcher.sh` starts the
   API on its own, or starts it and opens one of the supported clients — Codex,
   Claude Code, Qwen Code, OpenCode or the Zed editor — wiring that client's
@@ -272,7 +272,7 @@ pipeline sees only the answer. Nothing installed yet? Start with
   warned about in red and used anyway, and the default is the install's own
   measured profile, which the runtime holds to a third of physical memory).
   It serves on `127.0.0.1:8080` by default — the launcher asks for the port,
-  and `--port` or `TINYTITAN_PORT` sets it — and every other
+  and `--port` or `EMONE_PORT` sets it — and every other
   installed model stays available by name through the API; the server switches
   on demand, keeping one model resident at a time.
 
@@ -282,7 +282,7 @@ tools/server_launcher.sh --client codex --model ornith --bits 4  # server + Code
 tools/server_launcher.sh --client zed --model qwen38 --bits 4 --ram 8
 ```
 
-- **Persistent agent memory (optional):** With `TINYTITAN_MEMORY=1` the model gets
+- **Persistent agent memory (optional):** With `EMONE_MEMORY=1` the model gets
   memory that outlives a conversation, scoped per repository, with six memory
   tools the engine answers itself. It runs inside the server process, so there
   is no database to install and nothing to start. Off by default; see
@@ -306,22 +306,22 @@ tools/server_launcher.sh --client zed --model qwen38 --bits 4 --ram 8
   shim) and checks every client's wiring without a model
   (`--round clients`); DeepSeek Harness reaches the server through its own
   `llm-pi-ai` provider route, which `tools/dsh_route.sh` generates from the
-  installed models (and `plugins/dsh-tinytitan` keeps current inside the harness,
+  installed models (and `plugins/dsh-emone` keeps current inside the harness,
   adding a compaction backend that does not think) — see
   [Connect a client](https://github.com/Pummelchen/TinyTitan/wiki/OpenAI-Compatible-Server#connect-a-client).
-- **CLI and tools:** TinyTitan also provides direct CLI generation, streaming
+- **CLI and tools:** emone also provides direct CLI generation, streaming
   responses, and client-authorized function-tool calls.
 
 
 ### Core Benefits
 
-- TinyTitan streams LLM's faster than any other similar project.
+- emone streams LLM's faster than any other similar project.
 - Run large MOE AI models on low RAM Apple Silicon Macs by keeping the AI model on SSD/NVMe. 
-- A 125B model on 8 GB of RAM. TinyTitan streams experts straight from SSD, so model size is bounded by your disk space, not your memory.
-- You set the RAM budget. TinyTitan stays inside it. Give it 4 GB or 8 GB — it holds the line, so your Mac stays responsive while the model runs.
+- A 125B model on 8 GB of RAM. emone streams experts straight from SSD, so model size is bounded by your disk space, not your memory.
+- You set the RAM budget. emone stays inside it. Give it 4 GB or 8 GB — it holds the line, so your Mac stays responsive while the model runs.
 - Apple Neural Engine acceleration for prompt processing - 2.3× faster than the GPU cores.
 - Our own Metal kernels, our own engine. Purpose-built for Apple silicon and engineered to use your Mac at the physical limit.
-- No MLX. No GGUF. TinyTitan ships its own high-speed model format and a converter that builds it straight from the original weights.
+- No MLX. No GGUF. emone ships its own high-speed model format and a converter that builds it straight from the original weights.
   
 
 ### Special Features
@@ -354,7 +354,7 @@ tools/server_launcher.sh --client zed --model qwen38 --bits 4 --ram 8
   three-stage tiled GPU reduction, cutting per-token sampling cost from
   15.5 ms to 1.4 ms with a token-for-token identical stream — the main
   source of the v4.6 decode gain.
-- **ANE prefill:** `TINYTITAN_PREFILL_ANE=on` runs
+- **ANE prefill:** `EMONE_PREFILL_ANE=on` runs
   full-attention prefill blocks on the Neural Engine from a one-time
   exported Core ML sidecar, roughly halving long-prompt time to first
   token; short prompts and decode are untouched.
@@ -381,7 +381,7 @@ tools/server_launcher.sh --client zed --model qwen38 --bits 4 --ram 8
 
 ## Credits
 
-TinyTitan is a focused fork of
+emone is a focused fork of
 [drumih/turbo-fieldfare](https://github.com/drumih/turbo-fieldfare), whose
 bounded-memory runtime, installer, CLI and local server this project builds on.
 The Qwen 3.6 integration was created by

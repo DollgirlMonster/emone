@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 4 of the divergence overview (TinyTitan-8d0): task outcomes where the
+"""Phase 4 of the divergence overview (Emone-8d0): task outcomes where the
 short-chunk candidates actually engage.
 
 Phase 3 asked each task cold (about 50 tokens, no context), so small QMM

@@ -7,7 +7,7 @@ composed version of the same job. This measures the other six the same way,
 so the design is a finding rather than a claim.
 
     python3.13 benchmark/side_engine_tasks.py --prepare jobs.jsonl
-    .build/.../TinyTitanBench cpu35batch <snapshot> jobs.jsonl done.jsonl
+    .build/.../EmoneBench cpu35batch <snapshot> jobs.jsonl done.jsonl
     python3.13 benchmark/side_engine_tasks.py --score done.jsonl
 
 **Accuracy alone is not the result.** A model that always answers NO scores

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tabulate phase 4 of the divergence overview (TinyTitan-8d0): task outcomes
+"""Tabulate phase 4 of the divergence overview (Emone-8d0): task outcomes
 asked as follow-ups after a long document, every arm paired against base.
 
     python3 benchmark/divergence/phase4_report.py > benchmark/divergence/phase4-20261120/report.md

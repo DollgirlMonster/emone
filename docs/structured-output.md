@@ -1,6 +1,6 @@
 # Structured output
 
-A request may ask TinyTitan for JSON, and get JSON. The server does not prompt for
+A request may ask emone for JSON, and get JSON. The server does not prompt for
 it, or hope for it, or parse it out afterwards: it compiles the request into a
 byte-level grammar and masks the sampler with it, so every token the model draws
 is one the document can still contain. The result is a value the schema allows,
@@ -129,12 +129,12 @@ explicitly rather than served unconstrained.
 
 ## Verifying it
 
-`tests/TinyTitan/Runtime/Generation/JSONGrammarTests.swift` covers the grammar and
+`tests/Emone/Runtime/Generation/JSONGrammarTests.swift` covers the grammar and
 the schema compiler on bytes; `JSONConstraintTests.swift` covers the token sets;
 `JSONConstraintLoopTests.swift` runs the real decode loop over a scripted
 distribution that *prefers* a token the grammar forbids, and asserts the
 document that comes out — with the same script and no constraint as the control,
-which writes the forbidden token instead. `tests/TinyTitanServer/StructuredOutputTests.swift`
+which writes the forbidden token instead. `tests/EmoneServer/StructuredOutputTests.swift`
 covers the three spellings and the thinking-off rule.
 
 On a real install, verified 2026-09-14 with `models/qwen3.5_2B_4Bit` on the GPU
