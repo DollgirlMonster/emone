@@ -169,7 +169,7 @@ import EmoneMemory
             configuration: configuration)
         _ = try await backend.generate(request("write chapter 34"), onEvent: { _ in })
 
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         var written: [MemoryRecord] = []
         for _ in 0..<100 {
             try await Task.sleep(for: .milliseconds(25))
@@ -212,7 +212,7 @@ import EmoneMemory
         let second = try await backend.generate(request("write chapter 11"), onEvent: { _ in })
         #expect(second.content == "Chapter 11.", "the rollover request got its own answer")
 
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         var written: [MemoryRecord] = []
         for _ in 0..<100 {
             try await Task.sleep(for: .milliseconds(25))
@@ -518,7 +518,7 @@ import EmoneMemory
 /// first, and a reversion is a dispute rather than a silent overwrite.
 @Suite struct MemoryBootstrapQualityTests {
     private func scope() throws -> MemoryScope {
-        try MemoryScope(namespace: "emone", user: "local", workspace: "novel")
+        try MemoryScope(namespace: "tinytitan", user: "local", workspace: "novel")
     }
     private func key(_ raw: String) throws -> MemoryKey { try MemoryKey(validating: raw) }
 

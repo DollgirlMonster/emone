@@ -55,9 +55,9 @@ import Testing
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let now = Date()
-        let locked = directory.appendingPathComponent("emone/local/locked.ndjson")
-        let free = directory.appendingPathComponent("emone/local/free.ndjson")
-        let kept = directory.appendingPathComponent("emone/local/kept.ndjson")
+        let locked = directory.appendingPathComponent("tinytitan/local/locked.ndjson")
+        let free = directory.appendingPathComponent("tinytitan/local/free.ndjson")
+        let kept = directory.appendingPathComponent("tinytitan/local/kept.ndjson")
         try write(locked, modified: now.addingTimeInterval(-300))
         try write(free, modified: now.addingTimeInterval(-200))
         try write(kept, modified: now.addingTimeInterval(-100))
@@ -88,8 +88,8 @@ import Testing
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let now = Date()
-        let older = directory.appendingPathComponent("emone/local/older.ndjson")
-        let newer = directory.appendingPathComponent("emone/local/newer.ndjson")
+        let older = directory.appendingPathComponent("tinytitan/local/older.ndjson")
+        let newer = directory.appendingPathComponent("tinytitan/local/newer.ndjson")
         try write(older, modified: now.addingTimeInterval(-300))
         try write(newer, modified: now.addingTimeInterval(-100))
 
@@ -108,7 +108,7 @@ import Testing
     @Test func aWorkspaceWithoutALockFileIsNotHeld() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = directory.appendingPathComponent("emone/local/never-opened.ndjson")
+        let journal = directory.appendingPathComponent("tinytitan/local/never-opened.ndjson")
         try write(journal, modified: Date())
         #expect(!MemoryService.isLockHeld(at: journal))
     }

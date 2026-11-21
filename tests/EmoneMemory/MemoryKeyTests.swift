@@ -59,13 +59,13 @@ import Testing
     @Test(arguments: ["", " ", "..", ".", "with space", "colon:name", "a/b", "star*"])
     func rejectsUnsafeScopeComponents(_ raw: String) {
         #expect(throws: MemoryError.self) {
-            try MemoryScope(namespace: "emone", user: "local", workspace: raw)
+            try MemoryScope(namespace: "tinytitan", user: "local", workspace: raw)
         }
         #expect(throws: MemoryError.self) {
             try MemoryScope(namespace: raw, user: "local", workspace: "repo")
         }
         #expect(throws: MemoryError.self) {
-            try MemoryScope(namespace: "emone", user: raw, workspace: "repo")
+            try MemoryScope(namespace: "tinytitan", user: raw, workspace: "repo")
         }
     }
 

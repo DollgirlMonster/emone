@@ -137,7 +137,7 @@ record is [`docs/m1-prefill-spike.md`](docs/m1-prefill-spike.md).
 ---
 
 <p align="center">
-  ✨ NVMAI is now emone ! ✨
+  ✨ NVMAI is now TinyTitan ! ✨
 </p>
 
 <p align="center">

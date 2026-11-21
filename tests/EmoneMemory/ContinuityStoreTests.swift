@@ -288,7 +288,7 @@ import Testing
 
 @Suite struct ContinuityJournalStoreTests {
     private func scope() throws -> MemoryScope {
-        try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
     }
 
     private func pair() -> (ContinuityStore, ContinuityJournalStore) {
@@ -407,7 +407,7 @@ import Testing
         configuration.isEnabled = true
         configuration.workspace = "wiring-test"
         configuration.user = "local"
-        configuration.namespace = "emone"
+        configuration.namespace = "tinytitan"
         configuration.storage.directory = directory
         return configuration
     }
@@ -508,7 +508,7 @@ import Testing
 /// Reads have to stay bounded and prefixes have to mean what they say.
 @Suite struct ContinuityStoreReadTests {
     private func scope(_ workspace: String = "repo-a") throws -> MemoryScope {
-        try MemoryScope(namespace: "emone", user: "local", workspace: workspace)
+        try MemoryScope(namespace: "tinytitan", user: "local", workspace: workspace)
     }
 
     private func key(_ raw: String) throws -> MemoryKey { try MemoryKey(validating: raw) }
@@ -640,7 +640,7 @@ import Testing
         configuration.isEnabled = true
         configuration.workspace = workspace
         configuration.user = "local"
-        configuration.namespace = "emone"
+        configuration.namespace = "tinytitan"
         configuration.storage.directory = directory
         return configuration
     }
@@ -684,8 +684,8 @@ import Testing
             in: other)
         await service.shutDown()
 
-        let first = directory.appendingPathComponent("emone/local/repo-a.ndjson")
-        let second = directory.appendingPathComponent("emone/local/repo-b.ndjson")
+        let first = directory.appendingPathComponent("tinytitan/local/repo-a.ndjson")
+        let second = directory.appendingPathComponent("tinytitan/local/repo-b.ndjson")
         #expect(FileManager.default.fileExists(atPath: first.path))
         #expect(FileManager.default.fileExists(atPath: second.path))
 
@@ -730,7 +730,7 @@ import Testing
         await first.shutDown()
         await second.shutDown()
 
-        let file = directory.appendingPathComponent("emone/local/repo-a.ndjson")
+        let file = directory.appendingPathComponent("tinytitan/local/repo-a.ndjson")
         let contents = String(data: try Data(contentsOf: file), encoding: .utf8) ?? ""
         #expect(contents.contains("from first"))
         #expect(contents.contains("from second") == false)
@@ -773,7 +773,7 @@ import Testing
         await service.shutDown()
 
         // Everything written is still on disk; only residency was bounded.
-        let first = directory.appendingPathComponent("emone/local/repo-0.ndjson")
+        let first = directory.appendingPathComponent("tinytitan/local/repo-0.ndjson")
         #expect(FileManager.default.fileExists(atPath: first.path))
         let contents = try Data(contentsOf: first)
         #expect(contents.count > 0)
@@ -895,7 +895,7 @@ import Testing
         configuration.isEnabled = true
         configuration.workspace = "live"
         configuration.user = "local"
-        configuration.namespace = "emone"
+        configuration.namespace = "tinytitan"
         configuration.storage.directory = directory
         configuration.storage.retentionDays = days
         configuration.storage.maximumWorkspaces = cap
@@ -904,7 +904,7 @@ import Testing
 
     /// Writes a project file with a chosen last-write time.
     private func plant(_ name: String, in directory: URL, daysOld: Int) throws -> URL {
-        let folder = directory.appendingPathComponent("emone/local")
+        let folder = directory.appendingPathComponent("tinytitan/local")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("\(name).ndjson")
         try Data("{}\n".utf8).write(to: url)
@@ -915,7 +915,7 @@ import Testing
     }
 
     private func names(in directory: URL) -> Set<String> {
-        let folder = directory.appendingPathComponent("emone/local")
+        let folder = directory.appendingPathComponent("tinytitan/local")
         let files = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         return Set(files.filter { $0.hasSuffix(".ndjson") })
     }
@@ -963,7 +963,7 @@ import Testing
         #expect(kept.contains("live.ndjson"))
         #expect(kept.count == 2)
         // And the live file is older-proof: backdate it and sweep again.
-        let live = directory.appendingPathComponent("emone/local/live.ndjson")
+        let live = directory.appendingPathComponent("tinytitan/local/live.ndjson")
         try FileManager.default.setAttributes(
             [.modificationDate: Date().addingTimeInterval(-90 * 86_400)], ofItemAtPath: live.path)
         await service.sweepStaleWorkspaces()
@@ -1004,7 +1004,7 @@ import Testing
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("retention-facts-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let folder = directory.appendingPathComponent("emone/local")
+        let folder = directory.appendingPathComponent("tinytitan/local")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("old-novel.ndjson")
 
@@ -1036,7 +1036,7 @@ import Testing
         configuration.isEnabled = true
         configuration.workspace = "live"
         configuration.user = "local"
-        configuration.namespace = "emone"
+        configuration.namespace = "tinytitan"
         configuration.storage.directory = directory
         configuration.storage.retentionDays = 30
         let service = MemoryService(configuration: configuration)
@@ -1055,7 +1055,7 @@ import Testing
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("reader-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let folder = directory.appendingPathComponent("emone/local")
+        let folder = directory.appendingPathComponent("tinytitan/local")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("photograph-851a1c1a.ndjson")
         let engine = ContinuityEngine(journal: try FileJournal(url: url))
