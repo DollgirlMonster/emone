@@ -136,10 +136,25 @@ extension RealForwardRunner {
         try await forwardStepGate.acquire()
         forwardActivityCount &+= 1
         do {
-            let result = try await runPrefillChunked(
-                tokens: tokens, startPosition: startPosition, slot: slot,
-                outputMode: outputMode, config: config, into: logits,
-                onProgress: onProgress)
+            let result: PrefillResult
+            if Self.shortBranchForChunkedPrefill,
+                tokens.count <= Self.residentPrefillMaxBlockedRows
+            {
+                // EMONE_SHORT_BRANCH=1: a caller that does not know the
+                // short-branch entry (the fork harness, a readout) takes it
+                // anyway, so the two paths can be timed on one binary.
+                result = try await runShortBranchPrefill(
+                    tokens: tokens, startPosition: startPosition, slot: slot,
+                    outputMode: outputMode, config: config, into: logits,
+                    options: ShortBranchPrefillOptions()
+                ).result
+                onProgress(tokens.count)
+            } else {
+                result = try await runPrefillChunked(
+                    tokens: tokens, startPosition: startPosition, slot: slot,
+                    outputMode: outputMode, config: config, into: logits,
+                    onProgress: onProgress)
+            }
             await forwardStepGate.release()
             return result
         } catch {
@@ -148,6 +163,8 @@ extension RealForwardRunner {
         }
     }
 
+    /// `residentRowLimit` raises the per-row routed stage's row limit for
+    /// this call only (`prefillShortBranch`); nil keeps the ordinary one.
     func runPrefillChunked(
         tokens: ArraySlice<Int32>,
         startPosition: Int,
@@ -155,6 +172,7 @@ extension RealForwardRunner {
         outputMode: PrefillOutputMode,
         config: PrefillRuntimeConfig,
         into logits: MTLBuffer,
+        residentRowLimit: Int? = nil,
         onProgress: (Int) -> Void
     ) async throws -> PrefillResult {
         try prefillChunkState.requireClean(operation: "prefillChunked")
@@ -201,7 +219,8 @@ extension RealForwardRunner {
                     logits: logits,
                     scratch: scratch,
                     config: config,
-                    writeFinalHead: spanIndex == spans.count - 1)
+                    writeFinalHead: spanIndex == spans.count - 1,
+                    residentRowLimit: residentRowLimit)
                 try Task.checkCancellation()
                 onProgress(span.completedCount)
             }
@@ -250,7 +269,8 @@ extension RealForwardRunner {
         preparedHidden: MTLBuffer? = nil,
         snapshotGDNAfterFirstToken: Bool = false,
         useTwoRowProjection: Bool = false,
-        pairRoutedMoE: Bool = false
+        pairRoutedMoE: Bool = false,
+        residentRowLimit: Int? = nil
     ) async throws {
         // Layer-major prefill (one band of chunks walked layer by layer, with
         // a residual per chunk) is gone: every call runs the whole stack in
@@ -261,7 +281,8 @@ extension RealForwardRunner {
         // Decode's warm reads may still be in flight from the last token;
         // prefill plans its own tiles against a cache nothing else is filling.
         try drainResidentWarm()
-        residentPrefillChunk = try prepareResidentPrefill(tokenCount: tokens.count)
+        residentPrefillChunk = try prepareResidentPrefill(
+            tokenCount: tokens.count, rowLimit: residentRowLimit)
         guard kv != nil else {
             throw PrefillError.chunkedUnsupported("chunked prefill attention requires a KV cache")
         }
