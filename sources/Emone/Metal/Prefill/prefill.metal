@@ -1047,6 +1047,142 @@ PREFILL_ROUTED_QMM(64, 32)
 PREFILL_ROUTED_QMM(32, 64)
 #undef PREFILL_ROUTED_QMM
 
+// ---------------------------------------------------------------------------
+// Short-branch grouped routed stage (EMONE_SHORT_BRANCH_GROUPED).
+//
+// The tile path's grouping, built on the GPU from the router's picks so a
+// resident short branch needs no readback: pairs sorted by expert (pair order
+// within an expert), and one work item per <= `edge` rows of an expert. The
+// work list is padded to `work_capacity` with empty items, which the QMM
+// wrappers below skip, so the grid can be the worst case.
+// ---------------------------------------------------------------------------
+
+constant constexpr uint kShortBranchMaxExperts = 1024;
+
+kernel void short_branch_group_pairs(
+    device const uint*                topk_ids      [[buffer(0)]],
+    device const half*                topk_weights  [[buffer(1)]],
+    device PrefillTokenExpertPairMSL* sorted_pairs  [[buffer(2)]],
+    device PrefillRoutedQMMWork*      work          [[buffer(3)]],
+    constant uint&                    pair_count    [[buffer(4)]],
+    constant uint&                    top_k         [[buffer(5)]],
+    constant uint&                    num_experts   [[buffer(6)]],
+    constant uint&                    work_capacity [[buffer(7)]],
+    constant uint&                    edge          [[buffer(8)]],
+    uint lid [[thread_position_in_threadgroup]],
+    uint lsize [[threads_per_threadgroup]]
+) {
+    threadgroup uint counts[kShortBranchMaxExperts];
+    threadgroup uint pair_off[kShortBranchMaxExperts];
+    threadgroup uint item_off[kShortBranchMaxExperts];
+    threadgroup uint total_items;
+    const uint E = min(num_experts, kShortBranchMaxExperts);
+    for (uint e = lid; e < E; e += lsize) {
+        uint c = 0u;
+        for (uint p = 0u; p < pair_count; ++p) {
+            if (min(topk_ids[p], E - 1u) == e) ++c;
+        }
+        counts[e] = c;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (lid == 0u) {
+        uint pairs = 0u, items = 0u;
+        for (uint e = 0u; e < E; ++e) {
+            pair_off[e] = pairs;
+            item_off[e] = items;
+            pairs += counts[e];
+            items += (counts[e] + edge - 1u) / edge;
+        }
+        total_items = items;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint e = lid; e < E; e += lsize) {
+        const uint c = counts[e];
+        if (c == 0u) continue;
+        uint w = pair_off[e];
+        for (uint p = 0u; p < pair_count; ++p) {
+            if (min(topk_ids[p], E - 1u) != e) continue;
+            PrefillTokenExpertPairMSL pair;
+            pair.token = p / top_k;
+            pair.expert = e;
+            pair.rank = p % top_k;
+            pair.weight_bits_and_reserved = uint(as_type<ushort>(topk_weights[p]));
+            sorted_pairs[w++] = pair;
+        }
+        const uint n = (c + edge - 1u) / edge;
+        for (uint i = 0u; i < n; ++i) {
+            PrefillRoutedQMMWork item;
+            item.slot = e;
+            item.row = pair_off[e] + i * edge;
+            item.rows = min(edge, c - i * edge);
+            item.pad = 0u;
+            if (item_off[e] + i < work_capacity) work[item_off[e] + i] = item;
+        }
+    }
+    for (uint i = total_items + lid; i < work_capacity; i += lsize) {
+        PrefillRoutedQMMWork item;
+        item.slot = 0u; item.row = 0u; item.rows = 0u; item.pad = 0u;
+        work[i] = item;
+    }
+}
+
+/// One expert's device address, as the resident address table holds it.
+struct ShortBranchExpertAddress {
+    device const uint8_t* blob;
+};
+
+/// `prefill_routed_qmm_*` with the expert reached through the resident
+/// address table (indexed by expert id) instead of a tile's 16 bindings, and
+/// empty work items skipped. Same body, so the same arithmetic.
+#define SHORT_BRANCH_QMM(BM_, BN_)                                               \
+[[kernel, max_total_threads_per_threadgroup(128)]]                               \
+kernel void short_branch_qmm_gate_up_##BM_##x##BN_(                              \
+    device const half* x [[buffer(0)]],                                          \
+    device half* y [[buffer(1)]],                                                \
+    device const ShortBranchExpertAddress* experts [[buffer(2)]],                \
+    device const PrefillRoutedQMMWork* work [[buffer(3)]],                       \
+    constant PrefillRoutedQMMParams& p [[buffer(4)]],                            \
+    uint2 tg [[threadgroup_position_in_grid]],                                   \
+    ushort lid [[thread_index_in_threadgroup]],                                  \
+    ushort sg [[simdgroup_index_in_threadgroup]],                                \
+    ushort lane [[thread_index_in_simdgroup]]                                    \
+) {                                                                              \
+    threadgroup half xs[BM_ * kRoutedQMMLd];                                     \
+    threadgroup half ws[BN_ * kRoutedQMMLd];                                     \
+    threadgroup half ws2[BN_ * kRoutedQMMLd];                                    \
+    const PrefillRoutedQMMWork item = work[tg.y];                                \
+    if (item.rows == 0u) return;                                                 \
+    device const uint8_t* expert = experts[item.slot].blob;                      \
+    prefill_routed_qmm_body<true, BM_, BN_>(                                     \
+        x, y, prefill_qmm_weights(expert, p.w_off, p.s_off, p.b_off),            \
+        prefill_qmm_weights(expert, p.w2_off, p.s2_off, p.b2_off),               \
+        item, p, tg, lid, sg, lane, xs, ws, ws2);                                \
+}                                                                                \
+[[kernel, max_total_threads_per_threadgroup(128)]]                               \
+kernel void short_branch_qmm_##BM_##x##BN_(                                      \
+    device const half* x [[buffer(0)]],                                          \
+    device half* y [[buffer(1)]],                                                \
+    device const ShortBranchExpertAddress* experts [[buffer(2)]],                \
+    device const PrefillRoutedQMMWork* work [[buffer(3)]],                       \
+    constant PrefillRoutedQMMParams& p [[buffer(4)]],                            \
+    uint2 tg [[threadgroup_position_in_grid]],                                   \
+    ushort lid [[thread_index_in_threadgroup]],                                  \
+    ushort sg [[simdgroup_index_in_threadgroup]],                                \
+    ushort lane [[thread_index_in_simdgroup]]                                    \
+) {                                                                              \
+    threadgroup half xs[BM_ * kRoutedQMMLd];                                     \
+    threadgroup half ws[BN_ * kRoutedQMMLd];                                     \
+    const PrefillRoutedQMMWork item = work[tg.y];                                \
+    if (item.rows == 0u) return;                                                 \
+    const PrefillQMMWeights w =                                                  \
+        prefill_qmm_weights(experts[item.slot].blob, p.w_off, p.s_off, p.b_off); \
+    prefill_routed_qmm_body<false, BM_, BN_>(                                    \
+        x, y, w, w, item, p, tg, lid, sg, lane, xs, ws, ws);                     \
+}
+SHORT_BRANCH_QMM(64, 32)
+SHORT_BRANCH_QMM(64, 64)
+#undef SHORT_BRANCH_QMM
+
 /// The same tile for a dense projection: y[M, N] = x[M, K] . w[N, K]^T, with
 /// the scales and biases in their own bindings (`p`'s offsets unused). One
 /// kernel per output tile shape, `prefill_dense_qmm_<BM>x<BN>`.

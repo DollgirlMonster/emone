@@ -68,6 +68,8 @@ public struct ShortBranchPrefillOptions: Sendable, Equatable {
 public enum ShortBranchRoutedStage: Sendable, Equatable {
     /// Per-row decode kernels, routing resolved on the GPU, no host wait.
     case residentRows
+    /// The routed stage grouped by expert on the GPU (EMONE_SHORT_BRANCH_GROUPED).
+    case residentGrouped
     /// The host-planned tiles, with the reason the per-row stage was refused.
     case hostPlannedTiles(reason: String)
 }
@@ -159,6 +161,7 @@ extension RealForwardRunner {
             span = try finishResidentPrefillBuffers()
         } catch {
             residentPrefillDeferLastWait = false
+            residentPrefillRanGrouped = false
             _ = try? finishResidentPrefillBuffers()
             throw error
         }
@@ -166,10 +169,11 @@ extension RealForwardRunner {
 
         let stage: ShortBranchRoutedStage =
             short && residentPrefillChunk
-            ? .residentRows
+            ? (residentPrefillRanGrouped ? .residentGrouped : .residentRows)
             : .hostPlannedTiles(
                 reason: shortBranchTileReason(tokenCount: t, rowLimit: rowLimit, short: short))
         residentPrefillChunk = false
+        residentPrefillRanGrouped = false
         let report = ShortBranchPrefillReport(
             result: result, rows: t, routedStage: stage,
             warmedExperts: warmedExperts, warmNanos: warmNanos, wallNanos: wall,
@@ -216,6 +220,7 @@ extension RealForwardRunner {
         let stage: String
         switch report.routedStage {
         case .residentRows: stage = "resident_rows"
+        case .residentGrouped: stage = "resident_grouped"
         case .hostPlannedTiles(let reason): stage = "tiles (\(reason))"
         }
         let line =
