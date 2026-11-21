@@ -2,7 +2,7 @@
 # Serve one installed model on 127.0.0.1, tuned by its own profile row.
 #
 #   tools/serve.sh                     # the default install, below
-#   tools/serve.sh /Volumes/Chai/Emone/models/qwen38flash.gturbo
+#   tools/serve.sh /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
 #   EMONE_MODEL=/path/to/install tools/serve.sh --idle 600
 #   tools/serve.sh <install> --reasoning xhigh -- --kv-bits 4
 #
@@ -35,7 +35,7 @@ trap 'echo "serve: stopped at line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEFAULT_MODEL="${EMONE_DEFAULT_MODEL:-/Volumes/Chai/Emone/models/qwen3.6_35B_A3B_4Bit}"
+DEFAULT_MODEL="${EMONE_DEFAULT_MODEL:-/Volumes/Chai/TinyTitan/models/qwen3.6_35B_A3B_4Bit}"
 MODEL="${EMONE_MODEL:-}"
 MODELS_DIR=""
 CATALOG=1
