@@ -146,7 +146,7 @@ routine chatter. Found by booting a throwaway harness, not by reading.
 
 ```bash
 dsh plugin --profile web add ./plugins/dsh-lan-manager        # from the checkout
-dsh plugin --profile web add github:Pummelchen/TinyTitan#<commit>   # pinned
+dsh plugin --profile web add github:DollgirlMonster/emone#<commit>   # pinned
 ```
 
 The bundle patch mounts the row; the next `dsh web` picks it up. No `--patch` flag
