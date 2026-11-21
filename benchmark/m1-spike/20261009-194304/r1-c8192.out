@@ -1,0 +1,4 @@
+28)  added to the attention stream (key_proj is the indexer's input).
+
+The table is **not** a KV cache: it is a static embedding table. The
+runtime must stream it from disk (32 GB at 4-bit, 64 GB at 8-bit) and

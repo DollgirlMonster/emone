@@ -1,0 +1,10 @@
+commit      c0669c71 on main
+chip        Apple M1 Max
+memory      64 GiB
+gpu cores   32
+macOS       27.0 (26A428)
+swift       6.4
+model       /Volumes/Chai/TinyTitan/models/qwen3.6_35B_A3B_4Bit
+model disk  Protocol=PCI-Express  Device Location=External  Solid State=Yes  
+arms        base c8192 c16384 c32768
+rounds      2, prompt 56000 chars, max-new 64, cooldown 20s
