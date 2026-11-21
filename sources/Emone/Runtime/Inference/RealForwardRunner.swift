@@ -1563,6 +1563,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// Whether the prefill chunk in progress runs its routed stage per row
     /// on the decode kernels (`encodeResidentRoutedRowsPrefill`).
     var residentPrefillChunk = false
+    /// Set by `prefillShortBranch` for its one chunk: the per-row routed
+    /// stage leaves its last layer's buffer unwaited, so the head's wait is the
+    /// branch's only one (`finishResidentPrefillBuffers` checks the rest).
+    var residentPrefillDeferLastWait = false
     /// Scratch of the row-batched routed stage: rows*8 pointers, rows*8*F
     /// activations and the picks the resolve kernel logs.
     var residentRowsArgBuffer: MTLBuffer?
