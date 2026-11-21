@@ -1,0 +1,247 @@
+import Foundation
+import Synchronization
+
+/// Row gather over Qwen3.8-Flash-Next's n-gram embedding table.
+///
+/// The table is ~320M rows of `embedDim / heads` fp16 values — 102 GB at the
+/// production geometry, far past anything that could be resident. It is read
+/// the way routed experts are: bypassing the page cache, so the declared
+/// memory budget stays the real footprint.
+///
+/// The gather is much friendlier than an expert miss, though, and the
+/// difference is worth stating because it shapes how this should be scheduled:
+/// a row id depends only on token ids (see `PLEHash`), never on router output
+/// or any activation. The rows for token N+1 are therefore knowable the moment
+/// token N is sampled, so this read can be issued entirely off the decode
+/// critical path — where an expert miss cannot be, because routing is not
+/// known until the layer runs.
+///
+/// unchecked-invariant: immutable after `init`. The descriptor and geometry
+/// are never mutated afterwards, and `pread` does not move a shared file
+/// offset, so concurrent gathers only read.
+public final class NgramTableReader: @unchecked Sendable {
+    public enum Failure: Error, CustomStringConvertible {
+        case openFailed(path: String, errno: Int32)
+        case sizeMismatch(path: String, expected: UInt64, actual: UInt64)
+        case invalidGeometry(rowDim: Int, rowCount: UInt64)
+        case rowOutOfRange(row: UInt32, rowCount: UInt64)
+        case readFailed(row: UInt32, errno: Int32)
+        case shortRead(row: UInt32, expected: Int, got: Int)
+
+        public var description: String {
+            switch self {
+            case .openFailed(let p, let e):
+                return "n-gram table open(\(p)) failed: \(String(cString: strerror(e)))"
+            case .sizeMismatch(let p, let expected, let actual):
+                return "n-gram table \(p) is \(actual) bytes; expected at least "
+                    + "\(expected) and at most 1 MiB of alignment padding past "
+                    + "it. The table does not match the manifest's geometry"
+            case .invalidGeometry(let rowDim, let count):
+                return "n-gram table geometry is not usable: rowDim \(rowDim), "
+                    + "rowCount \(count). Both come from ple_constants.json, so "
+                    + "the sidecar is corrupt or built for another model"
+            case .rowOutOfRange(let row, let count):
+                return "n-gram row \(row) is outside the table's \(count) rows"
+            case .readFailed(let row, let e):
+                return "n-gram row \(row) read failed: \(String(cString: strerror(e)))"
+            case .shortRead(let row, let expected, let got):
+                return "n-gram row \(row) short read: expected \(expected), got \(got)"
+            }
+        }
+    }
+
+    private let fd: Int32
+    public let path: String
+    /// Values per row: `embedDim / totalHeads` (160 in production).
+    public let rowDim: Int
+    public let rowBytes: Int
+    public let rowCount: UInt64
+
+    /// - Parameters:
+    ///   - rowCount: expected rows, from the manifest's PLE geometry. The file
+    ///     size is checked against it: a table that disagrees would otherwise
+    ///     be read at plausible but wrong offsets, returning real embedding
+    ///     data from the wrong rows.
+    ///   - bypassCache: keep the gather out of the page cache. Default on,
+    ///     because a bounded footprint is the point of streaming.
+    public init(
+        path: String, rowDim: Int, rowCount: UInt64,
+        bypassCache: Bool = true
+    ) throws {
+        // Thrown, not a precondition: both values come from `ple_constants.json`,
+        // which is a file on disk rather than a fact of the build. A corrupt or
+        // foreign sidecar used to abort the process here instead of reporting
+        // itself.
+        guard rowDim > 0, rowCount > 0 else {
+            throw Failure.invalidGeometry(rowDim: rowDim, rowCount: rowCount)
+        }
+        let opened = open(path, O_RDONLY)
+        guard opened >= 0 else {
+            throw Failure.openFailed(path: path, errno: errno)
+        }
+        if bypassCache { _ = fcntl(opened, F_NOCACHE, 1) }
+        var st = stat()
+        guard fstat(opened, &st) == 0 else {
+            let code = errno
+            close(opened)
+            throw Failure.openFailed(path: path, errno: code)
+        }
+        // Checked, not wrapping. `rowCount &* bytes` could wrap to a small
+        // number, which collapses `expected` and lets the size guard below
+        // accept a table built for a completely different geometry.
+        let (rowBytes, byteOverflow) = rowDim.multipliedReportingOverflow(
+            by: MemoryLayout<Float16>.stride)
+        guard !byteOverflow, rowBytes > 0 else {
+            throw Failure.invalidGeometry(rowDim: rowDim, rowCount: rowCount)
+        }
+        let bytes = rowBytes
+        let (expected, sizeOverflow) = rowCount.multipliedReportingOverflow(
+            by: UInt64(bytes))
+        guard !sizeOverflow else {
+            throw Failure.invalidGeometry(rowDim: rowDim, rowCount: rowCount)
+        }
+        // The checkpoint pads the table past its last addressable row (the
+        // shipped one rounds up to a 512-row boundary), so an exact size is
+        // the wrong check. What this must still catch is a table built for a
+        // different geometry, and that differs by a whole head -- 20M rows,
+        // 6.4 GB -- not by alignment. Allowing at most 1 MiB of surplus
+        // separates the two by three orders of magnitude.
+        let size = UInt64(st.st_size)
+        let surplusLimit: UInt64 = 1 << 20
+        guard size >= expected, size - expected <= surplusLimit,
+            size % UInt64(bytes) == 0
+        else {
+            close(opened)
+            throw Failure.sizeMismatch(
+                path: path, expected: expected,
+                actual: size)
+        }
+        self.fd = opened
+        self.path = path
+        self.rowDim = rowDim
+        self.rowBytes = bytes
+        self.rowCount = rowCount
+    }
+
+    deinit { close(fd) }
+
+    /// Gathers `rows` into `destination`, which must hold
+    /// `rows.count * rowDim` fp16 values. Rows land in the order given, which
+    /// is head order — the caller concatenates them into the PLE input.
+    public func gather(
+        rows: [UInt32],
+        into destination: UnsafeMutableRawPointer
+    ) throws {
+        for (i, row) in rows.enumerated() {
+            try readRow(row, into: destination.advanced(by: i * rowBytes))
+        }
+    }
+
+    /// `gather` with the reads in flight together: the same rows, landing in
+    /// the same places, so the destination is byte-identical.
+    ///
+    /// Each row is its own small uncached read, so one at a time every row
+    /// pays a full device round trip -- on an external NVMe about 250 us, which
+    /// made a prefill token's 16 rows ~4 ms and 69 s of a 16.9K-token prompt
+    /// on an M1 Max. Issued together, the drive overlaps them -- but only as
+    /// deeply as there are blocked readers. `concurrentPerform` stops at the
+    /// core count (~10 in flight, ~18K reads/s, 9.4 s for that prompt's 271K
+    /// rows); the same drive gives ~86K reads/s at 128 in flight (2026-10-03),
+    /// so this runs its own `threads` readers. Repeated rows -- a prompt
+    /// repeats n-grams -- are read once and copied. Every row is
+    /// range-checked before any read starts, so a bad id reads nothing.
+    public static let defaultGatherThreads: Int = {
+        if let raw = ProcessInfo.processInfo.environment["EMONE_PLE_GATHER_THREADS"],
+            let n = Int(raw), n > 0
+        {
+            return min(n, 512)
+        }
+        return 128
+    }()
+
+    public func gatherConcurrently(
+        rows: [UInt32],
+        into destination: UnsafeMutableRawPointer,
+        threads: Int = NgramTableReader.defaultGatherThreads
+    ) throws {
+        for row in rows where UInt64(row) >= rowCount {
+            throw Failure.rowOutOfRange(row: row, rowCount: rowCount)
+        }
+        // First position of each distinct row; later positions copy from it.
+        var firstSeen: [UInt32: Int] = [:]
+        firstSeen.reserveCapacity(rows.count)
+        var unique: [Int] = []
+        unique.reserveCapacity(rows.count)
+        var copyFrom = [Int](repeating: -1, count: rows.count)
+        for (i, row) in rows.enumerated() {
+            if let first = firstSeen[row] {
+                copyFrom[i] = first
+            } else {
+                firstSeen[row] = i
+                unique.append(i)
+            }
+        }
+        let firstError = Mutex<Error?>(nil)
+        let next = Atomic<Int>(0)
+        nonisolated(unsafe) let target = destination
+        let workers = max(1, min(threads, unique.count))
+        let done = DispatchGroup()
+        // Readers spend their lives blocked in `pread`, so they are plain
+        // threads, not GCD workers: the pool would not grow past the cores.
+        // The group is waited on below, so the destination outlives every
+        // reader; readers write disjoint `rowBytes` ranges of it.
+        for _ in 0..<workers {
+            done.enter()
+            let thread = Thread {
+                defer { done.leave() }
+                while true {
+                    let k = next.wrappingAdd(1, ordering: .relaxed).oldValue
+                    if k >= unique.count { return }
+                    let i = unique[k]
+                    do {
+                        try self.readRow(rows[i], into: target.advanced(by: i * self.rowBytes))
+                    } catch {
+                        firstError.withLock { if $0 == nil { $0 = error } }
+                        return
+                    }
+                }
+            }
+            thread.stackSize = 64 << 10
+            thread.start()
+        }
+        done.wait()
+        if let error = firstError.withLock({ $0 }) { throw error }
+        for (i, first) in copyFrom.enumerated() where first >= 0 {
+            target.advanced(by: i * rowBytes).copyMemory(
+                from: target.advanced(by: first * rowBytes), byteCount: rowBytes)
+        }
+    }
+
+    private func readRow(_ row: UInt32, into target: UnsafeMutableRawPointer) throws {
+        guard UInt64(row) < rowCount else {
+            throw Failure.rowOutOfRange(row: row, rowCount: rowCount)
+        }
+        let offset = UInt64(row) &* UInt64(rowBytes)
+        var moved = 0
+        while moved < rowBytes {
+            let n = pread(
+                fd, target.advanced(by: moved),
+                rowBytes - moved, off_t(offset) + off_t(moved))
+            if n < 0 {
+                if errno == EINTR { continue }
+                throw Failure.readFailed(row: row, errno: errno)
+            }
+            if n == 0 {
+                throw Failure.shortRead(
+                    row: row, expected: rowBytes,
+                    got: moved)
+            }
+            moved += n
+        }
+    }
+
+    /// Bytes one token's gather moves, for budgeting. At the production
+    /// geometry this is 16 x 320 B = 5 KiB per token — three orders of
+    /// magnitude under a routed-expert token's traffic.
+    public func gatherBytes(headCount: Int) -> Int { headCount * rowBytes }
+}

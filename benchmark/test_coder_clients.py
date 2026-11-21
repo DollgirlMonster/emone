@@ -1,6 +1,6 @@
 """The launcher and the coder harness have to name the same clients.
 
-The list lives once, in `tools/tinytitan_models.sh` (`TINYTITAN_CLIENTS`). These tests
+The list lives once, in `tools/emone_models.sh` (`EMONE_CLIENTS`). These tests
 pin both consumers to it: the launcher's help, its menu and its `--client`
 validation, and this harness's `--clients` choices, binary search and command
 builders. A client added to the catalogue without a command builder — or a coder
@@ -25,7 +25,7 @@ import coder_cli_benchmark as harness
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "tools/server_launcher.sh"
-SERVER = ROOT / ".build/release/TinyTitanServer"
+SERVER = ROOT / ".build/release/EmoneServer"
 MODELS = ROOT / "models"
 
 
@@ -55,7 +55,7 @@ def installed_model() -> str | None:
 def run_launcher(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
     if stdin is not None:
-        environment["TINYTITAN_LAUNCHER_ASSUME_TTY"] = "1"
+        environment["EMONE_LAUNCHER_ASSUME_TTY"] = "1"
     return subprocess.run(
         ["bash", str(LAUNCHER), *args],
         input=stdin,

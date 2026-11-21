@@ -64,7 +64,7 @@ same prefix are never rewritten.
   title request) reseeds the frontier rather than pinning it below a chunk. The
   original version shrank monotonically, so one such request switched capture
   off until restart.
-- `TINYTITAN_FRONTIER_CACHE=off` disables capture and restore.
+- `EMONE_FRONTIER_CACHE=off` disables capture and restore.
 
 **Log lines.** `prompt_cache hit tier=frontier-ram|frontier-ssd cached_tokens=N`,
 `prompt_cache frontier_stored tokens=N state_bytes=B`, and

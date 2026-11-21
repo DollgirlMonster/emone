@@ -1,7 +1,7 @@
 # Adding a model to the family
 
 This is the checklist for turning a Hugging Face checkpoint into a first-class
-TinyTitan member at 4-bit and 8-bit. It exists because the work is spread over
+emone member at 4-bit and 8-bit. It exists because the work is spread over
 eight places in the tree and the order matters: the research decides whether it
 is a wiring job or a runtime job, and nothing is called *supported* until a real
 model has been run.
@@ -89,7 +89,7 @@ are byte-identical. That answers "will the parser accept its tool calls?" by
 construction rather than by hoping.
 
 **2. Resolve every key the repacker's arch reader requires.** Read the
-`loadQwen35MoE` branch of `sources/TinyTitanRepack/Core/Format/ArchInfo.swift`,
+`loadQwen35MoE` branch of `sources/EmoneRepack/Core/Format/ArchInfo.swift`,
 extract its `try i("…")` keys, and check each against the checkpoint's
 `text_config`. A missing one is a `configJsonInvalid` at the end of the
 conversion; KAT has all seventeen, plus `layer_types` and both rope keys.
@@ -113,7 +113,7 @@ even though the converter would not complain.
 | --- | --- | --- |
 | 1 | `tools/prepare_agentworld.py` — `MODELS` | The repo and the **pinned sha**, with a comment recording what was verified about the checkpoint |
 | 2 | `tools/install_models.sh` — `CATALOGUE` | Two rows (`<key>`, `<key>-8bit`) and the preset→served-id `case` |
-| 3 | `tools/tinytitan_models.sh` | The key/stem/label `case` with the fallback fields it carries beside them — `ENGINES`, `THINKING` and `FAMILY` — because that list is what the launcher offers when the server cannot report a catalog; plus the unknown-model help text and `TINYTITAN_ALL_MODELS` |
+| 3 | `tools/emone_models.sh` | The key/stem/label `case` with the fallback fields it carries beside them — `ENGINES`, `THINKING` and `FAMILY` — because that list is what the launcher offers when the server cannot report a catalog; plus the unknown-model help text and `EMONE_ALL_MODELS` |
 | 4 | `tools/server_launcher.sh` | The model-key list in the header comment and in the unknown-model error |
 | 5 | `ModelProfile.swift` | One row per width. Sample from the **checkpoint's** config; say in the comment when cache/prefetch values are inherited from identical geometry rather than measured |
 | 6 | `ModelCatalog.swift` — `displayNames` | The served id → human name (`/v1/models` reads this) |
@@ -134,7 +134,7 @@ not group-aligned.
 The converters need **Python 3.10+ with numpy, ml_dtypes and safetensors**, and
 they resolve that themselves: `tools/lib/python.sh` tries `python3.14` down to
 `python3`, testing version *and* imports for each, and takes the first that
-passes. Use whichever name it resolved, or point `TINYTITAN_PYTHON` at a specific
+passes. Use whichever name it resolved, or point `EMONE_PYTHON` at a specific
 interpreter (a virtualenv, say). A bare `python3` is not safe to assume: on a
 stock macOS it is 3.9 from `/usr/bin`, older than these scripts' syntax and
 without the packages.
@@ -209,7 +209,7 @@ The project's bar, in this order:
    it never downloads the model to close the gap. Until the baseline is
    captured, a direct `--check <target>` fails closed with "no verified install"
    or "no baseline", which is the guard working.
-3. **The receipt**: `TinyTitanRepack --verify-install --input-gturbo <dir>` passes,
+3. **The receipt**: `EmoneRepack --verify-install --input-gturbo <dir>` passes,
    and the manifest's `sourceSnapshotHash` matches the snapshot that produced
    it.
 4. **The catalog is right**: `/v1/models` lists the id with the name from
@@ -242,7 +242,7 @@ re-download. Re-issue each in place:
 ```bash
 for d in models/*/; do
   [ -f "$d/verified-install.json" ] || continue
-  swift run -c release TinyTitanRepack --verify-install --input-gturbo "$d"
+  swift run -c release EmoneRepack --verify-install --input-gturbo "$d"
 done
 ```
 

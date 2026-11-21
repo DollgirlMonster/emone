@@ -62,7 +62,7 @@ jobs:
           echo "/tmp/swiftlint-0.65.1" >> "$GITHUB_PATH"
       - name: Plugin tests (harness-version pins)
         # The cheapest gate, and independent of the Swift build: the plugin
-        # suites run in about a second together. dsh-tinytitan asserts the one
+        # suites run in about a second together. dsh-emone asserts the one
         # harness release it supports against both its `package.json` peer pins
         # and the launcher's pin in `tools/dsh_local.sh`, so drift in either
         # fails here in seconds rather than at a user's boot.
@@ -127,7 +127,7 @@ jobs:
           python3 -m unittest test_dsh_isolation test_install_models_menu
       - name: Run serial tests
         # `swift test` implicitly performs its own DEBUG build, which also
-        # produces the `.build/debug/TinyTitanRepack` binary that RepackCLITests
+        # produces the `.build/debug/EmoneRepack` binary that RepackCLITests
         # spawns — no separate debug build step is needed.
         run: swift test --no-parallel
       - name: Check Markdown links
@@ -177,8 +177,8 @@ jobs:
       # happens-before TSan does not model, reproduced under load on 2026-09-18.
       # `tools/tsan-suppressions.txt` carries the report, the reproduction and the
       # argument that the racy block is the drainer task's own frame rather than
-      # `SSEOutbox` (whose fields are all lock-guarded). Anything in TinyTitan code
-      # still has a TinyTitan top frame, so a real race still fails this job.
+      # `SSEOutbox` (whose fields are all lock-guarded). Anything in Emone code
+      # still has a Emone top frame, so a real race still fails this job.
       TSAN_OPTIONS: suppressions=${{ github.workspace }}/tools/tsan-suppressions.txt
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -1,4 +1,4 @@
-# Release and build rules — TinyTitan
+# Release and build rules — emone
 
 The release and build standard for this repository.
 
@@ -184,7 +184,7 @@ Leave previous releases' notes and performance tables alone.
 
 # Part 2 — This repository
 
-## TinyTitan — Swift, semantic version, 21 releases
+## emone — Swift, semantic version, 21 releases
 
 *The reference implementation of this standard.* Runbook:
 `docs/release-process.md`. Mechanism: `tools/release.sh`.
@@ -202,13 +202,13 @@ cherry-picks or patches go to the parent**, and every change stays inside this
 repository.
 
 - **Identity** `vX.Y.Z`. The only version literal in the tree is
-  `ServerVersion.current` in `sources/TinyTitanServer/Core/ServerVersion.swift`,
+  `ServerVersion.current` in `sources/EmoneServer/Core/ServerVersion.swift`,
   which the server prints in its ready banner; `tools/release.sh` refuses a tag
   that disagrees with it. The wiki `Changelog.md` carries the announcement and
   the README carries none.
-- **Artifacts** `tinytitan-X.Y-macos-arm64.tar.gz` + `.sha256`, containing **four
-  executables** — `TinyTitanServer`, `TinyTitanCLI`,
-  `TinyTitanRepack`, `TinyTitanBench` — plus the
+- **Artifacts** `emone-X.Y-macos-arm64.tar.gz` + `.sha256`, containing **four
+  executables** — `EmoneServer`, `EmoneCLI`,
+  `EmoneRepack`, `EmoneBench` — plus the
   `.bundle` resources, licence and notices.
 - **Gates** `tools/lint.sh` (six gates: force-cast, func-length, sendable,
   converter, arch-path, shell-portability); `swift test --no-parallel`; **every installed model with

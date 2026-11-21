@@ -18,7 +18,7 @@ plus `--skip-done`, which skips the models already stored (a model whose run
 
 ## What it measures
 
-One variable: `TINYTITAN_PREFILL_ANE`. Each model runs a discarded warm-up per
+One variable: `EMONE_PREFILL_ANE`. Each model runs a discarded warm-up per
 arm — the first ANE run pays the Core ML compile, which on AgentWorld 4-bit was
 ~68 s against an 86 s prefill — and then `--repeats` measured runs per arm
 (default 2), alternating so drift lands on both. The metric is **prefill seconds
@@ -65,7 +65,7 @@ python3 benchmark/ane_prefill_correctness.py \
 
 A model whose full-attention layers select keys with a QSA indexer gets a third
 arm: `causal`, which runs the ANE with the causal-only mask the fold exists to
-replace (`TINYTITAN_ANE_MASK=causal`, a verification control that prints a
+replace (`EMONE_ANE_MASK=causal`, a verification control that prints a
 warning). It is the negative control. `on` is expected to track the GPU arm and
 `causal` to diverge from it; an arm that fell back is reported as an error,
 never as a comparison.
@@ -145,7 +145,7 @@ dropped key, which `exp()` underflows to zero exactly as an omitted key
 contributes nothing — and **the graph does not change at all**. What was added is
 the fold itself (a per-layer mask, because each layer selects its own keys), the
 `selectionFolded` contract the runtime refuses to run without, and the checks
-below. `TINYTITAN_ANE_MASK=causal` is a verification control that feeds the
+below. `EMONE_ANE_MASK=causal` is a verification control that feeds the
 causal-only mask instead, and prints a warning when it does.
 
 **Then it was measured, and it does not pay.** Both 3.8 widths, prompt ~4,333
@@ -271,7 +271,7 @@ The ANE's saving is a roughly **fixed amount of attention work**: on the dense
 2B it was 30.0 s at 4-bit and 30.2 s at 8-bit, so the *ratio* falls as the
 non-attention prefill (which the ANE never touches) grows.
 
-None of this is a switch. `TINYTITAN_PREFILL_ANE` is on by default for every
+None of this is a switch. `EMONE_PREFILL_ANE` is on by default for every
 GPU-path model; what varies is whether there is a sidecar the chunk can match.
 
 ## Which families can carry a sidecar

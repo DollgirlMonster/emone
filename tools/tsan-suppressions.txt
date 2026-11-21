@@ -1,4 +1,4 @@
-# ThreadSanitizer suppressions for TinyTitan's CI gate.
+# ThreadSanitizer suppressions for Emone's CI gate.
 #
 # Used by the `thread-sanitizer` job (and by any local `swift test
 # --sanitize=thread`), through:
@@ -25,8 +25,8 @@
 # usually clean, so the load is what makes it show):
 #
 #   swift build --build-tests --sanitize=thread
-#   B=.build/out/Products/Debug/TinyTitanServerTests.xctest/Contents/MacOS/TinyTitanServerTests
-#   D=.build/out/Products/Debug/TinyTitanServerTests.xctest/Contents/Frameworks/libclang_rt.tsan_osx_dynamic.dylib
+#   B=.build/out/Products/Debug/EmoneServerTests.xctest/Contents/MacOS/EmoneServerTests
+#   D=.build/out/Products/Debug/EmoneServerTests.xctest/Contents/Frameworks/libclang_rt.tsan_osx_dynamic.dylib
 #   for i in 1 2 3 4 5 6; do
 #     DYLD_INSERT_LIBRARIES=$D TSAN_OPTIONS=halt_on_error=0 \
 #       swiftpm-testing-helper --test-bundle-path $B --no-parallel $B \
@@ -47,7 +47,7 @@
 #
 # Why `race_top` rather than `race`. `race_top` matches only the **top frame** of
 # one of the two stacks; here that is Swift's own continuation-resume helper. A
-# real race inside `SSEOutbox` would have TinyTitan code as a top frame and still
+# real race inside `SSEOutbox` would have Emone code as a top frame and still
 # be reported, which is the property that keeps this gate meaningful. Confirmed
 # on 2026-09-18: with this file the six-process storm reports nothing and TSan
 # prints "Matched 1 suppressions"; with a pattern that matches nothing the same

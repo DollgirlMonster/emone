@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the four-program Ornith coding/tooling matrix.
 
-Each matrix cell starts a new TinyTitanServer process and gives each of four small
+Each matrix cell starts a new EmoneServer process and gives each of four small
 programs a fresh tool conversation. The model executes repairs through bounded
 tools and is then scored on separate hidden inputs. The four hidden outputs
 form one ordered final result, so a cell passes only when every program is
@@ -27,11 +27,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from coder_cli_benchmark import preflight, utc_now
-from tinytitan_profile import DEFAULT_API_MODEL, server_command, server_environment
+from emone_profile import DEFAULT_API_MODEL, server_command, server_environment
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SERVER = ROOT / ".build/release/TinyTitanServer"
+SERVER = ROOT / ".build/release/EmoneServer"
 DEFAULT_OUTPUT = ROOT / ".build/ornith-four-program-matrix"
 DEFAULT_PORT = 18350
 MODEL_PATHS = {
@@ -40,19 +40,19 @@ MODEL_PATHS = {
 }
 PYTHON_314 = pathlib.Path(
     os.environ.get(
-        "TINYTITAN_BENCH_PYTHON_314",
+        "EMONE_BENCH_PYTHON_314",
         str(pathlib.Path.home() / ".venvs/tools/bin/python"),
     )
 )
 TENSORFLOW_PYTHON = pathlib.Path(
     os.environ.get(
-        "TINYTITAN_BENCH_TENSORFLOW_PYTHON",
+        "EMONE_BENCH_TENSORFLOW_PYTHON",
         str(pathlib.Path.home() / ".venvs/tensorflow-metal-py311/bin/python"),
     )
 )
 PYTORCH_PYTHON = pathlib.Path(
     os.environ.get(
-        "TINYTITAN_BENCH_PYTORCH_PYTHON",
+        "EMONE_BENCH_PYTORCH_PYTHON",
         shutil.which("python3.13") or "/opt/homebrew/bin/python3.13",
     )
 )

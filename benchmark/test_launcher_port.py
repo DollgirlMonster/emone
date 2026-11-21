@@ -3,8 +3,8 @@
 
 The port is the one thing the launcher asks about the *server* rather than the
 model, so it has three ways in — the interactive question, `--port`, and
-`TINYTITAN_PORT` — and exactly one default, `TINYTITAN_DEFAULT_PORT` in
-`tools/tinytitan_models.sh`. These tests pin all four, the validation that runs
+`EMONE_PORT` — and exactly one default, `EMONE_DEFAULT_PORT` in
+`tools/emone_models.sh`. These tests pin all four, the validation that runs
 before anything is started, and that an unattended run neither hangs nor asks.
 
 Run from this directory, like the other benchmark tests:
@@ -23,8 +23,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "tools/server_launcher.sh"
-MODELS_SH = ROOT / "tools/tinytitan_models.sh"
-SERVER = ROOT / ".build/release/TinyTitanServer"
+MODELS_SH = ROOT / "tools/emone_models.sh"
+SERVER = ROOT / ".build/release/EmoneServer"
 MODELS = ROOT / "models"
 
 INSTALLED = ROOT / "models/qwen3.8-flash-next_125B_A6B_4Bit"
@@ -47,9 +47,9 @@ QUIET_ANSWERS = (
 
 def shared_default() -> int:
     """The one default, read from where the scripts read it."""
-    match = re.search(r"^TINYTITAN_DEFAULT_PORT=(\d+)$", MODELS_SH.read_text(), re.MULTILINE)
+    match = re.search(r"^EMONE_DEFAULT_PORT=(\d+)$", MODELS_SH.read_text(), re.MULTILINE)
     if match is None:
-        raise AssertionError("tinytitan_models.sh no longer declares TINYTITAN_DEFAULT_PORT")
+        raise AssertionError("emone_models.sh no longer declares EMONE_DEFAULT_PORT")
     return int(match.group(1))
 
 
@@ -75,12 +75,12 @@ def run_launcher(
     *args: str, env: dict | None = None, stdin: str = "", interactive: bool = False
 ) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
-    environment["TINYTITAN_LAUNCHER_DRY_RUN"] = "1"
+    environment["EMONE_LAUNCHER_DRY_RUN"] = "1"
     if interactive:
-        environment["TINYTITAN_LAUNCHER_ASSUME_TTY"] = "1"
+        environment["EMONE_LAUNCHER_ASSUME_TTY"] = "1"
     else:
-        environment.pop("TINYTITAN_LAUNCHER_ASSUME_TTY", None)
-    environment.pop("TINYTITAN_PORT", None)
+        environment.pop("EMONE_LAUNCHER_ASSUME_TTY", None)
+    environment.pop("EMONE_PORT", None)
     if env:
         environment.update(env)
     return subprocess.run(
@@ -122,16 +122,16 @@ class PortChoiceTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:9123/v1", run.stdout)
         # Anything that assumes the default has to be told; the harness route is
         # the one the launcher does not write itself.
-        self.assertIn("TINYTITAN_PORT=9123 tools/dsh_route.sh --write", run.stdout)
+        self.assertIn("EMONE_PORT=9123 tools/dsh_route.sh --write", run.stdout)
 
     def test_the_environment_port_is_used(self) -> None:
-        run = run_launcher(*self.base, env={"TINYTITAN_PORT": "9321"})
+        run = run_launcher(*self.base, env={"EMONE_PORT": "9321"})
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(reported_port(run), "9321")
-        self.assertIn("TINYTITAN_PORT=9321 tools/dsh_route.sh --write", run.stdout)
+        self.assertIn("EMONE_PORT=9321 tools/dsh_route.sh --write", run.stdout)
 
     def test_a_flag_beats_the_environment(self) -> None:
-        run = run_launcher(*self.base, "--port", "9123", env={"TINYTITAN_PORT": "9321"})
+        run = run_launcher(*self.base, "--port", "9123", env={"EMONE_PORT": "9321"})
         self.assertEqual(reported_port(run), "9123")
 
     def test_a_port_the_default_does_not_need_no_hint(self) -> None:
@@ -171,7 +171,7 @@ class PortQuestionTests(unittest.TestCase):
         run = run_launcher(*self.base, stdin="9123\n", interactive=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(reported_port(run), "9123")
-        self.assertIn("TINYTITAN_PORT=9123 tools/dsh_route.sh --write", run.stdout)
+        self.assertIn("EMONE_PORT=9123 tools/dsh_route.sh --write", run.stdout)
 
     def test_a_typed_port_that_is_not_a_number_is_refused(self) -> None:
         run = run_launcher(*self.base, stdin="eighty\n", interactive=True)

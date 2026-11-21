@@ -1,7 +1,7 @@
 # Internal speeds
 
 One record per release, measured with `tools/internal-speeds.py`, so a speed
-regression is a diff rather than a feeling. The numbers are TinyTitan's own —
+regression is a diff rather than a feeling. The numbers are emone's own —
 kernel bandwidth, prefill and decode rates, time to first token, and a small
 quality proxy on a fixed prompt — measured on the same machine and the same
 model the golden baselines use.

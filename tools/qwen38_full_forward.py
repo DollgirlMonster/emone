@@ -60,10 +60,10 @@ def main():
         print(f"  L{layer:02d} entry  {flag} cos={cos:.5f}")
         # Stop at the first divergence by default: past it the reference is
         # being fed the runtime's own drifted state and every later layer is
-        # noise about the same fault. `TINYTITAN_PARITY_ALL=1` runs the whole
+        # noise about the same fault. `EMONE_PARITY_ALL=1` runs the whole
         # stack anyway, which is what distinguishes one wrong layer from a
         # gradual drift -- the shape of the curve is the diagnosis.
-        if first_bad is not None and not os.environ.get("TINYTITAN_PARITY_ALL"):
+        if first_bad is not None and not os.environ.get("EMONE_PARITY_ALL"):
             break
 
         if layer in PLE_LAYERS:

@@ -3,14 +3,14 @@
 #
 #   tools/serve.sh                     # the default install, below
 #   tools/serve.sh /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
-#   TINYTITAN_MODEL=/path/to/install tools/serve.sh --idle 600
+#   EMONE_MODEL=/path/to/install tools/serve.sh --idle 600
 #   tools/serve.sh <install> --reasoning xhigh -- --kv-bits 4
 #
 # The short path for a model that lives anywhere, including an external
 # drive; tools/server_launcher.sh is the full, interactive one for models/.
 # Everything tuned per model -- the prefill chunk, the prefill kernel
 # switches, the expert-cache budget, sampling -- comes from the install's
-# ModelProfile row, so this script sets no TINYTITAN_* switch of its own.
+# ModelProfile row, so this script sets no EMONE_* switch of its own.
 # The one server default it does set is reasoning: on, so a thinking model
 # thinks (the model's template default effort -- extra high on Qwen3.8).
 #
@@ -23,7 +23,7 @@
 # a Qwen3.8 snapshot at 40K tokens is ~2.8 GB, so the server's own 8 GiB
 # default keeps only about three conversations.
 #
-# With no install named, it serves TINYTITAN_DEFAULT_MODEL (Qwen 3.6 35B-A3B
+# With no install named, it serves EMONE_DEFAULT_MODEL (Qwen 3.6 35B-A3B
 # 4-bit on the external drive). The install's own directory is passed as
 # --models-dir, so a request naming another model there switches to it, and
 # on a terminal the live trace view (--live-trace) is on.
@@ -35,14 +35,14 @@ trap 'echo "serve: stopped at line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEFAULT_MODEL="${TINYTITAN_DEFAULT_MODEL:-/Volumes/Chai/TinyTitan/models/qwen3.6_35B_A3B_4Bit}"
-MODEL="${TINYTITAN_MODEL:-}"
+DEFAULT_MODEL="${EMONE_DEFAULT_MODEL:-/Volumes/Chai/TinyTitan/models/qwen3.6_35B_A3B_4Bit}"
+MODEL="${EMONE_MODEL:-}"
 MODELS_DIR=""
 CATALOG=1
 LIVE_TRACE=auto
-PORT="${TINYTITAN_PORT:-8089}"
+PORT="${EMONE_PORT:-8089}"
 IDLE=900
-CACHE_ROOT="${TINYTITAN_PROMPT_CACHE_ROOT:-$ROOT/.prompt-cache}"
+CACHE_ROOT="${EMONE_PROMPT_CACHE_ROOT:-$ROOT/.prompt-cache}"
 REASONING=on
 DISK_GIB=100
 DRY_RUN=0
@@ -52,13 +52,13 @@ usage() {
   sed -n '2,/^set -/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
   cat <<'USAGE'
 Options:
-  <install>            model directory (or TINYTITAN_MODEL; default
-                       TINYTITAN_DEFAULT_MODEL, Qwen 3.6 35B-A3B 4-bit)
+  <install>            model directory (or EMONE_MODEL; default
+                       EMONE_DEFAULT_MODEL, Qwen 3.6 35B-A3B 4-bit)
   --models-dir <dir>   catalog for model switching (default: the install's
                        own directory)
   --no-catalog         serve the one install only, no --models-dir
   --no-live-trace      plain log output even on a terminal
-  --port <n>           default 8089 (TINYTITAN_PORT)
+  --port <n>           default 8089 (EMONE_PORT)
   --idle <seconds>     release the model after this long idle (default 900;
                        0 keeps it loaded from the first request on)
   --disk-cache-gib <n> SSD prompt-cache budget in GiB (default 100; 0 disables)
@@ -66,7 +66,7 @@ Options:
                        (default on); skipped when the server args after --
                        carry --reasoning, --thinking or --reasoning-effort
   --dry-run            print the server command and start nothing
-  -- <server args>     passed to TinyTitanServer unchanged, last, so they win
+  -- <server args>     passed to EmoneServer unchanged, last, so they win
 USAGE
 }
 
@@ -139,27 +139,27 @@ fi
 
 cd "$ROOT"
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "TinyTitanServer ${server_args[*]+"${server_args[*]}"} ${EXTRA[*]+"${EXTRA[*]}"}"
+  echo "EmoneServer ${server_args[*]+"${server_args[*]}"} ${EXTRA[*]+"${EXTRA[*]}"}"
   exit 0
 fi
 
 [ "$(uname -s)" = "Darwin" ] || die "needs macOS on Apple Silicon"
-busy="$(pgrep -fl 'TinyTitanServer|TinyTitanCLI|TinyTitanPackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm' || true)"
+busy="$(pgrep -fl 'EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm' || true)"
 [ -z "$busy" ] || die "another model or test process is running; stop it first:
 $busy"
 
 # Always build: incremental, seconds when nothing changed, and it keeps a pull
 # from serving on a stale binary.
-swift build -c release --product TinyTitanServer >&2
+swift build -c release --product EmoneServer >&2
 BIN_DIR="$(swift build -c release --show-bin-path)"
 mkdir -p "$cache_dir"
 # Prefix-reuse measurement: hashes only, one line per request, read by
-# benchmark/prefix_log_report.py. Set TINYTITAN_PREFIX_LOG= (empty) to turn it off.
-export TINYTITAN_PREFIX_LOG="${TINYTITAN_PREFIX_LOG-$CACHE_ROOT/prefix-log/${name%.gturbo}.jsonl}"
-if [ -n "$TINYTITAN_PREFIX_LOG" ]; then
-  mkdir -p "$(dirname "$TINYTITAN_PREFIX_LOG")"
-  echo "serve: prefix log $TINYTITAN_PREFIX_LOG" >&2
+# benchmark/prefix_log_report.py. Set EMONE_PREFIX_LOG= (empty) to turn it off.
+export EMONE_PREFIX_LOG="${EMONE_PREFIX_LOG-$CACHE_ROOT/prefix-log/${name%.gturbo}.jsonl}"
+if [ -n "$EMONE_PREFIX_LOG" ]; then
+  mkdir -p "$(dirname "$EMONE_PREFIX_LOG")"
+  echo "serve: prefix log $EMONE_PREFIX_LOG" >&2
 fi
 
 echo "serve: $name on http://127.0.0.1:$PORT (idle unload: ${IDLE}s, prompt cache: $cache_dir)" >&2
-exec "$BIN_DIR/TinyTitanServer" ${server_args[@]+"${server_args[@]}"} ${EXTRA[@]+"${EXTRA[@]}"}
+exec "$BIN_DIR/EmoneServer" ${server_args[@]+"${server_args[@]}"} ${EXTRA[@]+"${EXTRA[@]}"}

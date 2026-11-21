@@ -1,0 +1,1392 @@
+import Darwin
+import Foundation
+import Metal
+import Synchronization
+
+/// Raw staging pointers are allocated by Metal and remain valid until the
+/// owning prefetch ring releases them. This wrapper makes that lifetime
+/// invariant explicit at the scheduler boundary.
+/// unchecked-invariant: the ring retains every backing MTLBuffer until this
+/// request has reached a terminal state.
+private final class PrefetchDestinations: @unchecked Sendable {
+    let values: [UnsafeMutableRawPointer]
+
+    init(_ values: [UnsafeMutableRawPointer]) {
+        self.values = values
+    }
+}
+
+/// SSD-backed routed-expert streamer with a fixed per-layer slot cache.
+/// unchecked-invariant: the expert cache bookkeeping is guarded by `cacheLock`,
+/// which is what lets `DispatchQueue.concurrentPerform` fan the misses out
+/// across threads. Slot state is published only after all direct reads finish,
+/// so concurrent planners never treat partial bytes as resident.
+public final class PreadExpertStreamer: @unchecked Sendable {
+    public static let scratchAlignment = 2 * 1024 * 1024
+    public static var cachePolicyDefault: ExpertCachePolicy { .lfu }
+
+    /// Slot allocations eligible for wiring: one region for the pooled
+    /// layout, one per slot otherwise. Recorded at construction; wiring
+    /// itself is deferred to `setSlotsPinned`.
+    private var wireRegions: [(pointer: UnsafeMutableRawPointer, bytes: Int)] = []
+    private var slotsPinned = false
+
+    /// Wire or release the slot memory. Decode wants it wired; prefill wants
+    /// it released.
+    ///
+    /// Residency only matters during decode, where a reclaimed page costs a
+    /// routed-expert SSD read on the critical path. Prefill streams experts
+    /// in bulk regardless and needs the headroom: with the cache wired for
+    /// the whole session, ANE prefill measured 244.52 s against 175.68 s
+    /// released (8-bit, same GPU arm), because Core ML could not place its
+    /// arenas. Wiring at the handover instead of at allocation gives decode
+    /// its protection without taxing prefill.
+    ///
+    /// Best-effort in both directions: a refused `mlock` (the wire limit is
+    /// finite) must degrade to unpinned behaviour, never fail a request.
+    /// `EMONE_NO_PIN=1` disables wiring entirely.
+    /// EMONE_NO_PIN=1 leaves the slot cache unwired (measured: decode falls
+    /// to 1.8 tok/s on Qwen3.8 4-bit as the budget is reclaimed). Read once:
+    /// this is called once per layer per token, and a per-call
+    /// `ProcessInfo.environment` rebuild is the same regression the decode
+    /// flags had ([[env-reads]]).
+    static let pinningDisabled = ProcessInfo.processInfo.environment["EMONE_NO_PIN"] != nil
+
+    /// Whether the last wire attempt covered every region, so a caller can
+    /// skip the per-layer walk once the whole cache is wired.
+    var isPinned: Bool { slotsPinned }
+
+    func setSlotsPinned(_ wanted: Bool) {
+        guard !Self.pinningDisabled else { return }
+        guard wanted != slotsPinned else { return }
+        let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        var achieved = 0
+        var bytes = 0
+        for region in wireRegions {
+            let rc =
+                wanted
+                ? mlock(region.pointer, region.bytes)
+                : munlock(region.pointer, region.bytes)
+            if rc == 0 {
+                achieved += 1
+                bytes += region.bytes
+            } else if Self.wireTraceEnabled {
+                FileHandle.standardError.write(
+                    Data(
+                        "[wire] \(wanted ? "mlock" : "munlock") failed errno=\(errno) bytes=\(region.bytes)\n"
+                            .utf8))
+            }
+        }
+        // Treat a partial wire as unpinned so the next call retries rather
+        // than believing a half-applied state.
+        slotsPinned = wanted && achieved == wireRegions.count
+        if Self.wireTraceEnabled {
+            let ms = Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started) / 1e6
+            let verb = wanted ? "mlock" : "munlock"
+            FileHandle.standardError.write(
+                Data(
+                    "[wire] \(verb) \(achieved)/\(wireRegions.count) regions, "
+                        .appending("\(bytes / (1024 * 1024)) MiB in ")
+                        .appending(String(format: "%.1f", ms))
+                        .appending(" ms\n").utf8))
+        }
+    }
+
+    /// Times the wire/unwire calls (`EMONE_WIRE_TRACE=1`).
+    ///
+    /// `mlock` on a cache whose pages the OS reclaimed during prefill has to
+    /// fault them back before it returns, and the call sits on the critical
+    /// path of the first decode token. Whether that is where the post-handover
+    /// decode cost actually lives is the question this answers; fixing it
+    /// without measuring it first would be guessing.
+    static let wireTraceEnabled =
+        ProcessInfo.processInfo.environment["EMONE_WIRE_TRACE"] == "1"
+
+    public let layout: StreamLayout
+    public let slotCount: Int
+    public let cachePolicy: ExpertCachePolicy
+    public let ioBackend: ExpertIOBackend
+    public let poolSlotStride: Int
+
+    private let fd: Int32
+
+    /// Bounded-footprint reader. On by default; `EMONE_BOUNDED_IO=0` opts out.
+    ///
+    /// Opens its own F_NOCACHE descriptors so expert reads never enter the unified
+    /// buffer cache. That makes the slot budget the machine's true footprint,
+    /// which is the whole point of streaming a 35B model on 24 GB.
+    ///
+    /// It is not free. Measured against the page-cache path it costs 15-30% of
+    /// decode throughput, because every miss becomes a real device read instead of
+    /// a cache hit -- and the cost is worst exactly where the hit rate is lowest
+    /// (-40% at the 8-slot floor against -18% at 16 slots).
+    ///
+    /// It is the default anyway. The page-cache path is faster only by borrowing
+    /// memory it never declares: process RSS looks smaller while the OS holds the
+    /// difference, so "a 35B model in 1 GB" stops being true. A footprint you can
+    /// account for is the product; throughput is what is being traded for it.
+    private let boundedReader: ParallelExpertReader?
+    private let metalReader: MetalExpertReader?
+    private let eventCoordinator: ExpertIOEventCoordinator?
+    private let metalStagingPool: MetalExpertStagingPool?
+    private let metalIOService: MetalExpertIOService?
+    private let slotPointers: [UnsafeMutableRawPointer]
+    private let slotBuffers: [MTLBuffer]
+    private let slotBufferOffsets: [UInt64]
+    private let residencyTable: MTLBuffer
+
+    private var nextSlot = 0
+
+    private enum SlotState: UInt8 {
+        case empty
+        case loading
+        case resident
+    }
+
+    private var slotExpert: [Int]
+    private var slotLastUse: [Int]
+    private var slotState: [SlotState]
+    private var slotGeneration: [UInt64]
+    private var slotPinCount: [Int]
+    private var expertUseCount: [Int]
+    private var expertLoadCount: [Int]
+    private var useClock = 0
+    private var statisticsPlans: UInt64 = 0
+    private var statisticsRequestedExperts: UInt64 = 0
+    private var statisticsHits: UInt64 = 0
+    private var statisticsMisses: UInt64 = 0
+    private var statisticsBytesRead: UInt64 = 0
+    private var statisticsReadOperations: UInt64 = 0
+    private var statisticsEvictions: UInt64 = 0
+    private var statisticsReloads: UInt64 = 0
+    private var statisticsLoadBatches: UInt64 = 0
+    private var statisticsTotalLoadNanos: UInt64 = 0
+    private var statisticsMaximumLoadNanos: UInt64 = 0
+    private var statisticsLatencyHistogram = [UInt64](repeating: 0, count: 17)
+    private var statisticsPeakLoadingSlots = 0
+    private let cacheLock = NSLock()
+
+    public init(
+        layout: StreamLayout,
+        device: MTLDevice,
+        slotCount: Int,
+        cachePolicy: ExpertCachePolicy = .lfu,
+        eventCoordinator: ExpertIOEventCoordinator? = nil,
+        metalStagingPool: MetalExpertStagingPool? = nil,
+        metalIOService: MetalExpertIOService? = nil
+    ) throws {
+        precondition(slotCount > 0, "slotCount must be positive")
+        self.layout = layout
+        self.slotCount = slotCount
+        self.cachePolicy = cachePolicy
+        self.eventCoordinator = eventCoordinator
+        self.metalStagingPool = metalStagingPool
+        self.metalIOService = metalIOService
+        self.ioBackend = try ExpertIOBackend.environmentValue()
+        let pageSize = Int(getpagesize())
+
+        let openedFD = open(layout.path, O_RDONLY)
+        guard openedFD >= 0 else {
+            throw StreamerError.openFailed(path: layout.path, errno: errno)
+        }
+        self.fd = openedFD
+
+        var fileStats = stat()
+        // K9: fstat failure must not silently skip size validation — a
+        // truncated file would then be read out of bounds by pread.
+        guard fstat(openedFD, &fileStats) == 0 else {
+            let statErrno = errno
+            close(openedFD)
+            throw ModelError.posixFailed(call: "fstat(\(layout.path))", errno: statErrno)
+        }
+        // Checked: `streamOffset` and `streamSize` come from the install's own
+        // layout, so a corrupt one must not wrap into a small `required` and pass
+        // the size check below -- every expert offset is later computed as
+        // `streamOffset + regionOffset` and would then point outside the file.
+        let (required, streamRangeOverflow) = layout.streamOffset
+            .addingReportingOverflow(layout.streamSize)
+        guard !streamRangeOverflow else {
+            close(openedFD)
+            throw StreamerError.offsetOutOfRange(layout.streamOffset)
+        }
+        if UInt64(fileStats.st_size) < required {
+            close(openedFD)
+            throw StreamerError.sizeMismatch(
+                expected: required,
+                actual: UInt64(fileStats.st_size))
+        }
+
+        // `Int(...)` traps for a stride above `Int.max`, and the sum in the
+        // rounding would trap again near it. Everything upstream bounds the
+        // *product* `expertsPerLayer * expertStride` (C69) and pins each expert's
+        // range inside a file whose size is verified -- but the stride itself is
+        // the only thing that bounds this allocation, so it is converted exactly
+        // (which reports) rather than trapping on a value that came out of a
+        // layout file.
+        guard let stride = Int(exactly: layout.expertStride), stride > 0,
+            stride <= Int.max - (pageSize - 1)
+        else {
+            close(openedFD)
+            throw StreamerError.offsetOutOfRange(layout.expertStride)
+        }
+        let allocationSize = ((stride + pageSize - 1) / pageSize) * pageSize
+        // The pool base retains the validated 2 MiB allocation alignment.
+        // Individual offsets need only VM-page alignment for pread and Metal;
+        // rounding every slot to 2 MiB inflated the 8-bit pool by several GiB.
+        self.poolSlotStride = allocationSize
+        var pointers: [UnsafeMutableRawPointer] = []
+        var buffers: [MTLBuffer] = []
+        var bufferOffsets: [UInt64] = []
+        pointers.reserveCapacity(slotCount)
+        buffers.reserveCapacity(slotCount)
+        bufferOffsets.reserveCapacity(slotCount)
+        guard
+            let residencyTable = device.makeBuffer(
+                length: max(1, layout.expertsPerLayer)
+                    * MemoryLayout<ExpertResidencyEntry>.stride,
+                options: .storageModeShared)
+        else {
+            close(openedFD)
+            throw StreamerError.bufferWrapFailed
+        }
+        self.residencyTable = residencyTable
+        let residencyEntries = residencyTable.contents()
+            .bindMemory(
+                to: ExpertResidencyEntry.self,
+                capacity: max(1, layout.expertsPerLayer))
+        for expert in 0..<max(1, layout.expertsPerLayer) {
+            residencyEntries[expert] = ExpertResidencyEntry()
+        }
+
+        func unwind() {
+            for index in buffers.count..<pointers.count {
+                free(pointers[index])
+            }
+            close(openedFD)
+        }
+
+        for _ in 0..<slotCount {
+            var raw: UnsafeMutableRawPointer?
+            let result = posix_memalign(&raw, Self.scratchAlignment, allocationSize)
+            guard result == 0, let pointer = raw else {
+                unwind()
+                throw StreamerError.allocFailed(errno: result)
+            }
+            pointers.append(pointer)
+            nonisolated(unsafe) let capturedPointer = pointer
+            wireRegions.append((pointer, allocationSize))
+            guard
+                let buffer = device.makeBuffer(
+                    bytesNoCopy: pointer,
+                    length: allocationSize,
+                    options: .storageModeShared,
+                    deallocator: { _, _ in free(capturedPointer) })
+            else {
+                unwind()
+                throw StreamerError.bufferWrapFailed
+            }
+            buffers.append(buffer)
+            bufferOffsets.append(0)
+        }
+        // Fail closed when bounded I/O was requested. Falling through to an
+        // ordinary descriptor would silently create an unbounded second cache
+        // in the macOS page cache and invalidate the declared RAM budget.
+        if ioBackend == .metal {
+            do {
+                if let metalIOService {
+                    self.metalReader = try MetalExpertReader(
+                        path: layout.path, device: device, service: metalIOService)
+                } else {
+                    // Direct construction remains useful for focused tests;
+                    // Model opens pass the one shared service above.
+                    self.metalReader = try MetalExpertReader(
+                        path: layout.path, device: device, maximumCommandsInFlight: 4)
+                }
+            } catch {
+                unwind()
+                throw error
+            }
+            self.boundedReader = nil
+        } else if ProcessInfo.processInfo.environment["EMONE_BOUNDED_IO"] != "0" {
+            self.metalReader = nil
+            do {
+                self.boundedReader = try ParallelExpertReader(
+                    path: layout.path,
+                    expertStride: Int(layout.expertStride),
+                    threads: 4,
+                    bypassCache: true)
+            } catch {
+                unwind()
+                throw error
+            }
+        } else {
+            self.metalReader = nil
+            self.boundedReader = nil
+        }
+
+        self.slotPointers = pointers
+        self.slotBuffers = buffers
+        self.slotBufferOffsets = bufferOffsets
+        self.slotExpert = [Int](repeating: -1, count: slotCount)
+        self.slotLastUse = [Int](repeating: 0, count: slotCount)
+        self.slotState = [SlotState](repeating: .empty, count: slotCount)
+        self.slotGeneration = [UInt64](repeating: 0, count: slotCount)
+        self.slotPinCount = [Int](repeating: 0, count: slotCount)
+        self.expertUseCount = [Int](repeating: 0, count: max(1, layout.expertsPerLayer))
+        self.expertLoadCount = [Int](repeating: 0, count: max(1, layout.expertsPerLayer))
+    }
+
+    deinit {
+        close(fd)
+    }
+
+    public func loadExpert(layer: Int, expert: Int) throws
+        -> (buffer: MTLBuffer, offset: UInt64, size: UInt64)
+    {
+        // K12: slot selection and fill share one critical section so the
+        // round-robin path never lands on a slot a concurrent plan reserved
+        // (`loading`) and no fill can interleave with another pread.
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        var candidate = nextSlot
+        var scanned = 0
+        while (slotState[candidate] == .loading || slotPinCount[candidate] > 0)
+            && scanned < slotCount
+        {
+            candidate = (candidate + 1) % slotCount
+            scanned += 1
+        }
+        guard scanned < slotCount else {
+            throw ModelError.expertCacheUnplaceable(
+                detail: "all \(slotCount) expert-cache slots are loading or pinned")
+        }
+        nextSlot = (candidate + 1) % slotCount
+        return try loadExpertUnlocked(layer: layer, expert: expert, slot: candidate)
+    }
+
+    public func loadExpert(layer: Int, expert: Int, slot: Int) throws
+        -> (buffer: MTLBuffer, offset: UInt64, size: UInt64)
+    {
+        guard slot >= 0 && slot < slotCount else {
+            throw StreamerError.slotOutOfRange(slot)
+        }
+        // K12: the pread fill and the slot bookkeeping share one critical
+        // section so a concurrent plan/execute or another load cannot write
+        // into this slot while the pread is in flight.
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard slotState[slot] != .loading, slotPinCount[slot] == 0 else {
+            throw ModelError.expertCacheUnplaceable(
+                detail: "expert-cache slot \(slot) is loading or pinned")
+        }
+        return try loadExpertUnlocked(layer: layer, expert: expert, slot: slot)
+    }
+
+    /// Fill `slot` with `expert` and update bookkeeping. Callers hold
+    /// `cacheLock`.
+    private func loadExpertUnlocked(layer: Int, expert: Int, slot: Int) throws
+        -> (buffer: MTLBuffer, offset: UInt64, size: UInt64)
+    {
+        let regionOffset = layout.expertOffset(layer: layer, expert: expert)
+        // Checked for the same reason: a wrapped sum here would read as "in
+        // range" and the pread below would take an offset past the end of the
+        // mapped file. With this and the open-time check, every sum in this type
+        // that mixes a layout offset with a region is known not to wrap.
+        let (regionEnd, regionOverflow) =
+            regionOffset
+            .addingReportingOverflow(layout.expertStride)
+        guard !regionOverflow, regionEnd <= layout.streamSize else {
+            throw StreamerError.offsetOutOfRange(regionOffset)
+        }
+        slotGeneration[slot] &+= 1
+        let previousExpert = slotExpert[slot]
+        if previousExpert >= 0 {
+            publishResidencyUnlocked(
+                expert: previousExpert,
+                slot: slot,
+                state: ExpertResidencyEntry.empty,
+                generation: slotGeneration[slot])
+        }
+        slotExpert[slot] = expert
+        slotState[slot] = .loading
+        publishResidencyUnlocked(
+            expert: expert,
+            slot: slot,
+            state: ExpertResidencyEntry.loading,
+            generation: slotGeneration[slot])
+        let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        do {
+            try readFull(
+                into: slotPointers[slot],
+                fileOffset: layout.streamOffset + regionOffset,
+                count: Int(layout.expertStride))
+            slotState[slot] = .resident
+            publishResidencyUnlocked(
+                expert: expert,
+                slot: slot,
+                state: ExpertResidencyEntry.resident,
+                generation: slotGeneration[slot])
+            slotLastUse[slot] = useClock
+            recordSuccessfulLoadsUnlocked(
+                experts: [expert], elapsedNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started)
+        } catch {
+            slotState[slot] = .empty
+            slotExpert[slot] = -1
+            publishResidencyUnlocked(
+                expert: expert,
+                slot: slot,
+                state: ExpertResidencyEntry.empty,
+                generation: slotGeneration[slot])
+            throw error
+        }
+        return (slotBuffers[slot], slotBufferOffsets[slot], layout.expertStride)
+    }
+
+    public func loadExpertsCached(experts: [Int]) throws
+        -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)]
+    {
+        try executeExpertCachePlan(planExpertsCached(experts: experts))
+    }
+
+    public func planExpertsCached(
+        experts: [Int],
+        layer: Int = 0,
+        avoidingSlots: Set<Int> = [],
+        prefetched: [Int: UnsafeMutableRawPointer] = [:]
+    ) throws
+        -> ExpertCachePlan
+    {
+        guard
+            let plan = makeExpertCachePlan(
+                layer: layer,
+                experts: experts,
+                avoidingSlots: avoidingSlots,
+                prefetched: prefetched)
+        else {
+            // K10: config-triggered placement failure (too few slots for the
+            // requested expert set) is recoverable — throw instead of
+            // crashing; the runner already handles thrown errors.
+            throw ModelError.expertCacheUnplaceable(
+                detail:
+                    "\(experts.count) experts do not fit in \(slotCount) cache slots (policy \(cachePolicy.rawValue), avoiding \(avoidingSlots.count) slots)"
+            )
+        }
+        return plan
+    }
+
+    public func planExpertsCachedIfPossible(
+        experts: [Int],
+        layer: Int = 0,
+        avoidingSlots: Set<Int> = [],
+        prefetched: [Int: UnsafeMutableRawPointer] = [:]
+    )
+        -> ExpertCachePlan?
+    {
+        makeExpertCachePlan(
+            layer: layer, experts: experts, avoidingSlots: avoidingSlots,
+            prefetched: prefetched)
+    }
+
+    private func makeExpertCachePlan(
+        layer: Int,
+        experts: [Int],
+        avoidingSlots rawAvoidingSlots: Set<Int>,
+        prefetched: [Int: UnsafeMutableRawPointer]
+    )
+        -> ExpertCachePlan?
+    {
+        // K10: too few slots for the requested expert set is a recoverable
+        // placement failure, not a programming error, and both entry points are
+        // already built to handle it -- `planExpertsCached` turns nil into
+        // `expertCacheUnplaceable`, and `planExpertsCachedIfPossible` returns
+        // nil, which the prefill tile scheduler reads as "no plan available"
+        // and falls back on. A trap here aborted the process instead, on a
+        // user-selectable configuration: `--expert-cache-slots 8` against
+        // Qwen3.8-Flash-Next, which routes top-10 experts, whose prefill tiles
+        // can carry up to 16 live experts.
+        guard experts.count <= slotCount else { return nil }
+        let avoidingSlots = Set(rawAvoidingSlots.filter { $0 >= 0 && $0 < slotCount })
+
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+
+        let clock = useClock + 1
+        var assignedSlots = [Int](repeating: -1, count: experts.count)
+        var reserved = [Bool](repeating: false, count: slotCount)
+        // Loading slots are not valid hits and cannot be reassigned.
+        for slot in 0..<slotCount where slotState[slot] == .loading {
+            reserved[slot] = true
+        }
+
+        for index in experts.indices {
+            for slot in 0..<slotCount
+            where !reserved[slot] && slotState[slot] == .resident
+                && slotExpert[slot] == experts[index]
+            {
+                assignedSlots[index] = slot
+                reserved[slot] = true
+                break
+            }
+        }
+        for slot in avoidingSlots where !reserved[slot] {
+            reserved[slot] = true
+        }
+
+        let candidateMisses = experts.indices.filter { assignedSlots[$0] == -1 }
+        let evictable = (0..<slotCount)
+            .filter { !reserved[$0] && slotState[$0] != .loading && slotPinCount[$0] == 0 }
+            .sorted { shouldEvictSlot($0, before: $1) }
+        guard candidateMisses.count <= evictable.count else { return nil }
+
+        useClock = clock
+        for expert in experts where expert >= 0 && expert < expertUseCount.count {
+            expertUseCount[expert] &+= 1
+        }
+        for slot in assignedSlots where slot >= 0 {
+            slotLastUse[slot] = clock
+        }
+        var misses: [Int] = []
+        var adoptedPrefetches: [Int] = []
+        for (offset, index) in candidateMisses.enumerated() {
+            let slot = evictable[offset]
+            if slotState[slot] == .resident { statisticsEvictions &+= 1 }
+            let previousExpert = slotExpert[slot]
+            assignedSlots[index] = slot
+            reserved[slot] = true
+            slotGeneration[slot] &+= 1
+            slotExpert[slot] = experts[index]
+            slotLastUse[slot] = clock
+            slotState[slot] = .loading
+            if previousExpert >= 0 {
+                publishResidencyUnlocked(
+                    expert: previousExpert,
+                    slot: slot,
+                    state: ExpertResidencyEntry.empty,
+                    generation: slotGeneration[slot])
+            }
+            publishResidencyUnlocked(
+                expert: experts[index],
+                slot: slot,
+                state: ExpertResidencyEntry.loading,
+                generation: slotGeneration[slot])
+            if let source = prefetched[experts[index]] {
+                memcpy(slotPointers[slot], source, Int(layout.expertStride))
+                slotState[slot] = .resident
+                publishResidencyUnlocked(
+                    expert: experts[index],
+                    slot: slot,
+                    state: ExpertResidencyEntry.resident,
+                    generation: slotGeneration[slot])
+                adoptedPrefetches.append(experts[index])
+            } else {
+                misses.append(index)
+            }
+        }
+
+        recordPrefetchAdoptionsUnlocked(adoptedPrefetches)
+
+        statisticsPlans &+= 1
+        statisticsRequestedExperts &+= UInt64(experts.count)
+        statisticsHits &+= UInt64(experts.count - misses.count)
+        statisticsMisses &+= UInt64(misses.count)
+        statisticsPeakLoadingSlots = max(
+            statisticsPeakLoadingSlots,
+            slotState.count(where: { $0 == .loading }))
+
+        return ExpertCachePlan(
+            experts: experts,
+            assignedSlots: assignedSlots,
+            assignedGenerations: assignedSlots.map { slotGeneration[$0] },
+            misses: misses,
+            hits: experts.count - misses.count,
+            layer: layer)
+    }
+
+    public func executeExpertCachePlan(_ plan: ExpertCachePlan) throws
+        -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)]
+    {
+        precondition(
+            plan.experts.count <= slotCount,
+            "expert cache plan exceeds slot count")
+        precondition(
+            plan.assignedSlots.count == plan.experts.count,
+            "expert cache plan slot count mismatch")
+        precondition(
+            plan.assignedGenerations.count == plan.experts.count,
+            "expert cache plan generation count mismatch")
+
+        let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        var succeeded = false
+        defer {
+            finishPlanExecution(
+                plan,
+                succeeded: succeeded,
+                elapsedNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started)
+        }
+
+        if !plan.misses.isEmpty {
+            if let metalReader {
+                try executeMetalReads(plan, reader: metalReader)
+            } else if let boundedReader {
+                try executeBoundedReads(plan, reader: boundedReader)
+            } else {
+                // Always parallel when there is more than one miss: the
+                // serial alternative (EMONE_PARALLEL_IO=0) measured a wash
+                // (+0.4%, 2/3) and is gone.
+                try executeCachedPreads(plan, parallel: plan.misses.count > 1)
+            }
+            try markPlanMissesResident(plan)
+        }
+
+        succeeded = true
+        return expertCachePlanBuffers(plan)
+    }
+
+    /// Submits the plan to the persistent storage service and returns before
+    /// any read has to complete. Reserved generations are already pinned by
+    /// the caller, so the destination pointers remain valid for the operation.
+    public func beginExpertCachePlan(
+        _ plan: ExpertCachePlan,
+        eventDriven: Bool = false
+    ) throws -> ExpertLoadOperation {
+        let token: ExpertIOCompletionToken?
+        if eventDriven {
+            guard let eventCoordinator else {
+                throw ModelError.internalInconsistency(
+                    detail: "event-driven expert I/O requested without a shared event")
+            }
+            token = try eventCoordinator.reserve()
+        } else {
+            token = nil
+        }
+        guard !plan.misses.isEmpty else {
+            let operation = ExpertLoadOperation(
+                completionToken: token,
+                eventCoordinator: eventCoordinator,
+                backendSignalsEvent: false)
+            operation.finish(.success(()))
+            return operation
+        }
+        if let metalReader {
+            if eventDriven {
+                return try beginEventDrivenMetalReads(
+                    plan, reader: metalReader, token: token)
+            }
+            let operation = ExpertLoadOperation(
+                completionToken: token,
+                eventCoordinator: eventCoordinator,
+                backendSignalsEvent: false)
+            operation.markInFlight()
+            let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+            do {
+                try beginMetalReads(
+                    plan,
+                    reader: metalReader,
+                    // A native MTLIO signal cross-queued with a waiting compute
+                    // buffer deadlocked on the qualification M3. Keep Metal I/O
+                    // nonblocking, but bridge its completion handler through
+                    // the same proven coordinator used by bounded pread.
+                    completionToken: nil
+                ) { [self, operation] result in
+                    switch result {
+                    case .success:
+                        do {
+                            try markPlanMissesResident(plan)
+                            finishPlanExecution(
+                                plan,
+                                succeeded: true,
+                                elapsedNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started)
+                            operation.finish(.success(()))
+                        } catch {
+                            finishPlanExecution(
+                                plan,
+                                succeeded: false,
+                                elapsedNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started)
+                            operation.finish(.failure(error))
+                        }
+                    case .failure(let error):
+                        finishPlanExecution(
+                            plan,
+                            succeeded: false,
+                            elapsedNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started)
+                        operation.finish(.failure(error))
+                    }
+                }
+            } catch {
+                finishPlanExecution(plan, succeeded: false, elapsedNanos: 0)
+                operation.finish(.failure(error))
+            }
+            return operation
+        }
+        let operation = ExpertLoadOperation(
+            completionToken: token,
+            eventCoordinator: eventCoordinator,
+            backendSignalsEvent: false)
+        ExpertIOScheduler.shared.submit { [self, operation] in
+            operation.markInFlight()
+            do {
+                _ = try executeExpertCachePlan(plan)
+                operation.finish(.success(()))
+            } catch {
+                operation.finish(.failure(error))
+            }
+        }
+        return operation
+    }
+
+    private func beginEventDrivenMetalReads(
+        _ plan: ExpertCachePlan,
+        reader: MetalExpertReader,
+        token: ExpertIOCompletionToken?
+    ) throws -> ExpertLoadOperation {
+        guard let token,
+            let stagingLease = metalStagingPool?.tryAcquire(count: plan.misses.count)
+        else {
+            throw ModelError.internalInconsistency(
+                detail: "event-driven Metal I/O staging ring is unavailable")
+        }
+        let transfer = try makeMetalStagingTransfer(plan: plan, stagingLease: stagingLease)
+        let operation = ExpertLoadOperation(
+            completionToken: token,
+            eventCoordinator: eventCoordinator,
+            // MTLIO writes the status word and signals the event in command
+            // order. Its handler records terminal state but never wakes the
+            // decode task to encode a fixup.
+            backendSignalsEvent: true,
+            metalStagingTransfer: transfer,
+            requiresGPUFinalization: true)
+        operation.markInFlight()
+        let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        do {
+            try beginMetalReads(
+                plan,
+                reader: reader,
+                destinations: stagingLease.buffers,
+                destinationOffsets: [Int](repeating: 0, count: stagingLease.buffers.count),
+                completionToken: token
+            ) { [self, operation] result in
+                switch result {
+                case .success:
+                    // Cache slots remain LOADING. The runner publishes
+                    // RESIDENT only after its event-gated blit completes.
+                    finishPlanExecution(
+                        plan,
+                        succeeded: true,
+                        elapsedNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started)
+                    operation.finish(.success(()))
+                case .failure(let error):
+                    finishPlanExecution(
+                        plan,
+                        succeeded: false,
+                        elapsedNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started)
+                    operation.finish(.failure(error))
+                }
+            }
+        } catch {
+            finishPlanExecution(plan, succeeded: false, elapsedNanos: 0)
+            operation.releaseStagingTransfer()
+            operation.finish(.failure(error))
+        }
+        return operation
+    }
+
+    private func executeMetalReads(
+        _ plan: ExpertCachePlan,
+        reader: MetalExpertReader
+    ) throws {
+        var offsets: [UInt64] = []
+        var destinations: [MTLBuffer] = []
+        offsets.reserveCapacity(plan.misses.count)
+        destinations.reserveCapacity(plan.misses.count)
+        for index in plan.misses {
+            offsets.append(try fileOffset(plan: plan, index: index))
+            destinations.append(slotBuffers[plan.assignedSlots[index]])
+        }
+        try reader.fetch(
+            offsets: offsets,
+            into: destinations,
+            byteCount: Int(layout.expertStride),
+            destinationOffsets: plan.misses.map {
+                Int(slotBufferOffsets[plan.assignedSlots[$0]])
+            })
+    }
+
+    private func beginMetalReads(
+        _ plan: ExpertCachePlan,
+        reader: MetalExpertReader,
+        destinations explicitDestinations: [MTLBuffer]? = nil,
+        destinationOffsets explicitDestinationOffsets: [Int]? = nil,
+        completionToken: ExpertIOCompletionToken?,
+        completion: @escaping @Sendable (Result<Void, any Error>) -> Void
+    ) throws {
+        var offsets: [UInt64] = []
+        var destinations: [MTLBuffer] = []
+        offsets.reserveCapacity(plan.misses.count)
+        destinations.reserveCapacity(plan.misses.count)
+        for index in plan.misses {
+            offsets.append(try fileOffset(plan: plan, index: index))
+            destinations.append(slotBuffers[plan.assignedSlots[index]])
+        }
+        let finalDestinations = explicitDestinations ?? destinations
+        let finalDestinationOffsets =
+            explicitDestinationOffsets
+            ?? plan.misses.map {
+                Int(slotBufferOffsets[plan.assignedSlots[$0]])
+            }
+        try reader.beginFetch(
+            offsets: offsets,
+            into: finalDestinations,
+            byteCount: Int(layout.expertStride),
+            destinationOffsets: finalDestinationOffsets,
+            completionToken: completionToken,
+            completion: completion)
+    }
+
+    private func makeMetalStagingTransfer(
+        plan: ExpertCachePlan,
+        stagingLease: MetalExpertStagingLease
+    ) throws -> MetalExpertStagingTransfer {
+        var destinations: [MTLBuffer] = []
+        var destinationOffsets: [Int] = []
+        destinations.reserveCapacity(plan.misses.count)
+        destinationOffsets.reserveCapacity(plan.misses.count)
+        for index in plan.misses {
+            let slot = plan.assignedSlots[index]
+            guard slot >= 0, slot < slotBuffers.count else {
+                stagingLease.release()
+                throw ModelError.internalInconsistency(
+                    detail: "Metal I/O staging transfer references an invalid cache slot")
+            }
+            destinations.append(slotBuffers[slot])
+            destinationOffsets.append(Int(slotBufferOffsets[slot]))
+        }
+        return MetalExpertStagingTransfer(
+            lease: stagingLease,
+            destinations: destinations,
+            destinationOffsets: destinationOffsets,
+            byteCount: Int(layout.expertStride))
+    }
+
+    private func executeBoundedReads(
+        _ plan: ExpertCachePlan,
+        reader: ParallelExpertReader
+    ) throws {
+        var offsets: [UInt64] = []
+        var destinations: [UnsafeMutableRawPointer] = []
+        offsets.reserveCapacity(plan.misses.count)
+        destinations.reserveCapacity(plan.misses.count)
+        for index in plan.misses {
+            offsets.append(try fileOffset(plan: plan, index: index))
+            destinations.append(slotPointers[plan.assignedSlots[index]])
+        }
+        try reader.fetch(offsets: offsets, into: destinations)
+    }
+
+    private func executeCachedPreads(
+        _ plan: ExpertCachePlan,
+        parallel: Bool
+    ) throws {
+        if parallel {
+            let firstError = Mutex<Error?>(nil)
+            DispatchQueue.concurrentPerform(iterations: plan.misses.count) { offset in
+                do {
+                    try readPlanMiss(plan, index: plan.misses[offset])
+                } catch {
+                    firstError.withLock { if $0 == nil { $0 = error } }
+                }
+            }
+            if let error = firstError.withLock({ $0 }) { throw error }
+            return
+        }
+        for index in plan.misses { try readPlanMiss(plan, index: index) }
+    }
+
+    private func readPlanMiss(_ plan: ExpertCachePlan, index: Int) throws {
+        try readFull(
+            into: slotPointers[plan.assignedSlots[index]],
+            fileOffset: try fileOffset(plan: plan, index: index),
+            count: Int(layout.expertStride))
+    }
+
+    private func fileOffset(plan: ExpertCachePlan, index: Int) throws -> UInt64 {
+        let regionOffset = layout.expertOffset(
+            layer: plan.layer,
+            expert: plan.experts[index])
+        // Checked for the same reason: a wrapped sum here would read as "in
+        // range" and the pread below would take an offset past the end of the
+        // mapped file. With this and the open-time check, every sum in this type
+        // that mixes a layout offset with a region is known not to wrap.
+        let (regionEnd, regionOverflow) =
+            regionOffset
+            .addingReportingOverflow(layout.expertStride)
+        guard !regionOverflow, regionEnd <= layout.streamSize else {
+            throw StreamerError.offsetOutOfRange(regionOffset)
+        }
+        return layout.streamOffset + regionOffset
+    }
+
+    public func expertCachePlanBuffers(_ plan: ExpertCachePlan)
+        -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)]
+    {
+        precondition(
+            plan.assignedSlots.count == plan.experts.count,
+            "expert cache plan slot count mismatch")
+        return plan.assignedSlots.map { slot in
+            (slotBuffers[slot], slotBufferOffsets[slot], layout.expertStride)
+        }
+    }
+
+    public func expertResidencyResources() -> ExpertResidencyResources {
+        ExpertResidencyResources(
+            table: residencyTable,
+            poolSlotStride: UInt64(poolSlotStride),
+            expertStride: layout.expertStride,
+            expertCount: layout.expertsPerLayer)
+    }
+
+    public func residencyEntry(expert: Int) -> ExpertResidencyEntry {
+        precondition(expert >= 0 && expert < layout.expertsPerLayer)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return residencyTable.contents()
+            .bindMemory(
+                to: ExpertResidencyEntry.self,
+                capacity: layout.expertsPerLayer)[expert]
+    }
+
+    public func adviseExpertCachePlanMisses(_ plan: ExpertCachePlan) -> ExpertIOAdviceResult {
+        let experts = plan.misses.map { plan.experts[$0] }
+        return adviseRanges(
+            expertAdviceRanges(experts: experts, layer: plan.layer),
+            requested: experts.count)
+    }
+
+    public func adviseExperts(experts: [Int]) -> ExpertIOAdviceResult {
+        adviseRanges(expertAdviceRanges(experts: experts, layer: 0), requested: experts.count)
+    }
+
+    public func adviseExpertMisses(experts: [Int]) -> ExpertIOAdviceResult {
+        cacheLock.lock()
+        let misses = experts.filter { expert in
+            !slotExpert.indices.contains { slot in
+                slotState[slot] == .resident && slotExpert[slot] == expert
+            }
+        }
+        cacheLock.unlock()
+        return adviseRanges(expertAdviceRanges(experts: misses, layer: 0), requested: misses.count)
+    }
+
+    static func coalescedAdjacentAdviceRanges(_ ranges: [(offset: UInt64, count: UInt64)])
+        -> [(offset: UInt64, count: UInt64)]
+    {
+        let sorted = ranges.filter { $0.count > 0 }.sorted {
+            $0.offset == $1.offset ? $0.count < $1.count : $0.offset < $1.offset
+        }
+        var result: [(offset: UInt64, count: UInt64)] = []
+        for range in sorted {
+            guard var last = result.popLast() else {
+                result.append(range)
+                continue
+            }
+            // K28: checked arithmetic — a wrapping `&+` could merge two
+            // huge ranges into a nonsense span. On overflow keep the ranges
+            // separate (the merge is an optimization, never a correctness
+            // requirement).
+            let (lastEnd, lastOverflow) = last.offset.addingReportingOverflow(last.count)
+            let (rangeEnd, rangeOverflow) = range.offset.addingReportingOverflow(range.count)
+            if lastOverflow || rangeOverflow {
+                result.append(last)
+                result.append(range)
+                continue
+            }
+            if range.offset <= lastEnd {
+                last.count = max(lastEnd, rangeEnd) - last.offset
+                result.append(last)
+            } else {
+                result.append(last)
+                result.append(range)
+            }
+        }
+        return result
+    }
+
+    /// Zero the LFU use counts, keeping the slots and their contents. Called
+    /// at the prefill-to-decode transition: a prefill chunk plans every
+    /// expert it touches hundreds of times, so the leftovers outrank any
+    /// expert decode has used once or twice and decode cannot evict them.
+    /// With the counts zeroed, ties fall to LRU order and decode's own
+    /// working set takes the slots within a few tokens.
+    public func resetExpertUseCounts() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        for i in expertUseCount.indices { expertUseCount[i] = 0 }
+    }
+
+    private func shouldEvictSlot(_ lhs: Int, before rhs: Int) -> Bool {
+        if cachePolicy == .lru {
+            return slotLastUse[lhs] < slotLastUse[rhs]
+        }
+        let lhsExpert = slotExpert[lhs]
+        let rhsExpert = slotExpert[rhs]
+        if lhsExpert < 0 || rhsExpert < 0 {
+            return lhsExpert < rhsExpert
+        }
+        let lhsCount = lhsExpert < expertUseCount.count ? expertUseCount[lhsExpert] : 0
+        let rhsCount = rhsExpert < expertUseCount.count ? expertUseCount[rhsExpert] : 0
+        if lhsCount != rhsCount { return lhsCount < rhsCount }
+        return slotLastUse[lhs] < slotLastUse[rhs]
+    }
+
+    func pin(_ plan: ExpertCachePlan) throws -> ExpertCacheLease {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard plan.assignedSlots.count == plan.experts.count,
+            plan.assignedGenerations.count == plan.experts.count
+        else {
+            throw ModelError.internalInconsistency(
+                detail: "cannot pin an incomplete expert-cache plan")
+        }
+        for index in plan.experts.indices {
+            let slot = plan.assignedSlots[index]
+            guard slot >= 0, slot < slotCount,
+                slotGeneration[slot] == plan.assignedGenerations[index],
+                slotExpert[slot] == plan.experts[index],
+                slotState[slot] != .empty
+            else {
+                throw ModelError.internalInconsistency(
+                    detail: "expert-cache plan became stale before GPU pin")
+            }
+        }
+        for slot in plan.assignedSlots { slotPinCount[slot] &+= 1 }
+        return ExpertCacheLease(
+            streamer: self,
+            slots: plan.assignedSlots,
+            generations: plan.assignedGenerations)
+    }
+
+    fileprivate func unpin(slots: [Int], generations: [UInt64]) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        for (slot, generation) in zip(slots, generations)
+        where slot >= 0 && slot < slotCount && slotGeneration[slot] == generation {
+            precondition(slotPinCount[slot] > 0, "expert-cache slot pin underflow")
+            slotPinCount[slot] -= 1
+        }
+    }
+
+    public func statistics() -> ExpertStreamingStatistics {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return ExpertStreamingStatistics(
+            plans: statisticsPlans,
+            requestedExperts: statisticsRequestedExperts,
+            hits: statisticsHits,
+            misses: statisticsMisses,
+            bytesRead: statisticsBytesRead,
+            readOperations: statisticsReadOperations,
+            evictions: statisticsEvictions,
+            reloads: statisticsReloads,
+            loadBatches: statisticsLoadBatches,
+            totalLoadNanos: statisticsTotalLoadNanos,
+            maximumLoadNanos: statisticsMaximumLoadNanos,
+            latencyHistogram: statisticsLatencyHistogram,
+            residentSlots: slotState.count(where: { $0 == .resident }),
+            loadingSlots: slotState.count(where: { $0 == .loading }),
+            pinnedSlots: slotPinCount.count(where: { $0 > 0 }),
+            peakLoadingSlots: statisticsPeakLoadingSlots)
+    }
+
+    /// A stable snapshot of authoritative cache entries. Loading slots are
+    /// intentionally omitted: their bytes must not be consumed or treated as
+    /// available by a predictor until a successful demand load publishes them.
+    /// Diagnostic and policy code use this before a cache plan reserves slots.
+    public func residentExperts() -> [Int] {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return zip(slotExpert, slotState).compactMap { expert, state in
+            state == .resident && expert >= 0 ? expert : nil
+        }.sorted()
+    }
+
+    /// Starts a bounded, raw speculative read. The destination buffers are not
+    /// cache slots, so an incorrect prediction cannot evict an authoritative
+    /// expert. Demand work is always scheduled at higher priority.
+    public func beginPrefetch(
+        experts: [Int],
+        destinations: [UnsafeMutableRawPointer]
+    ) throws
+        -> ExpertLoadOperation
+    {
+        guard experts.count == destinations.count else {
+            throw ModelError.internalInconsistency(
+                detail: "prefetch experts and destinations differ in count")
+        }
+        let offsets = try experts.map { expert -> UInt64 in
+            guard expert >= 0 && expert < layout.expertsPerLayer else {
+                throw ModelError.internalInconsistency(detail: "invalid prefetched expert")
+            }
+            return layout.streamOffset + layout.expertOffset(layer: 0, expert: expert)
+        }
+        let safeDestinations = PrefetchDestinations(destinations)
+        let operation = ExpertLoadOperation()
+        ExpertIOScheduler.shared.submit(priority: .speculative) {
+            [self, operation, safeDestinations] in
+            operation.markInFlight()
+            do {
+                if let boundedReader {
+                    try boundedReader.fetch(offsets: offsets, into: safeDestinations.values)
+                } else {
+                    for (offset, destination) in zip(offsets, safeDestinations.values) {
+                        try readFull(
+                            into: destination, fileOffset: offset,
+                            count: Int(layout.expertStride))
+                    }
+                }
+                operation.finish(.success(()))
+            } catch {
+                operation.finish(.failure(error))
+            }
+        }
+        return operation
+    }
+
+    private func finishPlanExecution(
+        _ plan: ExpertCachePlan,
+        succeeded: Bool,
+        elapsedNanos: UInt64
+    ) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if succeeded {
+            recordSuccessfulLoadsUnlocked(
+                experts: plan.misses.map { plan.experts[$0] },
+                elapsedNanos: elapsedNanos)
+            return
+        }
+        for index in plan.misses {
+            let slot = plan.assignedSlots[index]
+            if slotGeneration[slot] == plan.assignedGenerations[index],
+                slotState[slot] == .loading
+            {
+                slotState[slot] = .empty
+                slotExpert[slot] = -1
+                publishResidencyUnlocked(
+                    expert: plan.experts[index],
+                    slot: slot,
+                    state: ExpertResidencyEntry.empty,
+                    generation: plan.assignedGenerations[index])
+            }
+        }
+    }
+
+    private func markPlanMissesResident(_ plan: ExpertCachePlan) throws {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        for index in plan.misses {
+            let slot = plan.assignedSlots[index]
+            guard slotGeneration[slot] == plan.assignedGenerations[index] else {
+                throw ModelError.internalInconsistency(
+                    detail: "expert-cache slot generation changed during expert load")
+            }
+        }
+        for index in plan.misses {
+            let slot = plan.assignedSlots[index]
+            slotState[slot] = .resident
+            slotExpert[slot] = plan.experts[index]
+            slotLastUse[slot] = useClock
+            publishResidencyUnlocked(
+                expert: plan.experts[index],
+                slot: slot,
+                state: ExpertResidencyEntry.resident,
+                generation: plan.assignedGenerations[index])
+        }
+    }
+
+    /// The Metal staging route copies into cache slots on the GPU after the
+    /// MTLIO event. Its slots cannot become resident until that command buffer
+    /// has completed, otherwise a later layer could read bytes still owned by
+    /// the blit engine.
+    func markStagedMetalPlanResident(_ plan: ExpertCachePlan) throws {
+        try markPlanMissesResident(plan)
+    }
+
+    /// Clears a staged load if its event-gated transfer command fails. This is
+    /// intentionally separate from `finishPlanExecution`: I/O may have
+    /// succeeded and been accounted for, while the GPU copy did not complete.
+    func failStagedMetalPlan(_ plan: ExpertCachePlan) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        for index in plan.misses {
+            let slot = plan.assignedSlots[index]
+            guard slot >= 0, slot < slotCount,
+                slotGeneration[slot] == plan.assignedGenerations[index],
+                slotState[slot] == .loading
+            else { continue }
+            slotState[slot] = .empty
+            slotExpert[slot] = -1
+            publishResidencyUnlocked(
+                expert: plan.experts[index],
+                slot: slot,
+                state: ExpertResidencyEntry.empty,
+                generation: plan.assignedGenerations[index])
+        }
+    }
+
+    /// CPU publication occurs under the cache lock. A loading entry is visible
+    /// immediately after reservation; resident is written only after every
+    /// byte lands. Event-driven consumers additionally wait on the batch's
+    /// shared-event value, which is the CPU/GPU release/acquire boundary.
+    private func publishResidencyUnlocked(
+        expert: Int,
+        slot: Int,
+        state: UInt32,
+        generation: UInt64
+    ) {
+        guard expert >= 0 && expert < layout.expertsPerLayer else { return }
+        let entries = residencyTable.contents()
+            .bindMemory(
+                to: ExpertResidencyEntry.self,
+                capacity: layout.expertsPerLayer)
+        entries[expert] = ExpertResidencyEntry(
+            slot: state == ExpertResidencyEntry.empty
+                ? ExpertResidencyEntry.notResidentSlot : UInt32(slot),
+            state: state,
+            generation: generation)
+    }
+
+    private func recordSuccessfulLoadsUnlocked(experts: [Int], elapsedNanos: UInt64) {
+        guard !experts.isEmpty else { return }
+        statisticsBytesRead &+= UInt64(experts.count) * layout.expertStride
+        statisticsReadOperations &+= UInt64(experts.count)
+        statisticsLoadBatches &+= 1
+        statisticsTotalLoadNanos &+= elapsedNanos
+        statisticsMaximumLoadNanos = max(statisticsMaximumLoadNanos, elapsedNanos)
+        let bucket = Self.latencyBucketIndex(nanos: elapsedNanos)
+        statisticsLatencyHistogram[bucket] &+= 1
+        for expert in experts where expert >= 0 && expert < expertLoadCount.count {
+            if expertLoadCount[expert] > 0 { statisticsReloads &+= 1 }
+            expertLoadCount[expert] &+= 1
+        }
+    }
+
+    private func recordPrefetchAdoptionsUnlocked(_ experts: [Int]) {
+        for expert in experts where expert >= 0 && expert < expertLoadCount.count {
+            if expertLoadCount[expert] > 0 { statisticsReloads &+= 1 }
+            expertLoadCount[expert] &+= 1
+        }
+    }
+
+    private static func latencyBucketIndex(nanos: UInt64) -> Int {
+        var bound: UInt64 = 125_000
+        for index in 0..<16 {
+            if nanos <= bound { return index }
+            bound &*= 2
+        }
+        return 16
+    }
+
+    static func latencyBucketUpperBound(index: Int) -> UInt64 {
+        guard index < 16 else { return UInt64.max }
+        return 125_000 << UInt64(index)
+    }
+
+    private func expertAdviceRanges(
+        experts: [Int],
+        layer: Int
+    ) -> [(offset: UInt64, count: UInt64)] {
+        experts.compactMap { expert in
+            let regionOffset = layout.expertOffset(layer: layer, expert: expert)
+            let (regionEnd, regionOverflow) =
+                regionOffset
+                .addingReportingOverflow(layout.expertStride)
+            guard !regionOverflow, regionEnd <= layout.streamSize else { return nil }
+            return (layout.streamOffset + regionOffset, layout.expertStride)
+        }
+    }
+
+    private func adviseRanges(
+        _ ranges: [(offset: UInt64, count: UInt64)],
+        requested: Int
+    ) -> ExpertIOAdviceResult {
+        let coalesced = Self.coalescedAdjacentAdviceRanges(ranges)
+        var failed = 0
+        var bytes: UInt64 = 0
+        var maxCallNanos: UInt64 = 0
+        for range in coalesced {
+            let result = RDAdvice.call(fd: fd, offset: range.offset, byteCount: range.count)
+            if !result.succeeded { failed += 1 }
+            bytes &+= result.requestedBytes
+            maxCallNanos = max(maxCallNanos, result.elapsedNanos)
+        }
+        return ExpertIOAdviceResult(
+            requested: requested,
+            failed: failed,
+            calls: coalesced.count,
+            bytes: bytes,
+            maxCallNanos: maxCallNanos)
+    }
+
+    private func readFull(
+        into destination: UnsafeMutableRawPointer,
+        fileOffset: UInt64,
+        count: Int
+    ) throws {
+        var filled = 0
+        while filled < count {
+            let readCount = pread(
+                fd,
+                destination.advanced(by: filled),
+                count - filled,
+                off_t(fileOffset) + off_t(filled))
+            if readCount < 0 {
+                // A signal interrupted the read: nothing was transferred, and
+                // the call has to be retried. Every other read loop in this
+                // module and in the model-IO layer does that; treating it as a
+                // failure turned a delivered signal into a streamer error, and
+                // the callers cannot tell the two apart.
+                if errno == EINTR { continue }
+                throw StreamerError.preadFailed(errno: errno)
+            }
+            if readCount == 0 {
+                throw StreamerError.sizeMismatch(expected: UInt64(count), actual: UInt64(filled))
+            }
+            filled += readCount
+        }
+    }
+}
+
+/// Pins exact slot generations until every GPU command using them completes.
+/// Release is idempotent so error cleanup and normal command completion can
+/// safely converge on the same lifetime operation.
+/// unchecked-invariant: immutable slot metadata is published at init and the
+/// only mutable release flag is guarded by `lock`; streamer state has its own lock.
+final class ExpertCacheLease: @unchecked Sendable {
+    private weak var streamer: PreadExpertStreamer?
+    private let slots: [Int]
+    private let generations: [UInt64]
+    private let lock = NSLock()
+    private var released = false
+
+    fileprivate init(
+        streamer: PreadExpertStreamer,
+        slots: [Int],
+        generations: [UInt64]
+    ) {
+        self.streamer = streamer
+        self.slots = slots
+        self.generations = generations
+    }
+
+    func release() {
+        lock.lock()
+        guard !released else {
+            lock.unlock()
+            return
+        }
+        released = true
+        lock.unlock()
+        streamer?.unpin(slots: slots, generations: generations)
+    }
+
+    deinit { release() }
+}

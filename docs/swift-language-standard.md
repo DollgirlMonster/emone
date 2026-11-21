@@ -21,7 +21,7 @@ probing `-enable-upcoming-feature <name>` and finding the flag retired:
 
 ## Enforced: the three that are still upcoming and the tree is clean under
 
-Declared once in `Package.swift` as `tinytitanLanguageStandard` and applied to
+Declared once in `Package.swift` as `emoneLanguageStandard` and applied to
 **every target** (28 of 28), so a target added later cannot quietly opt out:
 
 ```swift
@@ -31,7 +31,7 @@ Declared once in `Package.swift` as `tinytitanLanguageStandard` and applied to
 ```
 
 `MemberImportVisibility` was the only one that cost anything: **12 files** used
-members of a module they did not import and now name it directly (`TinyTitan` in
+members of a module they did not import and now name it directly (`Emone` in
 five, `NIOCore` in four, `Metal` in two, `Tokenizers` in two). That is the
 feature doing its job -- a member reached through a transitive import is a
 dependency the file never declared. The first measurement of this was 13

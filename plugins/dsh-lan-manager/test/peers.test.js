@@ -18,8 +18,8 @@ import {
 const CONFIG = {
   basePath: "/dsh-lan",
   peerPort: 3080,
-  groupKey: "tinytitan-lan",
-  token: "tinytitan-lan",
+  groupKey: "emone-lan",
+  token: "emone-lan",
 };
 
 /** A resolve() stub mapping names to addresses. */
@@ -146,7 +146,7 @@ test("refresh records a member's inventory, merges its gossip, and prunes the st
         status: 200,
         body: {
           ok: true,
-          group: "tinytitan-lan",
+          group: "emone-lan",
           self: { name: "node-a", addresses: ["192.168.18.25"], version: "0.1.0" },
           workspaces: [{ id: "w1", path: "/Users/me/ProjectA" }],
           sessions: [{ sessionId: "s1", workspaceId: "w1" }],
@@ -191,7 +191,7 @@ test("get resolves by id, address or name", async () => {
       status: 200,
       body: {
         ok: true,
-        group: "tinytitan-lan",
+        group: "emone-lan",
         self: { name: "node-a" },
         workspaces: [],
         sessions: [],

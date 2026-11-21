@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Diff a repacked `.gturbo` resident payload against the snapshot it came from.
 
-A repack is a byte copy -- TinyTitan's quantizer and the repacker both use affine
+A repack is a byte copy -- Emone's quantizer and the repacker both use affine
 group-64, and `RepackPlanner` copies a source `u32 .weight` into the resident
 file unchanged -- so a correct repack is exactly equal to its source. That
 makes this comparison exact rather than approximate, which is the point: it

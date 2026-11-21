@@ -31,7 +31,7 @@ from collections import OrderedDict
 DEVICE = os.environ.get("DEVICE", "macOS 26.6.2, Swift 6.3.3, Apple M3 24 GB")
 SERVER = os.environ.get(
     "SERVER",
-    ".build/release/TinyTitanServer --models-dir models "
+    ".build/release/EmoneServer --models-dir models "
     "--model qwen3.5-2b_4-Bit --port 8091 --reasoning off",
 )
 COMMIT = os.environ.get("COMMIT", "the commit this report is committed with")
@@ -198,14 +198,14 @@ def main():
     models = len({(r["label"], r["quant"], r["engine"]) for r in rows})
     ok = sum(1 for r in rows if r["status"] == "ok")
 
-    print('<img src="assets/wordmark.svg" alt="TinyTitan" height="34">\n')
+    print('<img src="assets/wordmark.svg" alt="Emone" height="34">\n')
     print('# "Capital of Paris" on every served model and engine\n')
     print('A fixed, deliberately ambiguous prompt -- *"Capital of Paris"* -- sent to')
     print("every model the local server serves, on every engine it serves it on, plus a")
     print("plain control question, with **thinking off**. The tables are generated from")
     print("the raw rows by `benchmark/capital_of_paris_report.py`; the harness that")
     print("produced them is `benchmark/capital_of_paris_smartness.py`, both in the")
-    print("[TinyTitan repository](https://github.com/Pummelchen/TinyTitan). The rows")
+    print("[Emone repository](https://github.com/Pummelchen/TinyTitan). The rows")
     print("themselves are gitignored, under")
     print("`benchmark/benchmark-results/capital-of-paris-20260911T1935/` (`results-v2-3x2.jsonl`")
     print("for this page, `results.jsonl` for the single-pass first run).\n")

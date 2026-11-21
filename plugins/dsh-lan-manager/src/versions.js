@@ -148,7 +148,7 @@ export const SUPPORTED_DSH_VERSION = "0.1.6-alpha.2";
 /**
  * Whether this plugin runs on the harness it was handed, and why not when it does not.
  *
- * The same policy as `dsh-tinytitan`'s, and duplicated on purpose: the two are
+ * The same policy as `dsh-emone`'s, and duplicated on purpose: the two are
  * separately installable packages that cannot import each other, and a shared
  * third package for eleven lines would be a worse trade than a test that fails
  * when their constants diverge.

@@ -1,7 +1,7 @@
-diff --git a/sources/TinyTitan/Kernels/GDN/GDN.swift b/sources/TinyTitan/Kernels/GDN/GDN.swift
+diff --git a/sources/Emone/Kernels/GDN/GDN.swift b/sources/Emone/Kernels/GDN/GDN.swift
 index e887d1f..d5f9986 100644
---- a/sources/TinyTitan/Kernels/GDN/GDN.swift
-+++ b/sources/TinyTitan/Kernels/GDN/GDN.swift
+--- a/sources/Emone/Kernels/GDN/GDN.swift
++++ b/sources/Emone/Kernels/GDN/GDN.swift
 @@ -23,6 +23,22 @@ final class GDN {
      private let qkNormPSO: MTLComputePipelineState
      private let deltaDecodePSO: MTLComputePipelineState
@@ -17,11 +17,11 @@ index e887d1f..d5f9986 100644
 +    let chunkWindowChunks: Int
 +    static let chunkRows = 64
 +
-+    /// TINYTITAN_GDN_CHUNKED=1 routes prefill through the chunked scan. Off by
++    /// EMONE_GDN_CHUNKED=1 routes prefill through the chunked scan. Off by
 +    /// default: it sums in another order, so it needs the surprisal A/B before
 +    /// it can become one.
 +    static let chunkedPrefillEnabled =
-+        ProcessInfo.processInfo.environment["TINYTITAN_GDN_CHUNKED"] == "1"
++        ProcessInfo.processInfo.environment["EMONE_GDN_CHUNKED"] == "1"
      private let gatedNormPSO: MTLComputePipelineState
      private let inProjPSO: MTLComputePipelineState
      private let inProjSpecializedPSO: MTLComputePipelineState?
@@ -162,16 +162,16 @@ index e887d1f..d5f9986 100644
      /// out = rmsnorm(y; weight) * silu(z), per value head, `rows` rows.
      func encodeGatedNorm(
          commandBuffer: MTLCommandBuffer,
-diff --git a/sources/TinyTitan/Metal/GDN/gdn.metal b/sources/TinyTitan/Metal/GDN/gdn.metal
+diff --git a/sources/Emone/Metal/GDN/gdn.metal b/sources/Emone/Metal/GDN/gdn.metal
 index 65420c5..e498573 100644
---- a/sources/TinyTitan/Metal/GDN/gdn.metal
-+++ b/sources/TinyTitan/Metal/GDN/gdn.metal
+--- a/sources/Emone/Metal/GDN/gdn.metal
++++ b/sources/Emone/Metal/GDN/gdn.metal
 @@ -636,6 +636,248 @@ kernel void gdn_delta_step_prefill(
      }
  }
  
 +// ----------------------------------------------------------------------------
-+// Chunked gated delta rule (prefill, opt-in TINYTITAN_GDN_CHUNKED=1).
++// Chunked gated delta rule (prefill, opt-in EMONE_GDN_CHUNKED=1).
 +//
 +// The same recurrence as gdn_delta_step_prefill, reorganised the way the
 +// 2026 kernels (fla / SGLang / llama.cpp) do it: split the rows into chunks of
@@ -423,7 +423,7 @@ index 5c1f474..6eb0729 100755
  #   c16384attn   c8192attn at chunk 16384
  #   c32768       base at chunk 32768: a ~17K prompt in one chunk, so the small
  #                tail chunk (547 tokens, ~18 s, mostly expert fetch) is gone
-+#   gdnchunk     TINYTITAN_GDN_CHUNKED=1: the delta-rule scan in 64-row chunks
++#   gdnchunk     EMONE_GDN_CHUNKED=1: the delta-rule scan in 64-row chunks
 +#                (gdn_chunk_prep/apply) instead of one step per token; sums in
 +#                another order, so it may differ by rounding
  # Chunking can change the output (the chunk boundaries move), so c8192/c16384
@@ -439,25 +439,25 @@ index 5c1f474..6eb0729 100755
                         mppwide gqa wide splitwide all combo
                         coalesce qqmm hcfused qsagpu split
 @@ -204,6 +207,7 @@ arm_spec() {
-     c8192attn) echo "c8192attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 8192" ;;
-     c16384attn) echo "c16384attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 16384" ;;
+     c8192attn) echo "c8192attn|EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1 EMONE_QSA_SCORE_MMA=1 EMONE_PREFILL_QSA_MMA=1|--prefill-chunk 8192" ;;
+     c16384attn) echo "c16384attn|EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1 EMONE_QSA_SCORE_MMA=1 EMONE_PREFILL_QSA_MMA=1|--prefill-chunk 16384" ;;
      c32768) echo "c32768||--prefill-chunk 32768" ;;
-+    gdnchunk) echo "gdnchunk|TINYTITAN_GDN_CHUNKED=1|" ;;
-     coalesce) echo "coalesce|TINYTITAN_PREFILL_COALESCE=1|" ;;
-     qqmm) echo "qqmm|TINYTITAN_PREFILL_Q_QMM=1|" ;;
-     hcfused) echo "hcfused|TINYTITAN_HC_FUSED=1|" ;;
-diff --git a/tests/TinyTitan/Kernels/GDN/GDNChunkedScanTests.swift b/tests/TinyTitan/Kernels/GDN/GDNChunkedScanTests.swift
++    gdnchunk) echo "gdnchunk|EMONE_GDN_CHUNKED=1|" ;;
+     coalesce) echo "coalesce|EMONE_PREFILL_COALESCE=1|" ;;
+     qqmm) echo "qqmm|EMONE_PREFILL_Q_QMM=1|" ;;
+     hcfused) echo "hcfused|EMONE_HC_FUSED=1|" ;;
+diff --git a/tests/Emone/Kernels/GDN/GDNChunkedScanTests.swift b/tests/Emone/Kernels/GDN/GDNChunkedScanTests.swift
 new file mode 100644
 index 0000000..eb13a7a
 --- /dev/null
-+++ b/tests/TinyTitan/Kernels/GDN/GDNChunkedScanTests.swift
++++ b/tests/Emone/Kernels/GDN/GDNChunkedScanTests.swift
 @@ -0,0 +1,133 @@
 +import Foundation
 +import Metal
 +import Testing
-+import TinyTitanValidationSupport
++import EmoneValidationSupport
 +
-+@testable import TinyTitan
++@testable import Emone
 +
 +/// The chunked delta-rule scan (`gdn_chunk_prep` + `gdn_chunk_apply`) against
 +/// the sequential prefill kernel it replaces, on the same inputs and the same
@@ -535,7 +535,7 @@ index 0000000..eb13a7a
 +                state: stateBuf, y: yBuf, rows: c.rows)
 +        } else {
 +            // A checkpoint buffer keeps this on the sequential kernel whatever
-+            // TINYTITAN_GDN_CHUNKED says; the checkpoint itself is unused.
++            // EMONE_GDN_CHUNKED says; the checkpoint itself is unused.
 +            try gdn.encodeDeltaStepPrefill(
 +                commandBuffer: cb, convOut: convBuf, aProj: aBuf, bProj: bBuf,
 +                aLog: aLogBuf, aLogOffset: 0, dtBias: dtBuf, dtBiasOffset: 0,
