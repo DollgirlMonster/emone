@@ -1,12 +1,12 @@
-# Weight-space edits (TinyTitan-bbm)
+# Weight-space edits (Emone-bbm)
 
 Hand-written weight patches for the dense Qwen 3.5 0.8B, applied at load with
-`TinyTitanCLI --weight-patch <dir>` (`WeightPatch`, format `tinytitan-patch-v1`:
+`EmoneCLI --weight-patch <dir>` (`WeightPatch`, format `emone-patch-v1`:
 rank-r `mlp.down_proj` deltas, prefill and decode). No training, no gradients:
 read weights and activations, write an edit, test it on practice problems.
 
 The plain 0.8B has no profile row, so its prefill is per-token and has no seam;
-patched runs need `TINYTITAN_PREFILL_SG_QMM=1`, which on its own changes greedy
+patched runs need `EMONE_PREFILL_SG_QMM=1`, which on its own changes greedy
 output. Always compare a patch against a control run with the same variable.
 
 ## Workflow
@@ -14,7 +14,7 @@ output. Always compare a patch against a control run with the same variable.
 | Step | Script | Notes |
 |---|---|---|
 | Generate / score | `run_gsm8k.py <out.jsonl> <start> <count> <max_new> [CLI args]` | greedy, thinking on, one CLI per problem; `GSM8K_JSONL` names the data, `TT_CLI` the binary, `TT_CAPTURE_DIR` turns on the MLP capture |
-| Capture | env `TINYTITAN_MLP_CAPTURE=<file>`, `TINYTITAN_MLP_CAPTURE_LAYERS=15,19` | per decode position and layer: position, layer, token, MLP output, down_proj input (fp16); a diagnostic, it waits per layer |
+| Capture | env `EMONE_MLP_CAPTURE=<file>`, `EMONE_MLP_CAPTURE_LAYERS=15,19` | per decode position and layer: position, layer, token, MLP output, down_proj input (fp16); a diagnostic, it waits per layer |
 | Probe a direction | `find_direction.py <out.npz> <capture>...` | diff of means, looping vs. pre-loop positions; reports d' and the cosine with position drift |
 | Ablate it | `build_patch.py <dirs.npz> <out> <k\|all> <raw\|noposition> <layer>...` | rank-1 `W' = (I - uu^T) W` on chosen columns |
 | Read weights | `read_weights.py`, `restart_units.py` | spectra, outlier units, logit lens; CPU only |
@@ -48,5 +48,5 @@ against a plain control (1/6 correct, 6/6 capped, loop onset word 347):
 Weakening retrieval makes loops start earlier, not later: the loops look like
 re-verification under uncertainty rather than runaway copying.
 
-Held-out results and the running log live on the beads (`bd show TinyTitan-a37`,
-`TinyTitan-bbm.3`).
+Held-out results and the running log live on the beads (`bd show Emone-a37`,
+`Emone-bbm.3`).

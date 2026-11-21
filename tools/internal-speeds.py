@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record TinyTitan's internal speeds for a release, and compare them.
+"""Record Emone's internal speeds for a release, and compare them.
 
 One command measures the engine's own numbers on a fixed prompt and writes them
 to `benchmark/internal-speeds/<label>.json`, so the next release can be diffed
@@ -46,8 +46,8 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-BENCH = ROOT / ".build/release/TinyTitanBench"
-CLI = ROOT / ".build/release/TinyTitanCLI"
+BENCH = ROOT / ".build/release/EmoneBench"
+CLI = ROOT / ".build/release/EmoneCLI"
 RESULTS = ROOT / "benchmark/internal-speeds"
 
 DEFAULT_MODEL = "models/qwen3.5_4B_4Bit"
@@ -275,7 +275,7 @@ def measure_generation(
 
     env = os.environ.copy()
     if ane:
-        env["TINYTITAN_PREFILL_ANE"] = "on"
+        env["EMONE_PREFILL_ANE"] = "on"
     command = [
         str(CLI),
         "--model",

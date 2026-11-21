@@ -46,7 +46,7 @@
     "deepseek-harness",
     "lan",
     "cluster",
-    "tinytitan"
+    "emone"
   ],
   "devDependencies": {
     "@eslint/js": "10.0.1",

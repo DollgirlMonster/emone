@@ -50,15 +50,15 @@ ROOT = Path(__file__).resolve().parents[1]
 # control: memory off. minimal: bootstrap plus memory_set/memory_get.
 # full: bootstrap plus all six tools.
 ARMS = ("control", "auto", "minimal", "full")
-OUT = Path(os.environ.get("TINYTITAN_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-value"))
-PORT = int(os.environ.get("TINYTITAN_PORT", "8096"))
+OUT = Path(os.environ.get("EMONE_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-value"))
+PORT = int(os.environ.get("EMONE_PORT", "8096"))
 BASE = f"http://127.0.0.1:{PORT}/v1"
 # Which run of the arm this is; results are kept per run so repeats can be
 # compared and averaged. Repeats only mean something with sampling on:
 # at temperature 0 a repeat is the same output.
-RUN = os.environ.get("TINYTITAN_MEMVAL_RUN", "1")
-TEMPERATURE = os.environ.get("TINYTITAN_MEMVAL_TEMPERATURE")  # unset: the server's default
-SERVER_LOG = os.environ.get("TINYTITAN_MEMVAL_SERVER_LOG")
+RUN = os.environ.get("EMONE_MEMVAL_RUN", "1")
+TEMPERATURE = os.environ.get("EMONE_MEMVAL_TEMPERATURE")  # unset: the server's default
+SERVER_LOG = os.environ.get("EMONE_MEMVAL_SERVER_LOG")
 
 
 def sampling():
@@ -228,7 +228,7 @@ def assert_arm_is_real(arm: str, prompt_tokens: int):
             f"ABORT: arm '{arm}' saw {prompt_tokens} prompt tokens at stage 1; "
             f"expected {floor}..{ceiling}. The server is not running the "
             f"configuration this arm claims. Rebuild the release binary and "
-            f"check TINYTITAN_MEMORY / TINYTITAN_MEMORY_TOOLS."
+            f"check EMONE_MEMORY / EMONE_MEMORY_TOOLS."
         )
 
 

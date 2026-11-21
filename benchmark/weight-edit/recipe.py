@@ -1,7 +1,7 @@
-"""The MIT CSAIL Exp 8 recipe, rerun on TinyTitan (TinyTitan-bbm.3).
+"""The MIT CSAIL Exp 8 recipe, rerun on Emone (Emone-bbm.3).
 
   recipe.py score <out_dir> [patch_dir]   teacher-force both branches of every matched pair
-                                          (matched_pairs.json) through TinyTitanCLI --score,
+                                          (matched_pairs.json) through EmoneCLI --score,
                                           capturing layers 15 and 19 (MLP and residual)
   recipe.py direction <score_dir> <out.npz> <pair>...
                                           u_L = mean residual after layer L on repetitive
@@ -37,7 +37,7 @@ from build_patch import FORMAT, safetensors  # noqa: E402
 from gturbo_reader import GTurboWeights  # noqa: E402
 
 MODEL = os.environ.get("TT_MODEL", str(ROOT / "models/qwen3.5_0.8B_8Bit"))
-CLI = os.environ.get("TT_CLI", str(ROOT / ".build/release/TinyTitanCLI"))
+CLI = os.environ.get("TT_CLI", str(ROOT / ".build/release/EmoneCLI"))
 LAYERS = (15, 19)
 HIDDEN, INTER = 1024, 3584
 MLP_REC = 12 + 2 * HIDDEN + 2 * INTER
@@ -66,8 +66,8 @@ def score(out, patch=None):
     out.mkdir(parents=True, exist_ok=True)
     for i, kind, text, n in texts():
         stem = out / f"p{i}_{kind}"
-        env = dict(os.environ, TINYTITAN_MLP_CAPTURE=f"{stem}.mlp",
-                   TINYTITAN_MLP_CAPTURE_LAYERS=",".join(map(str, LAYERS)))
+        env = dict(os.environ, EMONE_MLP_CAPTURE=f"{stem}.mlp",
+                   EMONE_MLP_CAPTURE_LAYERS=",".join(map(str, LAYERS)))
         cmd = [CLI, "--model", MODEL, "--prompt", text, "--score", str(n),
                "--score-out", f"{stem}.nll"]
         if patch:
@@ -132,7 +132,7 @@ def patch(dirs_path, out, alpha, k):
     manifest = {
         "format": FORMAT, "base": {"model_id": "qwen3.5-0.8b"}, "rank": 1,
         "description": f"MIT CSAIL Exp 8 recipe: W - {alpha} u (mask . u^T W) on mlp.down_proj of "
-                       f"layers 15 and 19, top-{k} writers (TinyTitan-bbm.3).",
+                       f"layers 15 and 19, top-{k} writers (Emone-bbm.3).",
         "provenance": {"method": "u = residual after the layer, repetitive minus productive "
                                  "matched branches (matched_pairs.json), teacher-forced",
                        "alpha": alpha, "columns": k, "layers": report},

@@ -1,4 +1,4 @@
-"""Find a looping direction in dense-MLP outputs from TINYTITAN_MLP_CAPTURE files.
+"""Find a looping direction in dense-MLP outputs from EMONE_MLP_CAPTURE files.
 
 usage: find_direction.py <out.npz> <capture.bin>...
 

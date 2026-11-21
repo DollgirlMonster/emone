@@ -44,7 +44,7 @@ import memory_sim as sim  # noqa: E402
 
 GGUF = ROOT / "models/gguf"
 RESULTS = ROOT / ".build/benchmark-logs/memory-mini"
-PORT = int(os.environ.get("TINYTITAN_MINI_PORT", "8098"))
+PORT = int(os.environ.get("EMONE_MINI_PORT", "8098"))
 
 MODELS = {
     "350m-extract": GGUF / "LFM2-350M-Extract-Q4_K_M.gguf",
@@ -96,7 +96,7 @@ def serve(name: str) -> None:
         "-ngl",
         "0",
         "-t",
-        os.environ.get("TINYTITAN_MINI_THREADS", "2"),
+        os.environ.get("EMONE_MINI_THREADS", "2"),
         "-c",
         "8192",
         "--port",
@@ -125,9 +125,9 @@ def complete(system: str, user: str, max_tokens: int = 400) -> tuple[str, dict, 
             # go for this job. Greedy is reproducible, which a memory keeper
             # wants; the vendor's recommended profile is tuned for chat, and a
             # verifier that samples can disagree with itself between turns.
-            "temperature": float(os.environ.get("TINYTITAN_MINI_TEMP", "0")),
-            "top_p": float(os.environ.get("TINYTITAN_MINI_TOP_P", "1")),
-            "repeat_penalty": float(os.environ.get("TINYTITAN_MINI_REPEAT", "1")),
+            "temperature": float(os.environ.get("EMONE_MINI_TEMP", "0")),
+            "top_p": float(os.environ.get("EMONE_MINI_TOP_P", "1")),
+            "repeat_penalty": float(os.environ.get("EMONE_MINI_REPEAT", "1")),
             "max_tokens": max_tokens,
             # Qwen3.5 thinks by default and the thinking lands in
             # reasoning_content, so a budget sized for the answer is spent
@@ -135,7 +135,7 @@ def complete(system: str, user: str, max_tokens: int = 400) -> tuple[str, dict, 
             # it does not need to deliberate, and a shadow agent that costs a
             # thousand tokens of reasoning per turn is not a shadow agent.
             "chat_template_kwargs": {
-                "enable_thinking": os.environ.get("TINYTITAN_MINI_THINK") == "1"
+                "enable_thinking": os.environ.get("EMONE_MINI_THINK") == "1"
             },
         }
     ).encode()
@@ -376,7 +376,7 @@ def verify(limit: int = 6) -> None:
                 text, _, _ = complete(
                     VERIFY_SYSTEM,
                     f"FACTS\n{facts}\n\nANSWER\n{given}",
-                    max_tokens=int(os.environ.get("TINYTITAN_MINI_MAXTOK", "200")),
+                    max_tokens=int(os.environ.get("EMONE_MINI_MAXTOK", "200")),
                 )
             except Exception as error:
                 print(f"  {run['name']} s{session}: {error}")

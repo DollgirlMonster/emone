@@ -2,7 +2,7 @@
 model   /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
 commit  8ad4c17
 A env   (none)
-B env   TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1
+B env   EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1
 tokens  512
 A       mean nll 2.21386  perplexity 9.1510
 B       mean nll 2.21293  perplexity 9.1425

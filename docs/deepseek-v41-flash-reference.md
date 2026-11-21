@@ -7,7 +7,7 @@ encodings, the reference forward's algorithm, the chat/prompt encoding, the
 vision tower, the KV-cache design, and the open questions.
 
 **Scope.** This is a *reference*, not a plan. The integration plan — what
-TinyTitan would have to build, at what size, under which precision policy — is
+emone would have to build, at what size, under which precision policy — is
 [`deepseek-v41-flash-port.md`](deepseek-v41-flash-port.md). Read that for
 decisions; read this for facts.
 
@@ -585,7 +585,7 @@ applies activation and weight scales to a separate fp32 accumulator.
 packed FP4 along K; 72 = 2304/32, the per-32 scale count. `w1`/`w3` are
 `[2304, 2560]` with scale `[2304, 160]` where 2560 = 5120/2 and 160 = 5120/32.
 **CONFIRMED.** The practical hazard: **2304 is not a multiple of 64**, the group
-size every affine path in TinyTitan assumes.
+size every affine path in emone assumes.
 
 ### 7.5 KV-cache precision
 

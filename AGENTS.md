@@ -1,4 +1,4 @@
-# TinyTitan
+# emone
 
 <!-- agent-harnesses:begin -->
 > **One instruction file.** This is it. Codex, DeepSeek Harness, OpenCode,
@@ -42,7 +42,7 @@ only a GUI needs.
 
 The **one** sanctioned convenience is a client we merely install and configure, not
 build: `tools/dsh_local.sh` sets up a pinned, private DeepSeek Harness under
-`~/.tinytitan` and the launcher's `--web` opens it in the browser, so a user who
+`~/.emone` and the launcher's `--web` opens it in the browser, so a user who
 wants a window gets one already pointed at their model. It is upstream's code with
 our plugin, isolated from any DeepSeek Harness the user runs, and it is a client of
 the loopback server like Zed or `curl` — not a front end this repository maintains.
@@ -51,15 +51,15 @@ here may depend on a window existing.
 
 ## Layout and commands
 
-`sources/` holds one directory per SwiftPM target. `sources/TinyTitan/` is the
-runtime; `sources/TinyTitanFormat/` plus `sources/TinyTitanKernelsC/` are its
-format types and C kernels. `sources/TinyTitanRepack/`, `sources/TinyTitanCLI/` and
-`sources/TinyTitanServer/` hold the installer, CLI and loopback server.
-`sources/TinyTitanMemory/` and `sources/ContinuityCore/` are persistent
-agent memory, `sources/TinyTitanMemoryTool/` inspects it, and
-`sources/TinyTitanBench/` plus `sources/TinyTitanValidation/` are the benchmark
+`sources/` holds one directory per SwiftPM target. `sources/Emone/` is the
+runtime; `sources/EmoneFormat/` plus `sources/EmoneKernelsC/` are its
+format types and C kernels. `sources/EmoneRepack/`, `sources/EmoneCLI/` and
+`sources/EmoneServer/` hold the installer, CLI and loopback server.
+`sources/EmoneMemory/` and `sources/ContinuityCore/` are persistent
+agent memory, `sources/EmoneMemoryTool/` inspects it, and
+`sources/EmoneBench/` plus `sources/EmoneValidation/` are the benchmark
 driver and the validation/reference target. An executable target keeps its
-top-level or `@main` entry in `Command/`; `plugins/dsh-tinytitan/` is the DeepSeek
+top-level or `@main` entry in `Command/`; `plugins/dsh-emone/` is the DeepSeek
 Harness bundle (route writer + quiet compaction). `docs/repository-layout.md` has
 the conventions, `tests/` mirrors `sources/` path for path and never loads a model,
 and user and engineering documentation lives in the
@@ -75,7 +75,7 @@ publish a change means both, whether or not the change touched the wiki.
 
 ```bash
 swift build -c release
-swift run -c release TinyTitanCLI \
+swift run -c release EmoneCLI \
   --model models/qwen3.5_4B_4Bit \
   --prompt "The capital of France is" \
   --max-new 64
@@ -85,7 +85,7 @@ That is the **portable** build and what `tools/release.sh` ships: the target is
 `arm64-apple-macos26.0` with no CPU flag, so the codegen baseline is clang's
 default for the triple — **apple-m1** — and an M3's BF16/I8MM go unused.
 
-The C kernels are built `-O2`: `Package.swift` sets it for `TinyTitanKernelsC`
+The C kernels are built `-O2`: `Package.swift` sets it for `EmoneKernelsC`
 with `.unsafeFlags`, because SwiftPM's `swiftbuild` system otherwise compiles C
 at `-Os` in release. That is the measured win — 2.35 -> 1.94 ms per pass on the
 CPU int8 GEMV, six interleaved rounds, checksum unchanged, **1.21x** (1.24x in a
@@ -116,8 +116,8 @@ cancellation preserves verified completed ranges, which `--resume` continues and
 `--discard-partial --output <model.gturbo>` removes.
 
 ```bash
-swift run -c release TinyTitanRepack --model qwen36 --output models/qwen3.6_35B_A3B_4Bit
-swift run -c release TinyTitanRepack --model qwen36 --output models/qwen3.6_35B_A3B_4Bit --resume
+swift run -c release EmoneRepack --model qwen36 --output models/qwen3.6_35B_A3B_4Bit
+swift run -c release EmoneRepack --model qwen36 --output models/qwen3.6_35B_A3B_4Bit --resume
 ```
 
 An installed model's `verified-install.json` receipt is bound to the absolute path
@@ -127,7 +127,7 @@ corruption and does not need a re-download — re-issue the receipt in place
 (re-hashes the payload against the manifest and rebinds it to the current path):
 
 ```bash
-swift run -c release TinyTitanRepack --verify-install --input-gturbo models/qwen3.5_2B_4Bit
+swift run -c release EmoneRepack --verify-install --input-gturbo models/qwen3.5_2B_4Bit
 ```
 
 Never hand-edit the receipt to match the new path: the path binding is what detects
@@ -141,7 +141,7 @@ called supported, and how to re-issue install receipts after the checkout moves.
 
 Before a model run, require macOS 26+, Swift 6.4+, enough disk, acceptable
 `memory_pressure -Q`, a completed selected `.gturbo` installation, and no process
-from `pgrep -fl 'TinyTitanServer|TinyTitanCLI|TinyTitanPackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm'`.
+from `pgrep -fl 'EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm'`.
 If a check fails, inform the user and stop; do not terminate apps or delete or
 reinstall the model.
 
@@ -270,7 +270,7 @@ golden gate that reports a *refused* start as a "mismatch". The cross-repository
 standard is [`RELEASE.md`](RELEASE.md).
 
 Work in flight is handed over in `docs/handover-<name>.md`;
-`docs/handover-tinytitan.md` is the current one and starts with the prompt for the
+`docs/handover-emone.md` is the current one and starts with the prompt for the
 next session. Read it before installing, converting or moving anything: it names
 what is open, and the traps that have already cost a session.
 

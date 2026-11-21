@@ -63,7 +63,7 @@ class AnePromptTests(unittest.TestCase):
     def test_a_fallback_line_is_reported_as_not_using_the_ane(self):
         used, fallback = internal_speeds.ane_usage(
             "loading model\n"
-            "TinyTitan ane-prefill fallback: chunk at 0 (+8) outside sidecar "
+            "Emone ane-prefill fallback: chunk at 0 (+8) outside sidecar "
             "coverage (chunk 4096, max prompt 16384); using the GPU path\n"
             "[stop=eos prefill=8tok/0.21s new=4tok decode=0.3s tok/s=13.3]\n"
         )

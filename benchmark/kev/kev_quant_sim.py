@@ -1,4 +1,4 @@
-"""Predict how TinyTitan's install quantization moves Kev-0.8B's probabilities, before any Swift work.
+"""Predict how Emone's install quantization moves Kev-0.8B's probabilities, before any Swift work.
 
 Applies tools/prepare_qwen35.py's rules to the merged fp32 backbone as quantize -> dequantize (group-64 affine, bf16
 scale/bias, embedding at 8-bit, linear_attn.in_proj_a/b and every non-matrix tensor at bf16), then scores the fixture's

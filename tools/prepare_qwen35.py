@@ -114,7 +114,7 @@ except ImportError as exc:  # pragma: no cover - environment, not logic
         f"missing dependency: {exc}\n"
         f"  install them for the interpreter running this file: {sys.executable}\n"
         "    -m pip install safetensors numpy ml_dtypes\n"
-        "  (or point TINYTITAN_PYTHON at another Python 3.10+)"
+        "  (or point EMONE_PYTHON at another Python 3.10+)"
     )
 
 
@@ -164,7 +164,7 @@ class Size(NamedTuple):
 
 SIZES = {
     # Qwen3.5-0.8B, the post-trained release: the side model for session
-    # titles and one-word answers (TinyTitan-lmw.6). Same text geometry as
+    # titles and one-word answers (Emone-lmw.6). Same text geometry as
     # Kev-0.8B, which is the *Base* checkpoint with a LoRA merged in, so the
     # two cannot share weights. Vision-language build like the 9B, tied like
     # the 2B; carries its own chat_template.jinja.
@@ -223,7 +223,7 @@ SIZES = {
         "qwen3.8-27b",
         False,
     ),
-    # Kev-0.8B, a System One decision model (TinyTitan-lmw): the *Base*
+    # Kev-0.8B, a System One decision model (Emone-lmw): the *Base*
     # 0.8B, not the post-trained one, because that is what the adapter was
     # trained on. A vision-language build like the 9B but tied like the 2B.
     # It answers typed questions through its pointer head and is never served
@@ -239,7 +239,7 @@ SIZES = {
         True,
         Adapter("jaredpalmer/kev-0.8b", "bf75a6a8848ea6960ff2ed108d9ed44c2941174f", 16, 32),
     ),
-    # Rev-0.8B (TinyTitan-lmw.9): our own System One decision model, Kev's
+    # Rev-0.8B (Emone-lmw.9): our own System One decision model, Kev's
     # recipe (stages 1-2) plus a delta stage on almanac's labelled S1
     # questions, trained on the *post-trained* 0.8B -- the same base as the
     # "0.8b" side model, so the runtime-LoRA path can later share its weights.
@@ -778,7 +778,7 @@ def write_adapter_package(
     meta: dict,
     size: Size,
 ) -> None:
-    """A runtime-LoRA package (TinyTitan-lmw.11): the adapter applied at
+    """A runtime-LoRA package (Emone-lmw.11): the adapter applied at
     request time over the *base* install instead of merged into a copy.
 
     `decision_adapter.safetensors` holds every A [r, in] and B [out, r] at
@@ -790,7 +790,7 @@ def write_adapter_package(
     adapter = size.adapter
     header: dict = {
         "__metadata__": {
-            "format": "tinytitan-lora-v1",
+            "format": "emone-lora-v1",
             "rank": str(adapter.rank),
             "alpha": str(adapter.alpha),
         }
@@ -811,7 +811,7 @@ def write_adapter_package(
     (out / ADAPTER_PACKAGE_FILE).write_bytes(struct.pack("<Q", len(raw)) + raw + b"".join(blobs))
     write_decision_head(out, head, meta, size)
     manifest = {
-        "format": "tinytitan-lora-v1",
+        "format": "emone-lora-v1",
         "display_name": size.display_name,
         "model_id": size.model_id_stem,
         "base": {

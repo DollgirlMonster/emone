@@ -17,10 +17,10 @@ import time
 import urllib.request
 from pathlib import Path
 
-PORT = int(os.environ.get("TINYTITAN_PORT", "8096"))
+PORT = int(os.environ.get("EMONE_PORT", "8096"))
 BASE = f"http://127.0.0.1:{PORT}/v1"
-MEMDIR = Path(os.environ.get("TINYTITAN_MEMVAL_MEMDIR", ""))
-SERVER_LOG = os.environ.get("TINYTITAN_MEMVAL_SERVER_LOG")
+MEMDIR = Path(os.environ.get("EMONE_MEMVAL_MEMDIR", ""))
+SERVER_LOG = os.environ.get("EMONE_MEMVAL_SERVER_LOG")
 
 
 def consolidation_lines():

@@ -6,7 +6,7 @@ machine is the operator's. These tests pin the arithmetic (three tenths,
 floored to whole GB, which is what `--ram` takes) and both sides of the
 boundary.
 
-`TINYTITAN_PHYSICAL_RAM_BYTES` is the launcher's seam for exactly this: the mapping
+`EMONE_PHYSICAL_RAM_BYTES` is the launcher's seam for exactly this: the mapping
 has to be checkable on a machine of any size.
 
 Run from this directory, like the other benchmark tests:
@@ -24,7 +24,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "tools/server_launcher.sh"
-SERVER = ROOT / ".build/release/TinyTitanServer"
+SERVER = ROOT / ".build/release/EmoneServer"
 MODELS = ROOT / "models"
 
 # Installed memory in bytes, and the launcher's rule for it: 30%, floored.
@@ -62,7 +62,7 @@ def installed_model() -> str | None:
 
 def dry_run(*args: str, physical_bytes: int) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
-    environment["TINYTITAN_PHYSICAL_RAM_BYTES"] = str(physical_bytes)
+    environment["EMONE_PHYSICAL_RAM_BYTES"] = str(physical_bytes)
     return subprocess.run(
         ["bash", str(LAUNCHER), "--client", "server", *args, "--dry-run"],
         text=True,

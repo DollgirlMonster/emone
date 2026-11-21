@@ -1,6 +1,6 @@
-"""The isolation contract of TinyTitan's private DeepSeek Harness.
+"""The isolation contract of Emone's private DeepSeek Harness.
 
-`tools/dsh_local.sh` and `tools/install_tinytitan.sh` are what let a factory-new
+`tools/dsh_local.sh` and `tools/install_emone.sh` are what let a factory-new
 Mac run the bundle without touching the user's environment — no PATH edit, no
 shell-rc edit, no writes into `~/.dsh`, `~/.npm`, `~/Library/pnpm`, `~/.cache` or
 `~/.local/state`. That property is not visible in any single line, so it is easy
@@ -29,7 +29,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DSH_LOCAL = ROOT / "tools/dsh_local.sh"
-INSTALLER = ROOT / "tools/install_tinytitan.sh"
+INSTALLER = ROOT / "tools/install_emone.sh"
 
 
 def logical_lines(text: str) -> list[str]:
@@ -125,8 +125,8 @@ class PrivateHarnessIsolationTests(unittest.TestCase):
             env = dict(
                 os.environ,
                 HOME=str(home),
-                TINYTITAN_DSH_ROOT=str(home / ".tinytitan/dsh"),
-                TINYTITAN_DSH_DRY_RUN="1",
+                EMONE_DSH_ROOT=str(home / ".emone/dsh"),
+                EMONE_DSH_DRY_RUN="1",
             )
             result = subprocess.run(
                 ["bash", str(DSH_LOCAL), "ensure"],
@@ -148,7 +148,7 @@ class PrivateHarnessIsolationTests(unittest.TestCase):
 class ModelsDirectoryTests(unittest.TestCase):
     """The models directory the harness is handed follows the layout.
 
-    `dsh_route.sh` resolves the installed layout when `TINYTITAN_MODELS_DIR` is
+    `dsh_route.sh` resolves the installed layout when `EMONE_MODELS_DIR` is
     unset, but `dsh_local.sh` always exports it, so a hard-coded `<repo>/models`
     wins over that fallback — and on an installed copy `<repo>` is `<root>/src`,
     where no models are. Measured 2026-09-25 in a simulated install: the plugin's
@@ -192,7 +192,7 @@ class ModelsDirectoryTests(unittest.TestCase):
         paths = self.paths(
             root / "src" / "tools" / "dsh_local.sh",
             root,
-            {"TINYTITAN_MODELS_DIR": "/tmp/chosen-models"},
+            {"EMONE_MODELS_DIR": "/tmp/chosen-models"},
         )
         self.assertEqual(paths["models"], "/tmp/chosen-models")
 
@@ -200,15 +200,15 @@ class ModelsDirectoryTests(unittest.TestCase):
         # The regression shape: the export must be the resolved value, never
         # `$REPO_ROOT/models`, which is what an installed copy does not have.
         script = DSH_LOCAL.read_text()
-        self.assertNotIn('TINYTITAN_MODELS_DIR="$REPO_ROOT/models"', script)
+        self.assertNotIn('EMONE_MODELS_DIR="$REPO_ROOT/models"', script)
         launches = [
             c
             for c in logical_lines(script)
-            if re.search(r"\bweb --", c) and "TINYTITAN_MODELS_DIR=" in c
+            if re.search(r"\bweb --", c) and "EMONE_MODELS_DIR=" in c
         ]
         self.assertEqual(len(launches), 2, "expected the web and smoke launches")
         for launch in launches:
-            self.assertIn('TINYTITAN_MODELS_DIR="$MODELS_DIR"', launch)
+            self.assertIn('EMONE_MODELS_DIR="$MODELS_DIR"', launch)
 
 
 class InstallerIsolationTests(unittest.TestCase):
@@ -234,14 +234,14 @@ class InstallerIsolationTests(unittest.TestCase):
         )
         allowed = {
             "$HOME/.local/bin",
-            "$HOME/.local/bin/tinytitan",
-            "$HOME/.local/bin/tinytitan-web",
+            "$HOME/.local/bin/emone",
+            "$HOME/.local/bin/emone-web",
         }
         self.assertEqual(writes - allowed, set())
 
     def test_the_install_root_is_overridable_for_a_simulated_machine(self) -> None:
-        self.assertIn('INSTALL_ROOT="${TINYTITAN_ROOT:-$HOME/.tinytitan}"', self.script)
-        for directory in ("~/.tinytitan", "~/.local/bin"):
+        self.assertIn('INSTALL_ROOT="${EMONE_ROOT:-$HOME/.emone}"', self.script)
+        for directory in ("~/.emone", "~/.local/bin"):
             self.assertIn(directory, self.script)
 
 

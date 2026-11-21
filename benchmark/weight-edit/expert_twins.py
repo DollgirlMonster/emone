@@ -1,4 +1,4 @@
-"""Router twins and expert twins in a streamed Qwen-family MoE (TinyTitan-bzm). CPU only.
+"""Router twins and expert twins in a streamed Qwen-family MoE (Emone-bzm). CPU only.
 
 usage: expert_twins.py <model_dir> [pairs_per_layer] [layers]
 

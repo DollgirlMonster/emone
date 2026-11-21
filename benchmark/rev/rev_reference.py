@@ -1,4 +1,4 @@
-"""Rev-0.8B reference fixture for TinyTitan's decision-model parity check (TinyTitan-lmw.9).
+"""Rev-0.8B reference fixture for Emone's decision-model parity check (Emone-lmw.9).
 
 benchmark/kev/kev_reference.py, for Rev: post-trained Qwen3.5-0.8B + the local rev-almanac adapter + head, loaded as
 kev.checkpoint does on the exact path (fp32, CPU), scored three ways:
@@ -11,7 +11,7 @@ The requests are synthetic: Kev's three, plus made-up shell commands and an exch
 wording (risk, correction, remember). No user data goes into the fixture.
 
 usage: python -I rev_reference.py <kev-src> <base-dir> <rev-checkpoint-dir> <out-dir>
-then:  TinyTitanCLI decide --model models/qwen3.5_0.8B_8Bit --adapter models/rev-0.8b_lora
+then:  EmoneCLI decide --model models/qwen3.5_0.8B_8Bit --adapter models/rev-0.8b_lora
          --fixture <out-dir>/rev08b_fixture.json
 """
 

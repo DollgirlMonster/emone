@@ -2,7 +2,7 @@
 
 A tracker is a decision queue, not a diary: it holds only what is not resolved
 yet, and the state of each item is a *field*, never the section it sits in. This
-is the shape TinyTitan uses — the table itself is the wiki's
+is the shape emone uses — the table itself is the wiki's
 [Project Tracker](https://github.com/Pummelchen/TinyTitan/wiki/Project-Tracker) —
 and the block below is the reusable form. Paste it into a new project or a new
 agent session to get the same table.

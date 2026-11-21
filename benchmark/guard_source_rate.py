@@ -178,7 +178,7 @@ def newest_label() -> str | None:
 def journal_for(label: str) -> Path | None:
     paths = [
         Path(p)
-        for p in glob.glob(str(LOGS / f"memval-scratch-{label}/book-auto-r*/tinytitan/*/*.ndjson"))
+        for p in glob.glob(str(LOGS / f"memval-scratch-{label}/book-auto-r*/emone/*/*.ndjson"))
     ]
     real = [p for p in paths if "_global" not in p.name and p.stat().st_size > 0]
     return max(real, key=lambda p: p.stat().st_size) if real else None

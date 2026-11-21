@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for the dense converter's System One path: merging a Kev LoRA and
-carrying its pointer head (TinyTitan-lmw.1).
+carrying its pointer head (Emone-lmw.1).
 
 What these pin, each of which would fail silently in the field:
 
@@ -386,7 +386,7 @@ class AdapterPackageTests(KevTestCase):
         raw = (self.root / prepare.ADAPTER_PACKAGE_FILE).read_bytes()
         (length,) = struct.unpack("<Q", raw[:8])
         header = json.loads(raw[8 : 8 + length])
-        self.assertEqual(header.pop("__metadata__")["format"], "tinytitan-lora-v1")
+        self.assertEqual(header.pop("__metadata__")["format"], "emone-lora-v1")
         self.assertEqual(
             sorted(header),
             [

@@ -1,7 +1,7 @@
 # Adding a model to the family
 
 This is the checklist for turning a Hugging Face checkpoint into a first-class
-TinyTitan member at 4-bit and 8-bit. It exists because the work is spread over
+Emone member at 4-bit and 8-bit. It exists because the work is spread over
 eight places in the tree and the order matters: the research decides whether it
 is a wiring job or a runtime job, and nothing is called *supported* until a real
 model has been run.
@@ -89,7 +89,7 @@ are byte-identical. That answers "will the parser accept its tool calls?" by
 construction rather than by hoping.
 
 **2. Resolve every key the repacker's arch reader requires.** Read the
-`loadQwen35MoE` branch of `sources/TinyTitanRepack/Core/Format/ArchInfo.swift`,
+`loadQwen35MoE` branch of `sources/EmoneRepack/Core/Format/ArchInfo.swift`,
 extract its `try i("")` keys, and check each against the checkpoint's
 `text_config`. A missing one is a `configJsonInvalid` at the end of the
 conversion; KAT has all seventeen, plus `layer_types` and both rope keys.
@@ -113,7 +113,7 @@ even though the converter would not complain.
 | --- | --- | --- |
 | 1 | `tools/prepare_agentworld.py`  `MODELS` | The repo and the **pinned sha**, with a comment recording what was verified about the checkpoint |
 | 2 | `tools/install_models.sh`  `CATALOGUE` | Two rows (`<key>`, `<key>-8bit`) and the presetserved-id `case` |
-| 3 | `tools/tinytitan_models.sh` | The key/stem/label `case` with the fallback fields it carries beside them  `ENGINES`, `THINKING` and `FAMILY`  because that list is what the launcher offers when the server cannot report a catalog; plus the unknown-model help text and `TINYTITAN_ALL_MODELS` |
+| 3 | `tools/emone_models.sh` | The key/stem/label `case` with the fallback fields it carries beside them  `ENGINES`, `THINKING` and `FAMILY`  because that list is what the launcher offers when the server cannot report a catalog; plus the unknown-model help text and `EMONE_ALL_MODELS` |
 | 4 | `tools/server_launcher.sh` | The model-key list in the header comment and in the unknown-model error |
 | 5 | `ModelProfile.swift` | One row per width. Sample from the **checkpoint's** config; say in the comment when cache/prefetch values are inherited from identical geometry rather than measured |
 | 6 | `ModelCatalog.swift`  `displayNames` | The served id  human name (`/v1/models` reads this) |
@@ -134,7 +134,7 @@ not group-aligned.
 The converters need **Python 3.10+ with numpy, ml_dtypes and safetensors**, and
 they resolve that themselves: `tools/lib/python.sh` tries `python3.14` down to
 `python3`, testing version *and* imports for each, and takes the first that
-passes. Use whichever name it resolved, or point `TINYTITAN_PYTHON` at a specific
+passes. Use whichever name it resolved, or point `EMONE_PYTHON` at a specific
 interpreter (a virtualenv, say). A bare `python3` is not safe to assume: on a
 stock macOS it is 3.9 from `/usr/bin`, older than these scripts' syntax and
 without the packages.
@@ -209,7 +209,7 @@ The project's bar, in this order:
    it never downloads the model to close the gap. Until the baseline is
    captured, a direct `--check <target>` fails closed with "no verified install"
    or "no baseline", which is the guard working.
-3. **The receipt**: `TinyTitanRepack --verify-install --input-gturbo <dir>` passes,
+3. **The receipt**: `EmoneRepack --verify-install --input-gturbo <dir>` passes,
    and the manifest's `sourceSnapshotHash` matches the snapshot that produced
    it.
 4. **The catalog is right**: `/v1/models` lists the id with the name from
@@ -242,7 +242,7 @@ re-download. Re-issue each in place:
 ```bash
 for d in models/*/; do
   [ -f "$d/verified-install.json" ] || continue
-  swift run -c release TinyTitanRepack --verify-install --input-gturbo "$d"
+  swift run -c release EmoneRepack --verify-install --input-gturbo "$d"
 done
 ```
 
@@ -267,7 +267,7 @@ moved or swapped directory.
 # MEASURED, 2026-09-02: this document's inputs were wrong
 
 Everything below this line predates the profile it asks for in "Step 0". That
-profile has now been run on this model (`tinytitan_overlap_measure`, 256-token warm
+profile has now been run on this model (`emone_overlap_measure`, 256-token warm
 request, 4-bit, 24 GiB M3) and it falsifies three of the inputs above. The
 analysis method was sound; the numbers fed into it were not.
 
@@ -307,7 +307,7 @@ near unified-memory bandwidth, so there is no dispatch-fusion win hiding there.
 
 ## What was tried, and closed
 
-A 15-arm sweep (`tinytitan_knob_sweep.py`, baseline drift 2.9%) plus two defect
+A 15-arm sweep (`emone_knob_sweep.py`, baseline drift 2.9%) plus two defect
 fixes. **Nothing improved throughput correctly.**
 
 | lever | result |
@@ -479,8 +479,8 @@ real figure was 0.59. Both were wrong by more than an order of magnitude.
 
 So the first work item is an instrumented token for *this* model: exposed
 expert I/O, GPU busy, control-plane gaps, cache hit rate at the shipped 96
-slots, and the hit-rate curve past 128. `benchmark/tinytitan_profile.py` and
-`tinytitan_slots_ab.py` already exist for this.
+slots, and the hit-rate curve past 128. `benchmark/emone_profile.py` and
+`emone_slots_ab.py` already exist for this.
 
 If that profile shows exposed I/O far below the ~100 ms this arithmetic
 predicts, the model is not I/O-bound in the way assumed here and this whole
@@ -500,11 +500,11 @@ and all three should be checked before anyone writes a kernel.
 > **Superseded in part, 2026-09-22.** The opt-in switches this document records
 > are no longer in the engine. Each was measured on the current build and turned
 > out a wash or a loss, so all of them were deleted rather than left as knobs:
-> `TINYTITAN_EXPERT_CACHE_POLICY` (lru, aging-lfu, decayed),
-> `TINYTITAN_CACHE_DECAY_HALFLIFE`, `TINYTITAN_EXPERT_CACHE_LAYOUT` (the pooled
-> layout), `TINYTITAN_EARLY_HITS` (with the pooled phase-1 kernel),
-> `TINYTITAN_KEEP_WIRED`, `TINYTITAN_PARALLEL_IO`, `TINYTITAN_PREFETCH_MIN_MARGIN`
-> and `TINYTITAN_PREFETCH_IO_TIER`. What survives from it is the *default* each
+> `EMONE_EXPERT_CACHE_POLICY` (lru, aging-lfu, decayed),
+> `EMONE_CACHE_DECAY_HALFLIFE`, `EMONE_EXPERT_CACHE_LAYOUT` (the pooled
+> layout), `EMONE_EARLY_HITS` (with the pooled phase-1 kernel),
+> `EMONE_KEEP_WIRED`, `EMONE_PARALLEL_IO`, `EMONE_PREFETCH_MIN_MARGIN`
+> and `EMONE_PREFETCH_IO_TIER`. What survives from it is the *default* each
 > experiment confirmed: LFU, per-slot buffers, no early hits, the cache wired per
 > the profile row, parallel fills, rank-order prefetch with no margin gate, and
 > the default disk tier.
@@ -612,7 +612,7 @@ it is 98 ms/token and 29% of decode time.
 
 What was fixed: the per-layer `ProcessInfo.environment` read in the pin
 path (the env-reads regression pattern, ~1.5 ms/token) is a static, the
-48-layer walk returns early once complete, and `TINYTITAN_KEEP_WIRED=1` now
+48-layer walk returns early once complete, and `EMONE_KEEP_WIRED=1` now
 wires each layer as it opens instead of at model load before any layer
 exists. Measured at 512 tokens, kept wired vs shipped: 5.75 / 5.52 vs 5.72
 / 5.88, a wash on throughput; prefill was not slower with the cache held
@@ -663,7 +663,7 @@ weighted trace:
 | margin >= 0.02, cap 4 | 0.64 | 0.59 | 0.37 | 35 |
 | margin >= 0.03, cap 4 | 0.44 | 0.67 | 0.30 | 20 |
 
-Implemented behind `TINYTITAN_PREFETCH_MIN_MARGIN` (default 0 = shipped).
+Implemented behind `EMONE_PREFETCH_MIN_MARGIN` (default 0 = shipped).
 Files: `RealForwardRunner+Decode.swift` (prefetch site, weights readback),
 `RealForwardRunner.swift` (static). Correctness risk: none to output; the
 ring only changes which speculative reads it issues. Expected upside: the
@@ -688,7 +688,7 @@ LFU is best on a short prompt and worst on a long one, because prefill's
 use counts outlive their relevance. A decayed count is within a point on
 the short prompt and 5.7 points better on the long one, which is the
 agentic case. Implemented as `ExpertCachePolicy.decayed` behind
-`TINYTITAN_EXPERT_CACHE_POLICY` (with `aging-lfu` now selectable too). Files:
+`EMONE_EXPERT_CACHE_POLICY` (with `aging-lfu` now selectable too). Files:
 `PreadExpertStreamer.swift` (scoring, eviction), `RuntimeConfiguration.swift`
 (override). Correctness risk: none to output; eviction order only. Expected
 upside on a long prompt: ~28 fewer misses/token, ~20 ms of SSD time. The
@@ -786,8 +786,8 @@ path; it does not reproduce today.
 | keep cache wired through prefill (profile row, Qwen 3.8) | first token +1.6-4.7 s | 0 | TTFT; decode wash (5.75 / 5.52 vs 5.72 / 5.88) | golden identical |
 | prefetch ring: token-boundary reclaim (bug fix) | ring clogged | ring works | n/a alone | golden identical |
 | prefetch off on every profile row | clogged ring (~off) | off | 0 vs measured state; +19-24% vs the repaired ring on | golden identical |
-| probe-margin gate (opt-in, `TINYTITAN_PREFETCH_MIN_MARGIN`) | | | loses at 0.03 and 0.06 | off by default |
-| decayed cache policy (opt-in, `TINYTITAN_EXPERT_CACHE_POLICY=decayed`) | 81.3% hit, 5.62 / 5.85 | 80.0%, 5.55 / 5.60 (short prompt) | -4% short; long prompt in section 10 | off by default |
+| probe-margin gate (opt-in, `EMONE_PREFETCH_MIN_MARGIN`) | | | loses at 0.03 and 0.06 | off by default |
+| decayed cache policy (opt-in, `EMONE_EXPERT_CACHE_POLICY=decayed`) | 81.3% hit, 5.62 / 5.85 | 80.0%, 5.55 / 5.60 (short prompt) | -4% short; long prompt in section 10 | off by default |
 | zero-copy prefetch adoption | memcpy 0.06 ms x ~1.5/token | not built | <0.1% | closed |
 | n-gram gather parallel | 1.55 ms/token | 0.30 possible | ~+0.7% | not built |
 | MTP | 4.73 | 1.94 | -59% | closed |
@@ -819,7 +819,7 @@ in both rounds. Not shipped as the default: the sign depends on the
 prompt. A longer half-life (32-64 replayed at 0.84 short / 0.73-0.75
 long) is the tuning to try; a policy that switches from LFU to decayed
 once decode has run for a few dozen tokens is the structural version.
-Opt-in: `TINYTITAN_EXPERT_CACHE_POLICY=decayed`, `TINYTITAN_CACHE_DECAY_HALFLIFE`.
+Opt-in: `EMONE_EXPERT_CACHE_POLICY=decayed`, `EMONE_CACHE_DECAY_HALFLIFE`.
 
 ## 11. Retraction: multi-variable chain arms were the shipped configuration
 
@@ -871,7 +871,7 @@ The story harness then disagreed: early hits on 5.07 / 5.43, off 5.34 /
 Two protocols, opposite signs, four runs each -- not enough to ship a
 default on, and the same shape as the utility-tier result retracted in
 section 11. `earlyExpertHits` therefore ships **off** on every row and is
-opt-in as `TINYTITAN_EARLY_HITS=1`, which also selects the GPU residency
+opt-in as `EMONE_EARLY_HITS=1`, which also selects the GPU residency
 classifier and the pooled cache layout (both underlying switches still
 override individually). A five-pair interleaved run is in section 13.
 
@@ -904,7 +904,7 @@ behind. Removing the CPU round trip in front of the hits moves work
 earlier in an interval that is still bounded by the SSD, which is the
 same wall every other lever hit.
 
-The code ships **off by default** on every row: `TINYTITAN_EARLY_HITS=1`
+The code ships **off by default** on every row: `EMONE_EARLY_HITS=1`
 selects it (and with it the GPU residency classifier and the pooled cache
 layout), output byte-identical either way. Kept rather than reverted
 because it is the only implementation of "the GPU starts resident-expert
@@ -962,7 +962,7 @@ parameterization below unnecessary.
 
 Were community pins ever adopted, the trust model would match Ornith's
 (repo + revision + source-index SHA) and must be stated in user-facing docs. There is **no
-group-64 8-bit anywhere**, so the port must parameterize TinyTitan's group size
+group-64 8-bit anywhere**, so the port must parameterize Emone's group size
 (the manifest already records `groupSize` per slot; kernels and tools
 hardcode 64 today). Affine group 32 costs ~6% more bytes per weight than
 group 64 (5.0 vs 4.75 effective bits at 4-bit).
@@ -976,7 +976,7 @@ existing model (their call, never ours). Plan: 4-bit first.
 The checkpoint is **multimodal** (`Qwen4ExpForConditionalGeneration`, vision
 tower, interleaved mrope). This port is **text-only**, like the Ornith port;
 with equal text positions the mrope collapses exactly to standard partial
-RoPE, and `rotate_half` over the first 64 dims matches TinyTitan's existing
+RoPE, and `rotate_half` over the first 64 dims matches Emone's existing
 NeoX-subdim convention.
 
 Familiar (config-level deltas from Qwen3.5-MoE):

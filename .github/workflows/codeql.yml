@@ -2,8 +2,8 @@
 #
 # Why this file exists instead of GitHub's default setup: default setup must
 # autobuild, and autobuild runs a bare `swift build`, which builds every product
-# in Package.swift — the libraries plus TinyTitanServer, TinyTitanCLI,
-# TinyTitanBench and more. That run exceeded 14 minutes without
+# in Package.swift — the libraries plus EmoneServer, EmoneCLI,
+# EmoneBench and more. That run exceeded 14 minutes without
 # finishing and had previously failed, which is why Swift was dropped from the
 # default-setup language list and the repository showed "Code scanning
 # configuration error".
@@ -77,7 +77,7 @@ jobs:
       # there is nothing to report and nothing to ignore.
       - name: Build for extraction
         env:
-          SCRATCH: ${{ runner.temp }}/tinytitan-codeql-build
+          SCRATCH: ${{ runner.temp }}/emone-codeql-build
         run: |
           echo "--- toolchain ---"
           swift --version
@@ -94,22 +94,22 @@ jobs:
           # (86)` before a single target compiles. The sandbox exists to contain
           # a hostile manifest; this repository's own manifest is reviewed, and
           # the alternative is no Swift analysis at all.
-          swift build --target TinyTitanFormat --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
-          swift build --target TinyTitanKernelsC --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
-          swift build --target TinyTitan --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target EmoneFormat --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target EmoneKernelsC --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target Emone --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
           swift build --target ContinuityCore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
-          swift build --target TinyTitanRepackCore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
-          swift build --target TinyTitanServerCore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target EmoneRepackCore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target EmoneServerCore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
           # The first green scan covered 220 of 464 Swift files: the six targets
           # above are the ones that build the server's dependency graph, so the
           # validation references, the memory service (persistent state) and the
           # Fleet LAN API (network-facing) were never compiled and therefore
           # never extracted. These four are libraries; the remaining uncovered
           # files are the thin executable `main.swift` entry points and tests.
-          swift build --target TinyTitanValidationSupport --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
-          swift build --target TinyTitanMemory --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
-          swift build --target TinyTitanFleetCore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
-          swift build --target TinyTitanCLICore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target EmoneValidationSupport --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target EmoneMemory --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target EmoneFleetCore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
+          swift build --target EmoneCLICore --arch arm64 --disable-sandbox --scratch-path "$SCRATCH"
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4

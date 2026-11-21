@@ -1,4 +1,4 @@
-# Three asks for DeepSeek Harness, from running it against a local TinyTitan server
+# Three asks for DeepSeek Harness, from running it against a local emone server
 
 Date: 2026-09-14; **posted 2026-09-18**. Re-verified before posting against the
 installed `@deepseek-ai/dsh` **0.1.6-alpha.2** and `@earendil-works/pi-ai` 0.85.1,
@@ -113,7 +113,7 @@ uncertain case is a pass-through plus a report, never a refusal; the target
 defaults to `off`. 25 tests pass against four published `dsh-llm` lines
 (0.1.2-rc.1, 0.1.3-alpha.2, 0.1.5-rc.2, 0.1.6-alpha.2).
 
-**Local mitigation meanwhile.** TinyTitan ships `plugins/dsh-tinytitan`, a thin
+**Local mitigation meanwhile.** emone ships `plugins/dsh-emone`, a thin
 bundle that mounts a compaction backend forcing `off` for compaction calls —
 not titles, because a host-plane plugin's context cannot be wrapped, which is
 ask 1's title half. It names `off` unconditionally, which is correct for the
@@ -166,7 +166,7 @@ Its failure shape is worse than the one above. An error `finish` at least
 carries a code; the plugin-side failure returns normally, throws nothing and
 carries no code — the caller simply never gets the JSON, and a caller that
 retries on a thrown error never retries. They hit it twice, and lost a second
-round to the "no error" part. This is exactly why `plugins/dsh-tinytitan`'s
+round to the "no error" part. This is exactly why `plugins/dsh-emone`'s
 compaction override names `off` unconditionally *only* while the routes this
 checkout emits list `off`: on a foreign route it would fail in that silent way,
 and the capability query is the hardening.
@@ -207,7 +207,7 @@ DeepSeek route (visible in a session transcript as
 `{"inputTokens": 9707, "outputTokens": 153, "totalTokens": 11140, "cacheReadTokens": 1280, "reasoningTokens": 132}`)
 and never on a pi-ai route, so the context meter and any per-turn accounting
 cannot separate thinking from answer there — exactly where local models spend
-most of their output tokens. TinyTitan does report the field; the adapter discards
+most of their output tokens. emone does report the field; the adapter discards
 it. The doc comment ("reasoning folded into output by pi-ai") describes pi-ai's
 *output* bucket, not the separate count pi-ai also returns.
 
@@ -328,7 +328,7 @@ description of the tree holds except for *which* check is the gate:
 
 The first two are small enough to carry as a patch against the installed package
 while upstream decides — but an upgrade replaces `node_modules`, so re-apply
-after one. The first is worked around by `plugins/dsh-tinytitan` for compaction,
+after one. The first is worked around by `plugins/dsh-emone` for compaction,
 and now also by the third-party `@argszero/cordis-plugin-aux-reasoning` for both
 purposes; the seam fix is still the right home for the default, and any local
 patch has to take the corrected "ask, then name" shape rather than forcing

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 1 of the divergence overview (TinyTitan-8d0): teacher-forced surprisal
+"""Phase 1 of the divergence overview (Emone-8d0): teacher-forced surprisal
 for every arithmetic switch, one arm per (model, text, switch).
 
-Each arm runs `TinyTitanCLI --score`: all but the last SCORE tokens of a fixed
+Each arm runs `EmoneCLI --score`: all but the last SCORE tokens of a fixed
 text are prefilled, the last SCORE are teacher-forced through decode, and one
 negative log-likelihood per token is written. Every arm on a (model, text)
 reads identical tokens, so any two arms compare token by token. Arms flip one
@@ -28,7 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 OUT = Path(__file__).resolve().parent / "phase1-20261119"
 SCORE = 512
-GUARD = "TinyTitanServer|TinyTitanCLI|TinyTitanPackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
+GUARD = "EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
 
 MODELS = {
     "qwen36": ROOT / "models/qwen3.6_35B_A3B_4Bit",
@@ -37,14 +37,14 @@ MODELS = {
 
 # The shipped prefill/decode numerics switches on these rows, all on.
 SHIPPED_OFF = {
-    "TINYTITAN_ROUTER_TOPK_SIMD": "0",
-    "TINYTITAN_PREFILL_ROUTED_MPP": "0",
-    "TINYTITAN_PREFILL_ROUTED_QMM": "0",
-    "TINYTITAN_PREFILL_GDN_CHUNK": "0",
-    "TINYTITAN_PREFILL_SG_QMM": "0",
-    "TINYTITAN_PREFILL_DENSE_FLASH": "0",
-    "TINYTITAN_PREFILL_ROUTER_LOGITS": "0",
-    "TINYTITAN_ATTN_DECODE_LONG": "0",
+    "EMONE_ROUTER_TOPK_SIMD": "0",
+    "EMONE_PREFILL_ROUTED_MPP": "0",
+    "EMONE_PREFILL_ROUTED_QMM": "0",
+    "EMONE_PREFILL_GDN_CHUNK": "0",
+    "EMONE_PREFILL_SG_QMM": "0",
+    "EMONE_PREFILL_DENSE_FLASH": "0",
+    "EMONE_PREFILL_ROUTER_LOGITS": "0",
+    "EMONE_ATTN_DECODE_LONG": "0",
 }
 
 # name: (env, chunk, extra CLI args, kind). kind says what the arm is compared
@@ -57,31 +57,31 @@ ARMS = {
     "base_rebuilt": ({}, 8192, [], "base"),
     "base32": ({}, 32, [], "baseline"),
     # Yardsticks.
-    "seq": ({"TINYTITAN_PREFILL_SEQUENTIAL": "1"}, 8192, [], "base"),
+    "seq": ({"EMONE_PREFILL_SEQUENTIAL": "1"}, 8192, [], "base"),
     "kv16": ({}, 8192, ["--kv-bits", "16"], "base"),
     "kv4": ({}, 8192, ["--kv-bits", "4"], "base"),
     "all_shipped_off": (SHIPPED_OFF, 8192, [], "base"),
     "cand_8192": (
-        {"TINYTITAN_PREFILL_MPP_WIDE": "1", "TINYTITAN_PREFILL_Q_QMM": "1"},
+        {"EMONE_PREFILL_MPP_WIDE": "1", "EMONE_PREFILL_Q_QMM": "1"},
         8192, [], "base"),
-    "cand_32": ({"TINYTITAN_PREFILL_FLASH_SPLIT": "1"}, 32, [], "base32"),
+    "cand_32": ({"EMONE_PREFILL_FLASH_SPLIT": "1"}, 32, [], "base32"),
     # Shipped on, flipped off one at a time.
-    "off_topk_simd": ({"TINYTITAN_ROUTER_TOPK_SIMD": "0"}, 8192, [], "base"),
-    "off_routed_qmm": ({"TINYTITAN_PREFILL_ROUTED_QMM": "0"}, 8192, [], "base"),
+    "off_topk_simd": ({"EMONE_ROUTER_TOPK_SIMD": "0"}, 8192, [], "base"),
+    "off_routed_qmm": ({"EMONE_PREFILL_ROUTED_QMM": "0"}, 8192, [], "base"),
     "off_routed_mpp": (
-        {"TINYTITAN_PREFILL_ROUTED_MPP": "0", "TINYTITAN_PREFILL_ROUTED_QMM": "0"},
+        {"EMONE_PREFILL_ROUTED_MPP": "0", "EMONE_PREFILL_ROUTED_QMM": "0"},
         8192, [], "base"),
-    "off_gdn_chunk": ({"TINYTITAN_PREFILL_GDN_CHUNK": "0"}, 8192, [], "base"),
-    "off_sg_qmm": ({"TINYTITAN_PREFILL_SG_QMM": "0"}, 8192, [], "base"),
-    "off_dense_flash": ({"TINYTITAN_PREFILL_DENSE_FLASH": "0"}, 8192, [], "base"),
-    "off_router_logits": ({"TINYTITAN_PREFILL_ROUTER_LOGITS": "0"}, 8192, [], "base"),
-    "off_decode_long": ({"TINYTITAN_ATTN_DECODE_LONG": "0"}, 8192, [], "base"),
-    "off_router_small_tiles": ({"TINYTITAN_ROUTER_SMALL_TILES": "0"}, 32, [], "base32"),
-    "off_resident_rows": ({"TINYTITAN_PREFILL_RESIDENT_ROWS": "0"}, 32, [], "base32"),
+    "off_gdn_chunk": ({"EMONE_PREFILL_GDN_CHUNK": "0"}, 8192, [], "base"),
+    "off_sg_qmm": ({"EMONE_PREFILL_SG_QMM": "0"}, 8192, [], "base"),
+    "off_dense_flash": ({"EMONE_PREFILL_DENSE_FLASH": "0"}, 8192, [], "base"),
+    "off_router_logits": ({"EMONE_PREFILL_ROUTER_LOGITS": "0"}, 8192, [], "base"),
+    "off_decode_long": ({"EMONE_ATTN_DECODE_LONG": "0"}, 8192, [], "base"),
+    "off_router_small_tiles": ({"EMONE_ROUTER_SMALL_TILES": "0"}, 32, [], "base32"),
+    "off_resident_rows": ({"EMONE_PREFILL_RESIDENT_ROWS": "0"}, 32, [], "base32"),
     # Candidates, off by default, flipped on one at a time.
-    "on_mpp_wide": ({"TINYTITAN_PREFILL_MPP_WIDE": "1"}, 8192, [], "base"),
-    "on_q_qmm": ({"TINYTITAN_PREFILL_Q_QMM": "1"}, 8192, [], "base"),
-    "on_flash_split": ({"TINYTITAN_PREFILL_FLASH_SPLIT": "1"}, 32, [], "base32"),
+    "on_mpp_wide": ({"EMONE_PREFILL_MPP_WIDE": "1"}, 8192, [], "base"),
+    "on_q_qmm": ({"EMONE_PREFILL_Q_QMM": "1"}, 8192, [], "base"),
+    "on_flash_split": ({"EMONE_PREFILL_FLASH_SPLIT": "1"}, 32, [], "base32"),
 }
 
 
@@ -107,7 +107,7 @@ def main() -> None:
     args = ap.parse_args()
     cli = Path(subprocess.run(
         ["swift", "build", "-c", "release", "--show-bin-path"], cwd=ROOT,
-        capture_output=True, text=True, check=True).stdout.strip()) / "TinyTitanCLI"
+        capture_output=True, text=True, check=True).stdout.strip()) / "EmoneCLI"
     if not cli.exists():
         sys.exit(f"no release CLI at {cli}")
     for m in args.models.split(","):

@@ -1,5 +1,5 @@
-"""Router twins on real hidden states (TinyTitan-bzm). Reads a `<capture>.moe` file
-(TINYTITAN_MLP_CAPTURE on a routed model: position, layer, top-k ids, expert input).
+"""Router twins on real hidden states (Emone-bzm). Reads a `<capture>.moe` file
+(EMONE_MLP_CAPTURE on a routed model: position, layer, top-k ids, expert input).
 
 usage: twins_real.py <model_dir> <capture.moe> [pairs_per_layer]
 

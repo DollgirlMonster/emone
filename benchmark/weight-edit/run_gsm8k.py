@@ -1,5 +1,5 @@
 from pathlib import Path
-"""Greedy GSM8K slice through TinyTitanCLI, one process per problem.
+"""Greedy GSM8K slice through EmoneCLI, one process per problem.
 
 usage: run_gsm8k.py <out.jsonl> <start> <count> <max_new> [extra CLI args...]
 Writes one JSON row per problem: id, gold, pred, correct, tokens, capped, text.
@@ -16,7 +16,7 @@ import tempfile
 import time
 
 REPO = str(Path(__file__).resolve().parents[2])
-CLI = os.environ.get("TT_CLI", f"{REPO}/.build/release/TinyTitanCLI")
+CLI = os.environ.get("TT_CLI", f"{REPO}/.build/release/EmoneCLI")
 MODEL = f"{REPO}/models/qwen3.5_0.8B_8Bit"
 DATA = os.environ.get("GSM8K_JSONL", os.path.join(os.path.dirname(__file__), "data/gsm8k_test.jsonl"))
 SUFFIX = "\nPlease reason step by step, and put your final answer within \\boxed{}."
@@ -64,7 +64,7 @@ def main():
             t0 = time.time()
             env = dict(os.environ)
             if "TT_CAPTURE_DIR" in env:
-                env["TINYTITAN_MLP_CAPTURE"] = f"{env['TT_CAPTURE_DIR']}/cap_{i}.bin"
+                env["EMONE_MLP_CAPTURE"] = f"{env['TT_CAPTURE_DIR']}/cap_{i}.bin"
             p = subprocess.run(
                 [CLI, "--model", MODEL, "--messages-file", msgs, "--thinking", "on",
                  *decoding(i), "--max-new", max_new, *extra],

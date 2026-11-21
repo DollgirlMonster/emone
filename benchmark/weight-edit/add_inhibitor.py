@@ -2,7 +2,7 @@
 
 usage: add_inhibitor.py <in_dir> <out_dir> <rep_means.npy> <layer> <unit>...
 Each inhibitor unit j gets A_j = 1/|mean_rep_j| with the sign that makes its
-contribution -1 on the repeat positions it was found on (TinyTitan-bbm.3).
+contribution -1 on the repeat positions it was found on (Emone-bbm.3).
 """
 import hashlib, json, struct, sys
 from pathlib import Path

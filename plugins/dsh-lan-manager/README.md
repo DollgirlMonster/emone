@@ -29,7 +29,7 @@ curl -X POST http://127.0.0.1:3080/dsh-lan/prompt-all \
 | —   | Liveness and the caller's fence verdict                                      | `GET /dsh-lan/health`                                            |
 
 **The group.** Every instance shares one **group key** (a string, default
-`tinytitan-lan`, changeable) and discovers the others without being told where
+`emone-lan`, changeable) and discovers the others without being told where
 they are — **online tailnet peers that have an IPv4 address**, whatever continent
 they are on (mobile platforms and IPv6-only peers are skipped), Bonjour
 (`_dsh-lan._tcp`) on the local network, configured `peers`, and optionally
@@ -52,7 +52,7 @@ log at every mount.
 
 **The mesh knows; a manager acts.** A plugin never sends a prompt to another
 instance and never modifies one. Prompting and mutating is the job of the
-external manager — `ttlanmanager`, the **TinyTitan DSH LAN Manager**, in this
+external manager — `ttlanmanager`, the **emone DSH LAN Manager**, in this
 repository's `sources/` — which reads the group from any one member's
 `/inventory` and then talks to the member that owns the thing being acted on.
 
@@ -83,7 +83,7 @@ layers, checked in this order:
 2. **The group key** (`groupKey` / `token`, `DSH_LAN_KEY` / `DSH_LAN_TOKEN`),
    compared in constant time. It is one string with two jobs: the door key every
    request presents, and the tag that decides which instances are one fleet.
-   **It ships with a default (`tinytitan-lan`), so by default it groups rather
+   **It ships with a default (`emone-lan`), so by default it groups rather
    than protects** — every Mac that installs this plugin joins the same group
    with no setup, and any host on the allowlist that knows the default can call
    it. Change it on every Mac when the network is not entirely yours.
@@ -128,7 +128,7 @@ This plugin supports **exactly one DeepSeek Harness release: `0.1.6-alpha.2`** �
 not older, not newer, and not a build from `main`. It registers a route into the
 harness web server and drives the harness through host services, so a release it
 has not been verified against is not something to guess at. It is the same release
-`dsh-tinytitan` supports and the one `tools/dsh_local.sh` installs, and
+`dsh-emone` supports and the one `tools/dsh_local.sh` installs, and
 `test/support.test.js` asserts the constants cannot drift apart.
 
 On any other release it **refuses to run**: one line naming both versions, and
@@ -325,7 +325,7 @@ done
 | Key                        | Env                            | Default                              | Meaning                                                                                                                                            |
 | -------------------------- | ------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `basePath`                 | `DSH_LAN_BASE_PATH`            | `/dsh-lan`                           | Route prefix                                                                                                                                       |
-| `groupKey` / `token`       | `DSH_LAN_KEY`, `DSH_LAN_TOKEN` | `tinytitan-lan`                      | Group tag **and** the secret every request presents                                                                                                |
+| `groupKey` / `token`       | `DSH_LAN_KEY`, `DSH_LAN_TOKEN` | `emone-lan`                      | Group tag **and** the secret every request presents                                                                                                |
 | `peers`                    | `DSH_LAN_PEERS`                | `[]`                                 | Seed addresses (`host` or `host:port`) to try even when discovery finds nothing                                                                    |
 | `discoveryIntervalSeconds` | `DSH_LAN_DISCOVERY_SECONDS`    | `60`                                 | How often the group is refreshed (minimum 5)                                                                                                       |
 | `discoverTailscale`        | —                              | `true`                               | Enumerate online tailnet peers that have an IPv4 address — macOS, Linux, Windows — from the Tailscale CLI                                          |

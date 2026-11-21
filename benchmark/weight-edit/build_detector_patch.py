@@ -66,7 +66,7 @@ def main():
         "base": {"model_id": "qwen3.5-0.8b"},
         "rank": 1,
         "description": f"Loop detector at layer {L} ({k} MLP units) writes toward token "
-                       f"{token} with strength {alpha} (TinyTitan-bbm.3).",
+                       f"{token} with strength {alpha} (Emone-bbm.3).",
         "provenance": {"method": "per-unit d' on looping vs. normal decode positions from "
                                  "8 greedy GSM8K captures; exit direction = final-norm gain * "
                                  "tied embedding row, unit length",

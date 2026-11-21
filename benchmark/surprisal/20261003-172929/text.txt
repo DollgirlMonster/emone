@@ -1,7 +1,7 @@
 # Adding a model to the family
 
 This is the checklist for turning a Hugging Face checkpoint into a first-class
-TinyTitan member at 4-bit and 8-bit. It exists because the work is spread over
+Emone member at 4-bit and 8-bit. It exists because the work is spread over
 eight places in the tree and the order matters: the research decides whether it
 is a wiring job or a runtime job, and nothing is called *supported* until a real
 model has been run.
@@ -89,7 +89,7 @@ are byte-identical. That answers "will the parser accept its tool calls?" by
 construction rather than by hoping.
 
 **2. Resolve every key the repacker's arch reader requires.** Read the
-`loadQwen35MoE` branch of `sources/TinyTitanRepack/Core/Format/ArchInfo.swift`,
+`loadQwen35MoE` branch of `sources/EmoneRepack/Core/Format/ArchInfo.swift`,
 extract its `try i("")` keys, and check each against the checkpoint's
 `text_config`. A missing one is a `configJsonInvalid` at the end of the
 conversion; KAT has all seventeen, plus `layer_types` and both rope keys.
@@ -113,7 +113,7 @@ even though the converter would not complain.
 | --- | --- | --- |
 | 1 | `tools/prepare_agentworld.py`  `MODELS` | The repo and the **pinned sha**, with a comment recording what was verified about the checkpoint |
 | 2 | `tools/install_models.sh`  `CATALOGUE` | Two rows (`<key>`, `<key>-8bit`) and the presetserved-id `case` |
-| 3 | `tools/tinytitan_models.sh` | The key/stem/label `case` with the fallback fields it carries beside them  `ENGINES`, `THINKING` and `FAMILY`  because that list is what the launcher offers when the server cannot report a catalog; plus the unknown-model help text and `TINYTITAN_ALL_MODELS` |
+| 3 | `tools/emone_models.sh` | The key/stem/label `case` with the fallback fields it carries beside them  `ENGINES`, `THINKING` and `FAMILY`  because that list is what the launcher offers when the server cannot report a catalog; plus the unknown-model help text and `EMONE_ALL_MODELS` |
 | 4 | `tools/server_launcher.sh` | The model-key list in the header comment and in the unknown-model error |
 | 5 | `ModelProfile.swift` | One row per width. Sample from the **checkpoint's** config; say in the comment when cache/prefetch values are inherited from identical geometry rather than measured |
 | 6 | `ModelCatalog.swift`  `displayNames` | The served id  human name (`/v1/models` reads this) |
@@ -134,7 +134,7 @@ not group-aligned.
 The converters need **Python 3.10+ with numpy, ml_dtypes and safetensors**, and
 they resolve that themselves: `tools/lib/python.sh` tries `python3.14` down to
 `python3`, testing version *and* imports for each, and takes the first that
-passes. Use whichever name it resolved, or point `TINYTITAN_PYTHON` at a specific
+passes. Use whichever name it resolved, or point `EMONE_PYTHON` at a specific
 interpreter (a virtualenv, say). A bare `python3` is not safe to assume: on a
 stock macOS it is 3.9 from `/usr/bin`, older than these scripts' syntax and
 without the packages.
@@ -209,7 +209,7 @@ The project's bar, in this order:
    it never downloads the model to close the gap. Until the baseline is
    captured, a direct `--check <target>` fails closed with "no verified install"
    or "no baseline", which is the guard working.
-3. **The receipt**: `TinyTitanRepack --verify-install --input-gturbo <dir>` passes,
+3. **The receipt**: `EmoneRepack --verify-install --input-gturbo <dir>` passes,
    and the manifest's `sourceSnapshotHash` matches the snapshot that produced
    it.
 4. **The catalog is right**: `/v1/models` lists the id with the name from
@@ -242,7 +242,7 @@ re-download. Re-issue each in place:
 ```bash
 for d in models/*/; do
   [ -f "$d/verified-install.json" ] || continue
-  swift run -c release TinyTitanRepack --verify-install --input-gturbo "$d"
+  swift run -c release EmoneRepack --verify-install --input-gturbo "$d"
 done
 ```
 
@@ -275,7 +275,7 @@ internal SSD; this is the first record from an M1. Driver: `tools/m1_spike.sh`
 | base | 199.23, 202.44 | -- | **39 tok/s** |
 | s128 (128 expert slots) | 209.42, 194.46 | +0.6% | noise |
 | s256 (256 slots, ~34 GiB) | 211.58, 197.34 | +1.8% | swapped 8 GB, 2x sys time |
-| nobound (`TINYTITAN_BOUNDED_IO=0`) | 199.91, 199.01 | -0.7% | noise |
+| nobound (`EMONE_BOUNDED_IO=0`) | 199.91, 199.01 | -0.7% | noise |
 | s256nobound | 217.60, 214.86 | +7.7% | decode collapsed (0.1 tok/s) |
 | c2048 (half chunk) | 221.93, 234.36 | +13.6% | ~13 s per extra chunk |
 
@@ -300,23 +300,23 @@ real: going 4096 -> 2048 added ~8 s of GPU and ~19 s of non-GPU time.
   sigmoid) runs one GEMV plus one elementwise dispatch per token, each in its own
   encoder: 8,192 encoders per layer-chunk. The per-token GEMV fallback for a
   q-family projection (attention `q_proj`, GDN `in_proj_qkv`) and for
-  bf16-promoted projections does the same. `TINYTITAN_PREFILL_COALESCE=1` keeps
+  bf16-promoted projections does the same. `EMONE_PREFILL_COALESCE=1` keeps
   every kernel, argument and grid and puts a loop's dispatches in one encoder
   (`GEMVRows`); `GEMVRowsTests` requires the result to be byte-identical.
 - **Which projection path an M1 takes was never logged.** The Metal 4 tensor-op
   QMM (`MPPPrefillInt4QMM`) is optional; when it does not compile, `.q` falls to
-  one GEMV per token. With `TINYTITAN_KERNEL_STATS` the runner now prints a
+  one GEMV per token. With `EMONE_KERNEL_STATS` the runner now prints a
   `prefill paths:` line naming the path per family and the MPP state.
-- **`TINYTITAN_PREFILL_Q_QMM=1`** serves `.q` with the batched QMM instead. It sums
+- **`EMONE_PREFILL_Q_QMM=1`** serves `.q` with the batched QMM instead. It sums
   in a different order, so it can change the output and needs a quality check
   (`benchmark/quant_perplexity_ab.py`) before it could become a default.
-- **`TINYTITAN_PREFILL_SPLIT=1`** (diagnostic) commits and times each stage of a
+- **`EMONE_PREFILL_SPLIT=1`** (diagnostic) commits and times each stage of a
   prefill layer as `prefill_split_*` roles: `hc_in`, `attn_qkv_proj`,
   `attn_rope_kv`, `attn_core`, `attn_o_proj`, `gdn_in_proj`, `gdn_scan`,
   `gdn_out_proj`, `hc_out`. The waits serialize stages; read the roles, not
   the wall clock.
 - Two existing switches, off by default pending proof of identical output, are
-  spike arms: `TINYTITAN_HC_FUSED=1` and `TINYTITAN_QSA_GPU_SELECT=1` (QSA key
+  spike arms: `EMONE_HC_FUSED=1` and `EMONE_QSA_GPU_SELECT=1` (QSA key
   selection otherwise runs on the CPU between the indexer and attention).
 
 ## Not pursued, with the reason
@@ -331,7 +331,7 @@ real: going 4096 -> 2048 added ~8 s of GPU and ~19 s of non-GPU time.
 
 Every arm produced the same output as base, `coalesce` included (it is
 bit-identical by construction and `GEMVRowsTests` says so), and so did
-`TINYTITAN_HC_FUSED=1` and `TINYTITAN_QSA_GPU_SELECT=1`, which were off only until
+`EMONE_HC_FUSED=1` and `EMONE_QSA_GPU_SELECT=1`, which were off only until
 that was shown. The M1 compiles the Metal 4 tensor-op QMM: every attention and
 GDN projection already takes it (`prefill paths: mpp_int4=available attn_q=mpp/4b
 gdn_in=mpp/4b kv=mpp/4b o=mpp/4b`), so the per-token q GEMV never runs here and
@@ -353,7 +353,7 @@ together. `powermetrics` during prefill showed 93-98% GPU residency at
 separable from that; `m1_spike.sh --gpu-clock` now reports busy x clock
 (Gcycles) so the next comparison is.
 
-Where the GPU time goes (`TINYTITAN_PREFILL_SPLIT=1`, mean of two rounds, s):
+Where the GPU time goes (`EMONE_PREFILL_SPLIT=1`, mean of two rounds, s):
 
 | stage | s | share | note |
 | --- | ---: | ---: | --- |
@@ -379,7 +379,7 @@ Two findings from reading the code behind spike 2's split:
   `PrefillSharedExpert.encodeBlock` runs gate, up, activation and down for each
   of a chunk's 4,096 tokens through a one-row scratch, so every token's four
   dispatches wait on the previous token's. Coalescing never touched this loop,
-  which is why it did nothing for the 12.9 s. `TINYTITAN_PREFILL_MPP_WIDE=1` runs
+  which is why it did nothing for the 12.9 s. `EMONE_PREFILL_MPP_WIDE=1` runs
   it as three MPP GEMMs over the chunk plus one elementwise activation, and
   routes the other projections still on the scalar `prefillQMM`
   (hyper-connection gates, QSA indexer, PLE) to MPP. It sums in a different
@@ -395,7 +395,7 @@ Two findings from reading the code behind spike 2's split:
   kernel; the Apple10 tensor-ops attention path cannot help here, because a
   selection is present for every 4,096-token chunk and forces the tiled kernel.
 
-### The grouped QSA kernel (`TINYTITAN_PREFILL_QSA_GQA=1`)
+### The grouped QSA kernel (`EMONE_PREFILL_QSA_GQA=1`)
 
 `attention_prefill_causal_qsa_gqa` runs one threadgroup per (token, KV head) for
 all of its query heads (12 for Qwen3.8, at most 16, head dim at most 256). It
@@ -467,7 +467,7 @@ still precedes the first GPU command buffer.
 
 ## After spike 3: what changed, and spike 4
 
-- **The grouped QSA kernel is the default** (`TINYTITAN_PREFILL_QSA_GQA=0` restores
+- **The grouped QSA kernel is the default** (`EMONE_PREFILL_QSA_GQA=0` restores
   the per-head one). Its byte-equality test now also covers int4 and fp16 KV.
 - **The chunk ceiling is 16,384** (`--prefill-chunk 8192|16384`; the default stays
   4,096 until spike 4 measures it). Everything a chunk sizes was already sized
@@ -538,7 +538,7 @@ Where a 16.9K-token prefill goes at c16384 (round 2, 394 s):
 | dense layers on the GPU (attention + GDN + routers) | ~150 | |
 | host time inside the dense phase | ~68 | grows with context: QSA selection runs on the CPU |
 | routed tiles (GPU) | ~66 | |
-| shared expert, per-token path | ~28 | `TINYTITAN_PREFILL_MPP_WIDE=1` makes it ~10 |
+| shared expert, per-token path | ~28 | `EMONE_PREFILL_MPP_WIDE=1` makes it ~10 |
 | drive stall in the routed phase | ~11 | |
 | PLE gather | ~69 | now concurrent |
 
@@ -554,7 +554,7 @@ Where a 16.9K-token prefill goes at c16384 (round 2, 394 s):
 **The PLE gather fix measured:** base 419-451 s in spike 4 -> 353-389 s, and the
 time outside the layer phases 69 s -> ~10 s, as predicted.
 
-**`TINYTITAN_QSA_GPU_SELECT` is decode-only** (`RealForwardRunner+Residual`
+**`EMONE_QSA_GPU_SELECT` is decode-only** (`RealForwardRunner+Residual`
 reads it in the decode QSA path alone), so `c8192qsa` was a second `c8192` --
 which is what it measured. The spike-4 table's "~68 s of QSA selection" was also
 wrong in its size: it left out `prefill_qsa_index` (20-23 s of GPU).
@@ -613,13 +613,13 @@ otherwise for the dense projections: `gdn_in_proj` + `gdn_out_proj` did
 ~33 TFLOP in 8.4 s at 7.9K tokens, ~3.9 TFLOPS on MPP. What is genuinely slow:
 
 - **the routed tiles**, ~80 TFLOP in ~70 s, ~1.2 TFLOPS: one output element
-  per thread, a full dot product each. `TINYTITAN_PREFILL_ROUTED_MPP=1`
+  per thread, a full dot product each. `EMONE_PREFILL_ROUTED_MPP=1`
   (`PrefillRoutedExpertGEMM`) runs each tile as grouped MPP GEMMs instead --
   gather the tile's token rows, gate and up per expert, one activation over
   the tile, down per expert, scatter to the same route-partial slots.
 - **the shared expert's scalar gate**: ~2 GFLOP of work, but 2 x 8,192 one-token
   encoders per layer-chunk, most of `shared_expert`'s ~11 s under MPP.
-  `TINYTITAN_PREFILL_COALESCE` (bit-identical, spike 2) is now on by default.
+  `EMONE_PREFILL_COALESCE` (bit-identical, spike 2) is now on by default.
 
 ## Spike 8 (commit 8ad4c17, two rounds, 16,931-token prompt, on battery)
 
@@ -644,7 +644,7 @@ are timed as `prefill_routed_gemm`.
 | arm | mean NLL | perplexity |
 | --- | ---: | ---: |
 | A: no switches | 2.21386 | 9.1510 |
-| B: `TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1` | 2.21293 | 9.1425 |
+| B: `EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1` | 2.21293 | 9.1425 |
 
 B - A: mean dNLL -0.00093, se 0.01676, t -0.06 (perplexity -0.09%): no
 measurable change; at this length the test resolves about +/-3.4% perplexity
@@ -674,13 +674,13 @@ Spike 9's 214 s splits roughly: QSA attention ~71 s, GDN ~45 s, routed ~35 s,
 QSA indexer ~17 s, shared expert ~8.5 s, off-GPU ~45 s. Three switches, each
 arm adding one:
 
-- `c8192fast`: `TINYTITAN_QSA_SCORE_MMA=1`, the indexer's block scores
+- `c8192fast`: `EMONE_QSA_SCORE_MMA=1`, the indexer's block scores
   (`qsa_block_scores_rows_mma`) on the matrix units; previously ~26 GFLOPS.
   Float sums in another order only.
 - `c16384fast`: the same at chunk 16,384. The ~16K prompt then sweeps the
   routed experts twice instead of three times; this tells whether the
   drive-bound tail chunk is worth the larger scratch.
-- `c8192attn` / `c16384attn`: plus `TINYTITAN_PREFILL_QSA_MMA=1`, QSA attention
+- `c8192attn` / `c16384attn`: plus `EMONE_PREFILL_QSA_MMA=1`, QSA attention
   (`attention_prefill_causal_qsa_gqa_mma`) on the matrix units. Q is padded
   to 16 rows per KV head; for each 16 selected keys, QK^T and P.V run as 8x8
   float matrix products over four simdgroups. The online softmax rescales every
@@ -700,7 +700,7 @@ remains the bottleneck after these.
 | c8192attn | 180.4, 170.5 | 96.6 | 163 | 3 | 97.5 / 63.5 |
 | c16384attn | 156.6, 156.1 | 108.4 | 160 | 2 | 98.7 / 48.0 |
 
-- **Indexer on the matrix units** (`TINYTITAN_QSA_SCORE_MMA`):
+- **Indexer on the matrix units** (`EMONE_QSA_SCORE_MMA`):
   `prefill_qsa_index` fell from 17.0 s to 1.3 s. The time did not go away at
   8,192: the dense phase dropped ~14 s, but the routed phase rose by about as
   much, because the expert prefetch no longer overlaps as much dense work and
@@ -708,7 +708,7 @@ remains the bottleneck after these.
 - **Chunk 16,384**: one routed sweep fewer, so the routed phase drops from
   ~64-79 s to ~48 s, and GPU occupancy rises to 86%. It costs 0.6 GiB more RSS
   and no swap.
-- **QSA attention on the matrix units** (`TINYTITAN_PREFILL_QSA_MMA`):
+- **QSA attention on the matrix units** (`EMONE_PREFILL_QSA_MMA`):
   `prefill_attn_router` fell from 72 s to 45.5 s, a 27% cut in GPU work
   overall. The output changes, as expected from rounding, and stays coherent.
   Decode tok/s in these arms (4.2-4.4 against 3.7) follows from generating
@@ -730,7 +730,7 @@ reference (`tools/prefill_surprisal_ab.sh --b-chunk 16384`).
 # MEASURED, 2026-09-02: this document's inputs were wrong
 
 Everything below this line predates the profile it asks for in "Step 0". That
-profile has now been run on this model (`tinytitan_overlap_measure`, 256-token warm
+profile has now been run on this model (`emone_overlap_measure`, 256-token warm
 request, 4-bit, 24 GiB M3) and it falsifies three of the inputs above. The
 analysis method was sound; the numbers fed into it were not.
 
@@ -770,7 +770,7 @@ near unified-memory bandwidth, so there is no dispatch-fusion win hiding there.
 
 ## What was tried, and closed
 
-A 15-arm sweep (`tinytitan_knob_sweep.py`, baseline drift 2.9%) plus two defect
+A 15-arm sweep (`emone_knob_sweep.py`, baseline drift 2.9%) plus two defect
 fixes. **Nothing improved throughput correctly.**
 
 | lever | result |
@@ -942,8 +942,8 @@ real figure was 0.59. Both were wrong by more than an order of magnitude.
 
 So the first work item is an instrumented token for *this* model: exposed
 expert I/O, GPU busy, control-plane gaps, cache hit rate at the shipped 96
-slots, and the hit-rate curve past 128. `benchmark/tinytitan_profile.py` and
-`tinytitan_slots_ab.py` already exist for this.
+slots, and the hit-rate curve past 128. `benchmark/emone_profile.py` and
+`emone_slots_ab.py` already exist for this.
 
 If that profile shows exposed I/O far below the ~100 ms this arithmetic
 predicts, the model is not I/O-bound in the way assumed here and this whole
@@ -963,11 +963,11 @@ and all three should be checked before anyone writes a kernel.
 > **Superseded in part, 2026-09-22.** The opt-in switches this document records
 > are no longer in the engine. Each was measured on the current build and turned
 > out a wash or a loss, so all of them were deleted rather than left as knobs:
-> `TINYTITAN_EXPERT_CACHE_POLICY` (lru, aging-lfu, decayed),
-> `TINYTITAN_CACHE_DECAY_HALFLIFE`, `TINYTITAN_EXPERT_CACHE_LAYOUT` (the pooled
-> layout), `TINYTITAN_EARLY_HITS` (with the pooled phase-1 kernel),
-> `TINYTITAN_KEEP_WIRED`, `TINYTITAN_PARALLEL_IO`, `TINYTITAN_PREFETCH_MIN_MARGIN`
-> and `TINYTITAN_PREFETCH_IO_TIER`. What survives from it is the *default* each
+> `EMONE_EXPERT_CACHE_POLICY` (lru, aging-lfu, decayed),
+> `EMONE_CACHE_DECAY_HALFLIFE`, `EMONE_EXPERT_CACHE_LAYOUT` (the pooled
+> layout), `EMONE_EARLY_HITS` (with the pooled phase-1 kernel),
+> `EMONE_KEEP_WIRED`, `EMONE_PARALLEL_IO`, `EMONE_PREFETCH_MIN_MARGIN`
+> and `EMONE_PREFETCH_IO_TIER`. What survives from it is the *default* each
 > experiment confirmed: LFU, per-slot buffers, no early hits, the cache wired per
 > the profile row, parallel fills, rank-order prefetch with no margin gate, and
 > the default disk tier.
@@ -1075,7 +1075,7 @@ it is 98 ms/token and 29% of decode time.
 
 What was fixed: the per-layer `ProcessInfo.environment` read in the pin
 path (the env-reads regression pattern, ~1.5 ms/token) is a static, the
-48-layer walk returns early once complete, and `TINYTITAN_KEEP_WIRED=1` now
+48-layer walk returns early once complete, and `EMONE_KEEP_WIRED=1` now
 wires each layer as it opens instead of at model load before any layer
 exists. Measured at 512 tokens, kept wired vs shipped: 5.75 / 5.52 vs 5.72
 / 5.88, a wash on throughput; prefill was not slower with the cache held

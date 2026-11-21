@@ -34,7 +34,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CLI = ROOT / ".build/release/TinyTitanCLI"
+CLI = ROOT / ".build/release/EmoneCLI"
 SYSTEM = "Answer with just the answer, nothing else."
 MAX_NEW = 48
 
@@ -127,7 +127,7 @@ def main() -> int:
     args = ap.parse_args()
     if not CLI.exists():
         print(
-            f"build it first: swift build -c release --product TinyTitanCLI\n  missing {CLI}",
+            f"build it first: swift build -c release --product EmoneCLI\n  missing {CLI}",
             file=sys.stderr,
         )
         return 2

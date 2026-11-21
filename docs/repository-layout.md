@@ -14,11 +14,11 @@ here was checked against the tree, and the counts are from that pass.
 | `docs/` | Engineering documentation: plans, profiles, the findings register, the runbooks | yes |
 | `tools/` | Build, install, verification and conversion drivers (`*.sh`, `*.py`) | yes |
 | `benchmark/` | Benchmark scripts, the golden outputs the baseline compares against, launch helpers | yes |
-| `plugins/` | Client-side bundles for tools that drive the server; `plugins/dsh-tinytitan/` is the DeepSeek Harness one | yes |
+| `plugins/` | Client-side bundles for tools that drive the server; `plugins/dsh-emone/` is the DeepSeek Harness one | yes |
 | `assets/` | Brand assets (wordmark, slogans) | yes |
 | `.build/`, `models/` | SwiftPM's build directory and the installed models | **no** — ignored, and never a source of truth |
 
-`plugins/dsh-tinytitan/` is a Node package (the DeepSeek Harness bundle), the one
+`plugins/dsh-emone/` is a Node package (the DeepSeek Harness bundle), the one
 non-Swift, non-Python deliverable here: it ships a `cordis.patch.yml`, a plugin
 entry, a compaction backend and its own `node --test` suite, and it is installed
 into a DSH profile as a `file:` dependency. It is plain ESM JavaScript because
@@ -34,20 +34,20 @@ models you installed.
 `sources/` holds one directory per SwiftPM target, and the name of the
 directory is the name of the target:
 
-- **`TinyTitan`** — the runtime: the model, the forward runner, the kernels, the
+- **`Emone`** — the runtime: the model, the forward runner, the kernels, the
   tokenizer. Subdirectories are *concerns*, not layers:
   `Kernels/` (Swift dispatch over the shaders), `Metal/` (the `.metal`
   sources), `Runtime/{Inference,Prefill,KVCache,Generation,Configuration,Family}`,
   `Infrastructure/{ModelIO,Streaming,Metal}`, `CPUEngine/`, `Tokenization/`.
-- **`TinyTitanServer`, `TinyTitanCLI`, `TinyTitanRepack`, `TinyTitanMemoryTool`** — the four
+- **`EmoneServer`, `EmoneCLI`, `EmoneRepack`, `EmoneMemoryTool`** — the four
   executables, each split into a SwiftPM-invisible `Command/` subdirectory
   (the `@main`/top-level entry) and a `Core/` library part that the tests
   import. `Package.swift` declares them as two targets each, with
   `exclude: ["Command"]` on the library half.
-- **`TinyTitanFormat`, `TinyTitanMemory`, `ContinuityCore`** — the `.gturbo` format
+- **`EmoneFormat`, `EmoneMemory`, `ContinuityCore`** — the `.gturbo` format
   types, the memory layer, and the session/continuity engine. Each is a
   standalone library with its own README where its contract needs prose.
-- **`TinyTitanBench`, `TinyTitanValidation`, `TinyTitanKernelsC`** — the benchmark
+- **`EmoneBench`, `EmoneValidation`, `EmoneKernelsC`** — the benchmark
   harness, the validation/reference target, and the C kernels.
 
 Two naming conventions follow from this and are worth stating, because both
@@ -55,12 +55,12 @@ were violated by exactly one file each and both violations were fixed in the
 2026-09-11 pass:
 
 1. **`main.swift` means top-level code.** A file with top-level statements is
-   named `main.swift` (`TinyTitanCLI/Command`, `TinyTitanServer/Command`,
-   `TinyTitanRepack/Command`, `TinyTitanMemoryTool`). A file whose entry point is
-   `@main` is named after its type (`TinyTitanBench/TinyTitanBench.swift`,
+   named `main.swift` (`EmoneCLI/Command`, `EmoneServer/Command`,
+   `EmoneRepack/Command`, `EmoneMemoryTool`). A file whose entry point is
+   `@main` is named after its type (`EmoneBench/EmoneBench.swift`,
    `ContinuityDemo/ContinuityDemo.swift`). `@main` in a `main.swift` happens to
    compile while the target is a single file and stops compiling the moment a
-   second file joins the target — which is how `TinyTitanBench` was caught.
+   second file joins the target — which is how `EmoneBench` was caught.
 2. **Feature files are named for the type or the axis they extend**:
    `Model.swift` + `Model+Loading.swift`, `HTTPServerHandler.swift` +
    `HTTPServerHandler+{Routes,Chat,Responses,Anthropic,Plumbing}.swift`. A
@@ -69,17 +69,17 @@ were violated by exactly one file each and both violations were fixed in the
 ## Tests mirror sources
 
 `tests/<Target>/...` mirrors the target's own directory shape, so a test is
-found the same way the code is: `sources/TinyTitan/Runtime/Prefill/X.swift` is
-tested by `tests/TinyTitan/Runtime/Prefill/...`. Where a target has a `Core/`
-library half, the test path repeats it (`sources/TinyTitanServer/Core` ↔
-`tests/TinyTitanServer/Core`).
+found the same way the code is: `sources/Emone/Runtime/Prefill/X.swift` is
+tested by `tests/Emone/Runtime/Prefill/...`. Where a target has a `Core/`
+library half, the test path repeats it (`sources/EmoneServer/Core` ↔
+`tests/EmoneServer/Core`).
 
-One path was inconsistent and is now fixed: the `TinyTitan` runtime's test target
-sat at `tests/TinyTitan/Core` while the runtime itself has no `Core/` level. It is
-`tests/TinyTitan` now, with the target renamed `TinyTitanTestsCore` → `TinyTitanTests`.
+One path was inconsistent and is now fixed: the `Emone` runtime's test target
+sat at `tests/Emone/Core` while the runtime itself has no `Core/` level. It is
+`tests/Emone` now, with the target renamed `EmoneTestsCore` → `EmoneTests`.
 
-`tests/TinyTitan/Runtime/qwen38_tensor_names.txt` and
-`tests/TinyTitanRepack/Core/Support/qwen38_tensor_names.txt` are byte-identical
+`tests/Emone/Runtime/qwen38_tensor_names.txt` and
+`tests/EmoneRepack/Core/Support/qwen38_tensor_names.txt` are byte-identical
 200 KB fixtures. **That duplication is required, not an oversight:** SwiftPM
 resources belong to one target, the two files are resources of two different
 test targets, and neither target may read the other's `Bundle.module`.
@@ -124,7 +124,7 @@ across the new boundary, so no access was widened:
 
 | New file | Lines | Out of |
 | --- | ---: | --- |
-| `TinyTitanServer/Core/StructuredOutputDiagnostics.swift` | 245 | `ServerInference.swift` (1,897 → 1,664) |
+| `EmoneServer/Core/StructuredOutputDiagnostics.swift` | 245 | `ServerInference.swift` (1,897 → 1,664) |
 | `Runtime/Inference/RealForwardRunner+DecodeAttention.swift` | 268 | `+Decode.swift` (1,829 → 1,572) |
 | `Runtime/Inference/RealForwardRunner+PrefillAttention.swift` | 362 | `+Prefill.swift` (1,875 → 1,524) |
 

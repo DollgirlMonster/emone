@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarise a TINYTITAN_PREFIX_LOG file: would pinned prefix snapshots pay?
+"""Summarise a EMONE_PREFIX_LOG file: would pinned prefix snapshots pay?
 
     python3 benchmark/prefix_log_report.py prefix.jsonl
     python3 benchmark/prefix_log_report.py prefix.jsonl --dense-ms-per-token 5.8 --cut-cost-s 17

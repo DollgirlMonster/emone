@@ -1,4 +1,4 @@
-"""A weights-only map of a Qwen-family MoE's experts (TinyTitan-bzm). CPU only.
+"""A weights-only map of a Qwen-family MoE's experts (Emone-bzm). CPU only.
 
 usage: moe_map.py <model_dir> [layer,...]   (default layers 0,1,2,20,37,38,39)
 

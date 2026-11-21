@@ -1,4 +1,4 @@
-"""Write a tinytitan-patch-v1 package that scales whole attention heads.
+"""Write a emone-patch-v1 package that scales whole attention heads.
 
 usage: build_head_scale.py <out_dir> "<description>" <layer>:<head>=<factor>...
 

@@ -33,7 +33,7 @@ How to read it:
      s256 and a >4096 chunk are the levers to build on.
   c2048 much slower than base -> prefill cost tracks the chunk count.
   s256 faster with swap +0 -> run with --expert-cache-slots 256 (or --ram-budget) now.
-  nobound faster -> the page-cache trade pays on this machine (TINYTITAN_BOUNDED_IO=0).
+  nobound faster -> the page-cache trade pays on this machine (EMONE_BOUNDED_IO=0).
   c2048 may legitimately differ in output (different chunking); the others should not.
 Spike 2:
   coalesce MUST read "same as base"; if it does not, that is a bug, not a trade.

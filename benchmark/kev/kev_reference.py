@@ -1,4 +1,4 @@
-"""Kev-0.8B reference fixture for the TinyTitan parity spike (TinyTitan-lmw.3).
+"""Kev-0.8B reference fixture for the Emone parity spike (Emone-lmw.3).
 
 Loads Qwen3.5-0.8B-Base + the kev-0.8b v1.0 adapter + head exactly as kev.checkpoint does on the exact path
 (fp32, CPU, adapter unmerged), scores a fixed request set three ways, and writes a fixture:
@@ -7,7 +7,7 @@ Loads Qwen3.5-0.8B-Base + the kev-0.8b v1.0 adapter + head exactly as kev.checkp
   B  one plain causal row per question (state + branch), unmerged               -> what the engine will run
   C  B on a merged backbone (W += alpha/r * B@A, fp32), plain AutoModel          -> what the converter will install
 
-and exports the merged fp32 backbone as safetensors so the TinyTitan converter can take it.
+and exports the merged fp32 backbone as safetensors so the Emone converter can take it.
 
 usage: python -I kev_reference.py <kev-src> <base-dir> <kev-dir> <out-dir>
 """

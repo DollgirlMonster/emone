@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tabulate phase 1 of the divergence overview (TinyTitan-8d0).
+"""Tabulate phase 1 of the divergence overview (Emone-8d0).
 
 For every arm, against its reference arm on the same (model, text):
   bias   = mean dNLL in nats, its standard error and t (does it make the

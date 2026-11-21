@@ -1,4 +1,4 @@
-"""Write a tinytitan-patch-v1 package that projects u out of chosen down_proj columns.
+"""Write a emone-patch-v1 package that projects u out of chosen down_proj columns.
 
 usage: build_patch.py <directions.npz> <out_dir> <columns|all> <raw|noposition> <layer>...
 
@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from gturbo_reader import GTurboWeights  # noqa: E402
 
 MODEL = os.environ.get("TT_MODEL", str(Path(__file__).resolve().parents[2] / "models/qwen3.5_0.8B_8Bit"))
-FORMAT = "tinytitan-patch-v1"
+FORMAT = "emone-patch-v1"
 
 
 def safetensors(tensors):
@@ -68,7 +68,7 @@ def main():
         "base": {"model_id": "qwen3.5-0.8b"},
         "rank": 1,
         "description": "Projects a looping direction out of mlp.down_proj columns "
-                       f"in layers {layers} (TinyTitan-a37 spike).",
+                       f"in layers {layers} (Emone-a37 spike).",
         "provenance": {
             "method": "difference of class means of dense-MLP outputs on decode positions "
                       "inside vs. before exact 24-gram repeats, greedy GSM8K generations; "

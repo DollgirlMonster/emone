@@ -1,7 +1,7 @@
 # Design: layer-major prefill for Qwen3.8-Flash-Next
 
 **Status: removed 2026-09-22. It was implemented behind
-`TINYTITAN_PREFILL_LAYER_MAJOR=1` (default off) and measured (2026-09-21) with and
+`EMONE_PREFILL_LAYER_MAJOR=1` (default off) and measured (2026-09-21) with and
 without slot concentration. The expert-read reduction is real and larger than this
 design predicted, but the restructure is 2.7x slower in wall clock, its output
 diverges from chunk-major, and chunk-major already runs prefill at 90% GPU
@@ -81,11 +81,11 @@ Three candidates have been eliminated or narrowed by measurement:
 
 - **Baseline nondeterminism** — eliminated by that repeat.
 - **The prefetch ring** — eliminated: layer-major with
-  `TINYTITAN_PREDICTIVE_PREFETCH=0` produced the same text (`b574afad…`) and the
+  `EMONE_PREDICTIVE_PREFETCH=0` produced the same text (`b574afad…`) and the
   same prefill time (1034.5 against 1030.5 s). The ring is entered only from
   `RealForwardRunner+Decode`, so it never runs during prefill.
 - **The 512-slot concentration** — eliminated by the discriminator: layer-major
-  with `TINYTITAN_PREFILL_LAYER_SLOTS=96` reproduces `b574afad…` exactly, at
+  with `EMONE_PREFILL_LAYER_SLOTS=96` reproduces `b574afad…` exactly, at
   1042.5 s and 14,270 MiB.
 
 What the two layer-major arms share, and chunk-major does not, is residency: a
@@ -188,11 +188,11 @@ trap as the QSA selection work.
 
 1. **Output identity, long prompt.** A multi-chunk, multi-layer prompt
    (>= 3,306 words, as used for the chunk change) must produce byte-identical
-   text with layer-major on and off. Put it behind `TINYTITAN_PREFILL_LAYER_MAJOR`
+   text with layer-major on and off. Put it behind `EMONE_PREFILL_LAYER_MAJOR`
    so both orders exist on one build.
 2. **Recurrent state specifically.** GDN state and the conv histories are the
    parts most likely to break under reordering and least likely to show up in
-   a short comparison. Compare `TINYTITAN_ACT_DUMP` activations at the last token
+   a short comparison. Compare `EMONE_ACT_DUMP` activations at the last token
    of each chunk boundary against the chunk-major run.
 3. **Both goldens**, to catch anything that leaked into the single-chunk path.
 4. **Then** the 8k A/B for the number, reporting `expert_read_mib` alongside

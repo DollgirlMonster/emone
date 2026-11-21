@@ -5,7 +5,7 @@ The draft head is 31 tensors of the checkpoint's `mtp.*` namespace, scattered
 across 28 of its 131 shards. `prepare_qwen38.py` streams whole shards, so
 producing the draft that way means re-reading the entire 360 GB release for
 ~5.5 GB of tensors. This range-fetches exactly those 31 and writes a snapshot
-`TinyTitanRepack --input-snapshot ... --draft-head` can import.
+`EmoneRepack --input-snapshot ... --draft-head` can import.
 
 Every policy decision is imported from `prepare_qwen38.py` rather than
 restated -- the name mapping, the expert split, the width per slot, the
@@ -34,7 +34,7 @@ except ImportError as exc:  # pragma: no cover
         f"missing dependency: {exc}\n"
         f"  install them for the interpreter running this file: {sys.executable}\n"
         "    -m pip install safetensors numpy ml_dtypes\n"
-        "  (or point TINYTITAN_PYTHON at another Python 3.10+)"
+        "  (or point EMONE_PYTHON at another Python 3.10+)"
     )
 _HERE = Path(__file__).parent
 _spec = importlib.util.spec_from_file_location("prepare_qwen38", _HERE / "prepare_qwen38.py")

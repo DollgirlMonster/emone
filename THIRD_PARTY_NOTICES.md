@@ -1,7 +1,7 @@
 # Third-party software and model terms
 
-TinyTitan repository source is licensed under the
-[Apache License 2.0](LICENSE). That license applies to TinyTitan's own source
+emone repository source is licensed under the
+[Apache License 2.0](LICENSE). That license applies to emone's own source
 and documentation. It does not relicense model weights or third-party
 packages.
 
@@ -21,7 +21,7 @@ quantization of the Qwen3.6-35B-A3B instruction checkpoint, which is
 released under the Apache License 2.0.
 
 Downloaded weights remain a separate work governed by their source terms. Do
-not redistribute weights as part of TinyTitan releases.
+not redistribute weights as part of emone releases.
 
 ## Swift package graph
 

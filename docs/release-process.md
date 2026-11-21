@@ -1,4 +1,4 @@
-# Cutting an TinyTitan release
+# Cutting an emone release
 
 This is the runbook for turning a green `main` into a tagged, published release
 with prebuilt binaries. It exists because the sequence has traps that cost time
@@ -16,9 +16,9 @@ release notes are `docs/release-notes-vX.Y.md`.
 | macOS 26+, Swift 6.4+ | `sw_vers`, `swift --version` | The runtime's floor; the release notes state it |
 | Disk | `df -h .` | A clean scratch build plus the staged archive wants ~10 GB |
 | Memory | `memory_pressure -Q` | The golden baselines load real models |
-| **No model process** | `pgrep -fl 'TinyTitanServer\|TinyTitanCLI\|TinyTitanPackageTests\|swiftpm-testing-helper\|mlx_lm\|mlx-lm'` | The golden gate refuses to run beside one; see §5 |
+| **No model process** | `pgrep -fl 'EmoneServer\|EmoneCLI\|EmonePackageTests\|swiftpm-testing-helper\|mlx_lm\|mlx-lm'` | The golden gate refuses to run beside one; see §5 |
 | `gh` authenticated | `gh auth status` | Publishing uses it; it must be the repo owner's account |
-| A release build exists | `ls .build/release/TinyTitanCLI` | The golden gate drives that binary and runs *before* the clean scratch build; `release.sh` refuses to start without it |
+| A release build exists | `ls .build/release/EmoneCLI` | The golden gate drives that binary and runs *before* the clean scratch build; `release.sh` refuses to start without it |
 | The installs to verify | `ls models/*/verified-install.json` | The gate verifies only what is installed, and never fetches a model; see §5 |
 | Clean tree, HEAD on the tag | `git status --porcelain` | `release.sh` enforces both |
 
@@ -29,7 +29,7 @@ yours, stop and ask the human — §5 is the long version.
 
 Three places, and only the first is a literal:
 
-1. **`sources/TinyTitanServer/Core/ServerVersion.swift`** — `ServerVersion.current`.
+1. **`sources/EmoneServer/Core/ServerVersion.swift`** — `ServerVersion.current`.
    That is the only version literal in the tree, and the server prints it in its
    ready banner; `tools/release.sh` refuses to publish a tag that disagrees with
    it. Grep for the previous version before believing this: `grep -rn "5\.1\b"
@@ -39,7 +39,7 @@ Three places, and only the first is a literal:
    and user-facing bullets. Keep it compact: what a *user* can do now that they
    could not before, and the numbers that back it.
 3. **`README.md`** — **no release callout.** The README is the stable front
-   page: what TinyTitan is, the benchmark table, the supported-model list and the
+   page: what emone is, the benchmark table, the supported-model list and the
    links. A version's announcement belongs in the wiki `Changelog.md` above, so a
    reader finds it once instead of the README accumulating a section per release.
    The README changes only when a fact it states changes — a new benchmark row, a
@@ -50,7 +50,7 @@ Three places, and only the first is a literal:
 
 `docs/release-notes-vX.Y.md`, modelled on the previous one:
 
-- a `## TinyTitan X.Y — <headline>` title, then one paragraph saying what the
+- a `## emone X.Y — <headline>` title, then one paragraph saying what the
   release is for;
 - one `###` section per user-visible change, each naming the check that backs
   it (a gate, a measurement, a real-model run);
@@ -62,8 +62,8 @@ Three places, and only the first is a literal:
   ```
   ### Checksum
 
-  `tinytitan-X.Y-macos-arm64.tar.gz` sha256: `SHA256_PENDING`
-  `tinytitan-X.Y-macos-arm64.tar.gz` size: `ARCHIVE_BYTES_PENDING` bytes
+  `emone-X.Y-macos-arm64.tar.gz` sha256: `SHA256_PENDING`
+  `emone-X.Y-macos-arm64.tar.gz` size: `ARCHIVE_BYTES_PENDING` bytes
   ```
 
 Neither placeholder is one to forget: `release.sh --publish` substitutes both
@@ -87,7 +87,7 @@ change exists and how it was checked.
 
 The compactor only re-lays-out; it never rewords, so **it cannot make a long
 draft short**. That is what the budget is for: the compact form must come in
-under `TINYTITAN_RELEASE_NOTES_MAX_CHARS` (default 12000) or the run stops. Write
+under `EMONE_RELEASE_NOTES_MAX_CHARS` (default 12000) or the run stops. Write
 the notes compactly to begin with — bullets over paragraphs, the claim first and
 the elaboration only where it changes the claim.
 
@@ -111,7 +111,7 @@ headline plus the lead paragraph.
 ```bash
 git add -A && git commit -m "Prepare X.Y: release notes, the changelog entry, and the version literal"
 git push origin main
-git tag -a vX.Y -m "TinyTitan X.Y — <headline>
+git tag -a vX.Y -m "emone X.Y — <headline>
 
 <lead paragraph>"
 git push origin vX.Y
@@ -129,7 +129,7 @@ tools/release.sh vX.Y --publish --notes docs/release-notes-vX.Y.md
 ```
 
 The dry run is the default because publishing notifies watchers. Read its
-output; then look at `.build/releases/tinytitan-release-X.Y/` — the staged tree and
+output; then look at `.build/releases/emone-release-X.Y/` — the staged tree and
 the tarball — before re-running with `--publish`.
 
 What the dry run does, in order:
@@ -338,8 +338,8 @@ instead, with its reason, and `release.sh` prints it in the golden phase and
 **refuses to publish unless the notes repeat it**:
 
 ```bash
-TINYTITAN_RELEASE_SKIP_GOLDENS=qwen38-8 \
-TINYTITAN_RELEASE_SKIP_GOLDENS_REASON="install is Dropbox online-only; 134 GB needed, 123 GB free" \
+EMONE_RELEASE_SKIP_GOLDENS=qwen38-8 \
+EMONE_RELEASE_SKIP_GOLDENS_REASON="install is Dropbox online-only; 134 GB needed, 123 GB free" \
   tools/release.sh v5.3
 ```
 
@@ -377,7 +377,7 @@ machine it was measured on, and leave previous releases' tables alone.
       `SHA256_PENDING` **and** `ARCHIVE_BYTES_PENDING` — never a size copied out
       of a dry run
 - [ ] Tree clean, `git tag -a vX.Y`, tag pushed, `release.sh` preconditions pass
-- [ ] A release build exists (`.build/release/TinyTitanCLI`) and
+- [ ] A release build exists (`.build/release/EmoneCLI`) and
       `models/` holds exactly the installs you intend to verify
 - [ ] Dry run green: lint, the serial suite, **every installed golden**, a
       warning-free clean build
@@ -389,9 +389,9 @@ machine it was measured on, and leave previous releases' tables alone.
       enforces this)
 - [ ] Every baseline that was not checked is named in `### Verification` — both
       the ones absent from `models/` and any skipped via
-      `TINYTITAN_RELEASE_SKIP_GOLDENS` (`release.sh --publish` enforces this)
+      `EMONE_RELEASE_SKIP_GOLDENS` (`release.sh --publish` enforces this)
 - [ ] The notes are compact: the Release page is bullets, and the compact form is
-      under the `TINYTITAN_RELEASE_NOTES_MAX_CHARS` budget (`release.sh` compacts
+      under the `EMONE_RELEASE_NOTES_MAX_CHARS` budget (`release.sh` compacts
       and enforces this on any run that passes `--notes`)
 - [ ] Staged archive inspected (four executables, bundles, licence, notices)
 - [ ] `--publish --notes docs/release-notes-vX.Y.md`, then `gh release view`
