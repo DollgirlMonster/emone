@@ -3,7 +3,7 @@
 #
 # Two ways to run it:
 #
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/Pummelchen/TinyTitan/main/tools/install_emone.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/DollgirlMonster/emone/main/tools/install_emone.sh)"
 #   bash tools/install_emone.sh                 # from a clone or an unzipped download
 #
 # Use those forms rather than `curl ... | bash`. A pipe makes this script's stdin
@@ -58,10 +58,10 @@
 #   --help, -h       this text
 set -euo pipefail
 
-REPO_URL="https://github.com/Pummelchen/TinyTitan.git"
-REPO_URL_RAW="https://raw.githubusercontent.com/Pummelchen/TinyTitan/main"
+REPO_URL="https://github.com/DollgirlMonster/emone.git"
+REPO_URL_RAW="https://raw.githubusercontent.com/DollgirlMonster/emone/main"
 DEFAULT_MODEL="qwen36"
-DEFAULT_DIR="$HOME/Emone"
+DEFAULT_DIR="$HOME/emone"
 
 say()  { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
@@ -192,7 +192,7 @@ step "Installing Emone"
 # The release that carries the engine binaries. Empty means the newest one, which
 # is what a person wants and what the release runbook publishes.
 latest_tag() {
-  curl -fsSL "https://api.github.com/repos/Pummelchen/TinyTitan/releases/latest" 2>/dev/null \
+  curl -fsSL "https://api.github.com/repos/DollgirlMonster/emone/releases/latest" 2>/dev/null \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
 
@@ -207,12 +207,12 @@ install_from_release() {
 
   say "Downloading Emone ${tag#v} (about 25 MB)"
   if ! curl -fL --progress-bar -o "$tmp/$asset" \
-      "https://github.com/Pummelchen/TinyTitan/releases/download/$tag/$asset"; then
+      "https://github.com/DollgirlMonster/emone/releases/download/$tag/$asset"; then
     rm -rf "$tmp"
     die "Could not download $tag. Check your connection, or that the release exists."
   fi
   if curl -fsSL -o "$tmp/$asset.sha256" \
-      "https://github.com/Pummelchen/TinyTitan/releases/download/$tag/$asset.sha256"; then
+      "https://github.com/DollgirlMonster/emone/releases/download/$tag/$asset.sha256"; then
     # `shasum` ships with macOS, so this is a guard rather than an expectation —
     # without it a missing tool would fall through to the mismatch branch and
     # blame the download for a problem it does not have.
@@ -243,7 +243,7 @@ install_from_release() {
   # The tools, the DSH plugin and the docs, from the same tag. Small, and it is
   # what makes the layout identical to a checkout apart from the build.
   say "Downloading the matching tools"
-  src_url="https://github.com/Pummelchen/TinyTitan/archive/refs/tags/$tag.tar.gz"
+  src_url="https://github.com/DollgirlMonster/emone/archive/refs/tags/$tag.tar.gz"
   if ! curl -fL --progress-bar -o "$tmp/src.tar.gz" "$src_url"; then
     rm -rf "$tmp"; die "Could not download the tools for $tag."
   fi
@@ -321,7 +321,7 @@ install_from_source() {
   say "Building (this is the slow part)"
   if ! swift build -c release; then
     die "The build failed. The last few lines explain why.
-     Copy the whole message to https://github.com/Pummelchen/TinyTitan/issues and someone will help."
+     Copy the whole message to https://github.com/DollgirlMonster/emone/issues and someone will help."
   fi
   ok "Build complete"
 
@@ -519,4 +519,4 @@ fi
 echo
 echo "  New to this? Start here:"
 echo "    https://github.com/Pummelchen/TinyTitan/wiki/Getting-Started"
-echo "  Questions and bug reports: https://github.com/Pummelchen/TinyTitan/issues"
+echo "  Questions and bug reports: https://github.com/DollgirlMonster/emone/issues"

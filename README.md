@@ -2,7 +2,9 @@
 
 This is [DollgirlMonster/emone](https://github.com/DollgirlMonster/emone),
 a private-use fork of [Pummelchen/TinyTitan](https://github.com/Pummelchen/TinyTitan).
-Everything below this section is upstream's README, unchanged. Its benchmarks were
+emone was TinyTitan until 2026-11-20; `TINYTITAN_*` variables and `~/.tinytitan` are no longer read.
+Everything below this section is upstream's README, with its names and commands
+changed to emone's. Its benchmarks were
 measured on upstream's 24 GB M3, not here. The fork's own changes:
 
 **Prefill for Qwen3.8-Flash-Next 125B-A6B 4-bit, tuned on an M1 Max** (32-core

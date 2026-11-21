@@ -23,7 +23,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO="${EMONE_RELEASE_REPO:-Pummelchen/TinyTitan}"
+REPO="${EMONE_RELEASE_REPO:-DollgirlMonster/emone}"
 PRODUCTS=(EmoneServer EmoneCLI EmoneRepack EmoneBench)
 
 die() { echo "error: $*" >&2; exit 1; }

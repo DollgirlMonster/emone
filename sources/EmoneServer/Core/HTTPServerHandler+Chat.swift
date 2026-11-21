@@ -13,6 +13,9 @@ import Synchronization
 import Emone
 
 extension ServerHTTPHandler {
+    /// lint:allow-long decode, validate, then the @Sendable stream callbacks
+    /// that capture this one request's state. It sat at exactly 120 lines until
+    /// the emone rename's swift-format pass wrapped one long `ServerLog` call.
     func handleCompletion(
         body: ByteBuffer,
         context: ChannelHandlerContext,
