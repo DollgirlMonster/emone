@@ -36,17 +36,35 @@ extension RealForwardRunner {
     static let layerTraceFlag =
         ProcessInfo.processInfo.environment["TINYTITAN_LAYER_TRACE"] != nil
 
+    /// Why no token can take the resident path under this runner's settings,
+    /// whatever the cache holds; nil when the settings allow it. The cache's
+    /// own state (every expert resident or not) is `prepareResidentDecode`'s.
+    var residentPathSettingsRefusal: String? {
+        if !Self.residentDecodeFlag { return "TINYTITAN_DECODE_RESIDENT=0" }
+        if cfg.numExperts == 0 { return "dense model (no routed experts)" }
+        if cfg.topKExperts > moe.maxStreamedExperts {
+            return "top-k \(cfg.topKExperts) exceeds \(moe.maxStreamedExperts)"
+        }
+        if decodeExpertExecution != .hitFixup {
+            return "decode expert execution is \(decodeExpertExecution), not hitFixup"
+        }
+        if expertIOSynchronization != .host {
+            return "expert I/O synchronization is \(expertIOSynchronization), not host"
+        }
+        if splitKernelTiming { return "TINYTITAN_KERNEL_SPLIT timing" }
+        if activationDumpDirectory != nil { return "activation dump" }
+        if prefetchTraceFD >= 0 { return "TINYTITAN_PREFETCH_TRACE" }
+        if Self.probe2TraceEnabled { return "probe-2 trace" }
+        if Self.layerTraceFlag { return "TINYTITAN_LAYER_TRACE" }
+        return nil
+    }
+
     /// Whether this token can take the resident path; refreshes the address
     /// tables of any layer whose cache map changed.
     func prepareResidentDecode(warm: Bool = true) throws -> Bool {
         residentTokenBuffers.removeAll(keepingCapacity: true)
         try reapResidentWarm(blocking: false)
-        guard Self.residentDecodeFlag, cfg.numExperts > 0,
-            cfg.topKExperts <= moe.maxStreamedExperts,
-            decodeExpertExecution == .hitFixup, expertIOSynchronization == .host,
-            !splitKernelTiming, activationDumpDirectory == nil, prefetchTraceFD < 0,
-            !Self.probe2TraceEnabled, !Self.layerTraceFlag
-        else { return false }
+        guard residentPathSettingsRefusal == nil else { return false }
         if residentLayers.count != cfg.numLayers {
             residentLayers = [ResidentLayer](repeating: ResidentLayer(), count: cfg.numLayers)
         }

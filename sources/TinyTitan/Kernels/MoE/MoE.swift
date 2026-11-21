@@ -431,13 +431,15 @@ final class MoE {
         topKIndicesOffset: Int = 0,
         expertAddresses: MTLBuffer,
         routedArgBuffer: MTLBuffer,
+        routedArgBufferOffset: Int = 0,
         routeLog: MTLBuffer,
         routeLogOffset: Int,
         topK: UInt32,
         numExperts: UInt32
     ) throws {
         precondition(
-            routedArgBuffer.length >= Int(topK) * Self.routedArgumentPointerStride
+            routedArgBuffer.length
+                >= routedArgBufferOffset + Int(topK) * Self.routedArgumentPointerStride
                 && expertAddresses.length >= Int(numExperts) * MemoryLayout<UInt64>.stride
                 && routeLog.length >= routeLogOffset + Int(topK) * MemoryLayout<UInt32>.stride)
         var topKValue = topK
@@ -448,7 +450,7 @@ final class MoE {
         encoder.setComputePipelineState(resolveResidentPSO)
         encoder.setBuffer(topKIndices, offset: topKIndicesOffset, index: 0)
         encoder.setBuffer(expertAddresses, offset: 0, index: 1)
-        encoder.setBuffer(routedArgBuffer, offset: 0, index: 2)
+        encoder.setBuffer(routedArgBuffer, offset: routedArgBufferOffset, index: 2)
         encoder.setBuffer(routeLog, offset: routeLogOffset, index: 3)
         encoder.setBytes(&topKValue, length: MemoryLayout<UInt32>.stride, index: 4)
         encoder.setBytes(&expertCount, length: MemoryLayout<UInt32>.stride, index: 5)
@@ -469,12 +471,22 @@ final class MoE {
     /// Row r reads `x` and `residual` row r and pointers / weights
     /// [r*8, r*8+8), and writes `y` row r; `acts` is rows*8*f of scratch.
     /// Per row it is the single-row kernels' arithmetic.
+    ///
+    /// The offsets (bytes) place one call on a block of a longer chunk: row r
+    /// of the call is row `xOffset / (d * 2) + r` of `x`, and so on, so a chunk
+    /// past `maxRoutedRows` runs as several calls over disjoint blocks. Each
+    /// call's arguments start at `routedArgOffset`; give each block its own
+    /// argument and activation range, or the blocks serialize on them.
     func encodeRoutedRows(
         commandBuffer: MTLCommandBuffer,
         routedArgBuffer: MTLBuffer,
+        routedArgOffset: Int = 0,
         routedOffsets: MoEExpertOffsets,
-        x: MTLBuffer, acts: MTLBuffer, routingWeights: MTLBuffer,
-        residual: MTLBuffer, y: MTLBuffer,
+        x: MTLBuffer, xOffset: Int = 0,
+        acts: MTLBuffer, actsOffset: Int = 0,
+        routingWeights: MTLBuffer, routingWeightsOffset: Int = 0,
+        residual: MTLBuffer, residualOffset: Int = 0,
+        y: MTLBuffer, yOffset: Int = 0,
         rows: Int, d: UInt32, f: UInt32,
         allResident: [MTLBuffer]
     ) throws {
@@ -485,12 +497,13 @@ final class MoE {
         let half = MemoryLayout<Float16>.stride
         precondition(
             rows > 0 && rows <= Self.maxRoutedRows
-                && routedArgBuffer.length >= 512 * Self.routedArgumentPointerStride
-                && acts.length >= rows * 8 * Int(f) * half
-                && routingWeights.length >= rows * 8 * half
-                && x.length >= rows * Int(d) * half
-                && residual.length >= rows * Int(d) * half
-                && y.length >= rows * Int(d) * half)
+                && routedArgBuffer.length
+                    >= routedArgOffset + 512 * Self.routedArgumentPointerStride
+                && acts.length >= actsOffset + rows * 8 * Int(f) * half
+                && routingWeights.length >= routingWeightsOffset + rows * 8 * half
+                && x.length >= xOffset + rows * Int(d) * half
+                && residual.length >= residualOffset + rows * Int(d) * half
+                && y.length >= yOffset + rows * Int(d) * half)
         var dimension = d
         var intermediate = f
         var expertCount = UInt32(8)
@@ -499,11 +512,11 @@ final class MoE {
             throw MetalError.commandEncoderFailed
         }
         first.setComputePipelineState(phase1)
-        first.setBuffer(routedArgBuffer, offset: 0, index: 0)
+        first.setBuffer(routedArgBuffer, offset: routedArgOffset, index: 0)
         first.useResources(allResident, usage: .read)
         first.setBytes(&offsets, length: MemoryLayout<MoEExpertOffsets>.stride, index: 1)
-        first.setBuffer(x, offset: 0, index: 2)
-        first.setBuffer(acts, offset: 0, index: 3)
+        first.setBuffer(x, offset: xOffset, index: 2)
+        first.setBuffer(acts, offset: actsOffset, index: 3)
         first.setBytes(&dimension, length: MemoryLayout<UInt32>.stride, index: 4)
         first.setBytes(&intermediate, length: MemoryLayout<UInt32>.stride, index: 5)
         first.setBytes(&expertCount, length: MemoryLayout<UInt32>.stride, index: 6)
@@ -515,13 +528,13 @@ final class MoE {
             throw MetalError.commandEncoderFailed
         }
         second.setComputePipelineState(phase2)
-        second.setBuffer(routedArgBuffer, offset: 0, index: 0)
+        second.setBuffer(routedArgBuffer, offset: routedArgOffset, index: 0)
         second.useResources(allResident, usage: .read)
         second.setBytes(&offsets, length: MemoryLayout<MoEExpertOffsets>.stride, index: 1)
-        second.setBuffer(acts, offset: 0, index: 2)
-        second.setBuffer(routingWeights, offset: 0, index: 3)
-        second.setBuffer(residual, offset: 0, index: 4)
-        second.setBuffer(y, offset: 0, index: 5)
+        second.setBuffer(acts, offset: actsOffset, index: 2)
+        second.setBuffer(routingWeights, offset: routingWeightsOffset, index: 3)
+        second.setBuffer(residual, offset: residualOffset, index: 4)
+        second.setBuffer(y, offset: yOffset, index: 5)
         second.setBytes(&dimension, length: MemoryLayout<UInt32>.stride, index: 6)
         second.setBytes(&intermediate, length: MemoryLayout<UInt32>.stride, index: 7)
         second.dispatchThreadgroups(
