@@ -24,6 +24,6 @@
 # `--scratch-path` outside the checkout, so the dependency sources are never
 # under the analyzed source root. This file stays as the record of the scope
 # decision, and for any future buildless analysis where the switch does apply.
-name: TinyTitan CodeQL configuration
+name: Emone CodeQL configuration
 paths-ignore:
   - .build/**

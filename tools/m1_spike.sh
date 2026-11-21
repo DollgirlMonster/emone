@@ -24,36 +24,36 @@
 #   c8192        --prefill-chunk 8192: half the chunks, so half the sweeps of
 #                the routed-expert corpus (~57 GB each on Qwen3.8 4-bit)
 #   c16384       --prefill-chunk 16384: the whole default prompt in one chunk
-#   wide16k      c16384 + TINYTITAN_PREFILL_MPP_WIDE=1
-#   pergqa       TINYTITAN_PREFILL_QSA_GQA=0: the per-head QSA kernel the grouped
+#   wide16k      c16384 + EMONE_PREFILL_MPP_WIDE=1
+#   pergqa       EMONE_PREFILL_QSA_GQA=0: the per-head QSA kernel the grouped
 #                one replaced, for a before/after on this build
-#   c8192qsa     c8192 + TINYTITAN_QSA_GPU_SELECT=1. Decode only: the switch
+#   c8192qsa     c8192 + EMONE_QSA_GPU_SELECT=1. Decode only: the switch
 #                never reaches the prefill selection, so for prefill this is a
 #                second c8192 (spike 5 measured exactly that)
-#   c8192wide    c8192 + TINYTITAN_PREFILL_MPP_WIDE=1
-#   c8192sg      c8192 + TINYTITAN_PREFILL_SG_QMM=1: every batched prefill
+#   c8192wide    c8192 + EMONE_PREFILL_MPP_WIDE=1
+#   c8192sg      c8192 + EMONE_PREFILL_SG_QMM=1: every batched prefill
 #                projection and the shared expert on the simdgroup-matrix QMM
 #                instead of MPP or the scalar QMM; may differ in output (sum
 #                order), judged by tools/prefill_surprisal_ab.sh. Measured
 #                slower than MPP on an M1 Max (spike 7)
-#   c8192routed  c8192 + TINYTITAN_PREFILL_ROUTED_MPP=1: routed-expert tiles
+#   c8192routed  c8192 + EMONE_PREFILL_ROUTED_MPP=1: routed-expert tiles
 #                as grouped MPP GEMMs instead of one output per thread
-#   c8192widerouted  c8192wide + TINYTITAN_PREFILL_ROUTED_MPP=1
-#   c8192fast    c8192widerouted + TINYTITAN_QSA_SCORE_MMA=1 (indexer scores
+#   c8192widerouted  c8192wide + EMONE_PREFILL_ROUTED_MPP=1
+#   c8192fast    c8192widerouted + EMONE_QSA_SCORE_MMA=1 (indexer scores
 #                on the matrix units)
 #   c16384fast   c8192fast at chunk 16384: one routed-expert sweep fewer on a
 #                ~16K prompt, now that the tiles no longer hide the drive
-#   c8192attn    c8192fast + TINYTITAN_PREFILL_QSA_MMA=1 (QSA attention on the
+#   c8192attn    c8192fast + EMONE_PREFILL_QSA_MMA=1 (QSA attention on the
 #                matrix units: rounding-level change, needs the surprisal A/B)
 #   c16384attn   c8192attn at chunk 16384
 #   c32768       base at chunk 32768: a ~17K prompt in one chunk, so the small
 #                tail chunk (547 tokens, ~18 s, mostly expert fetch) is gone
-#   gdnchunk     base + TINYTITAN_PREFILL_GDN_CHUNK=1: the Gated-DeltaNet
+#   gdnchunk     base + EMONE_PREFILL_GDN_CHUNK=1: the Gated-DeltaNet
 #                recurrence in 8-token WY chunks on the matrix units (MLX's
 #                fused-chunk kernel). Qwen3.8 4-bit's row ships it since
 #                2026-10-03, so there this arm is a second base; gdnseq
 #                (=0) is the before
-#   qsaflash     base + TINYTITAN_PREFILL_QSA_FLASH=1: QSA attention as masked
+#   qsaflash     base + EMONE_PREFILL_QSA_FLASH=1: QSA attention as masked
 #                dense flash tiles (8 tokens x a KV head's query heads), key
 #                tiles no token kept skipped; qsagather (=0) is the gathered
 #                grouped kernel it replaced
@@ -62,10 +62,10 @@
 # coherent, then on benchmark/quant_perplexity_ab.py before any default moves.
 #
 # Spike 3: the scalar prefill GEMMs onto MPP
-#   mppwide      TINYTITAN_PREFILL_MPP_WIDE=1: hyper-connection, QSA-indexer and
+#   mppwide      EMONE_PREFILL_MPP_WIDE=1: hyper-connection, QSA-indexer and
 #                PLE projections on the MPP tensor-op QMM, and the shared expert
 #                as three GEMMs over the chunk; may change the output
-#   gqa          TINYTITAN_PREFILL_QSA_GQA=1: the QSA attention kernel with one
+#   gqa          EMONE_PREFILL_QSA_GQA=1: the QSA attention kernel with one
 #                threadgroup per (token, KV head), each selected K/V row read
 #                once instead of once per query head; now the default, so this
 #                arm is a second base
@@ -75,19 +75,19 @@
 # Run it with --gpu-clock: the clock moves more than most arms do.
 #
 # Spike 2: per-token dispatch and switches already in the tree
-#   coalesce     TINYTITAN_PREFILL_COALESCE=1: one encoder per per-token loop;
+#   coalesce     EMONE_PREFILL_COALESCE=1: one encoder per per-token loop;
 #                must be bit-identical to base (output "same as base")
-#   qqmm         TINYTITAN_PREFILL_Q_QMM=1: batched QMM for q-family projections;
+#   qqmm         EMONE_PREFILL_Q_QMM=1: batched QMM for q-family projections;
 #                may change the output
-#   hcfused      TINYTITAN_HC_FUSED=1: fused hyper-connection gates
-#   qsagpu       TINYTITAN_QSA_GPU_SELECT=1: QSA key selection on the GPU
+#   hcfused      EMONE_HC_FUSED=1: fused hyper-connection gates
+#   qsagpu       EMONE_QSA_GPU_SELECT=1: QSA key selection on the GPU
 #   combo        coalesce + hcfused + qsagpu
-#   split        TINYTITAN_PREFILL_SPLIT=1: diagnostic; times each layer stage
+#   split        EMONE_PREFILL_SPLIT=1: diagnostic; times each layer stage
 #                (prefill_split_* roles). Its wall clock is not comparable.
 #
 # Spike 1 (settled on an M1 Max 64 GB, kept for other machines)
 #   s128, s256   more routed-expert cache (256 slots ~ 34 GiB, half the corpus)
-#   nobound      TINYTITAN_BOUNDED_IO=0: let the page cache hold experts too
+#   nobound      EMONE_BOUNDED_IO=0: let the page cache hold experts too
 #   s256nobound  both
 #   c2048        half the prefill chunk: if this is much slower than base, the
 #                cost tracks the chunk count and a >4096 chunk is worth building
@@ -196,38 +196,38 @@ arm_spec() {
     base) echo "base||" ;;
     s128) echo "s128||--expert-cache-slots 128" ;;
     s256) echo "s256||--expert-cache-slots 256" ;;
-    nobound) echo "nobound|TINYTITAN_BOUNDED_IO=0|" ;;
-    s256nobound) echo "s256nobound|TINYTITAN_BOUNDED_IO=0|--expert-cache-slots 256" ;;
+    nobound) echo "nobound|EMONE_BOUNDED_IO=0|" ;;
+    s256nobound) echo "s256nobound|EMONE_BOUNDED_IO=0|--expert-cache-slots 256" ;;
     c2048) echo "c2048||--prefill-chunk 2048" ;;
     c8192) echo "c8192||--prefill-chunk 8192" ;;
     c16384) echo "c16384||--prefill-chunk 16384" ;;
-    wide16k) echo "wide16k|TINYTITAN_PREFILL_MPP_WIDE=1|--prefill-chunk 16384" ;;
-    pergqa) echo "pergqa|TINYTITAN_PREFILL_QSA_GQA=0|" ;;
-    c8192qsa) echo "c8192qsa|TINYTITAN_QSA_GPU_SELECT=1|--prefill-chunk 8192" ;;
-    c8192wide) echo "c8192wide|TINYTITAN_PREFILL_MPP_WIDE=1|--prefill-chunk 8192" ;;
-    c8192sg) echo "c8192sg|TINYTITAN_PREFILL_SG_QMM=1|--prefill-chunk 8192" ;;
-    c8192routed) echo "c8192routed|TINYTITAN_PREFILL_ROUTED_MPP=1|--prefill-chunk 8192" ;;
-    c8192widerouted) echo "c8192widerouted|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1|--prefill-chunk 8192" ;;
-    c8192fast) echo "c8192fast|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1|--prefill-chunk 8192" ;;
-    c16384fast) echo "c16384fast|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1|--prefill-chunk 16384" ;;
-    c8192attn) echo "c8192attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 8192" ;;
-    c16384attn) echo "c16384attn|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_ROUTED_MPP=1 TINYTITAN_QSA_SCORE_MMA=1 TINYTITAN_PREFILL_QSA_MMA=1|--prefill-chunk 16384" ;;
+    wide16k) echo "wide16k|EMONE_PREFILL_MPP_WIDE=1|--prefill-chunk 16384" ;;
+    pergqa) echo "pergqa|EMONE_PREFILL_QSA_GQA=0|" ;;
+    c8192qsa) echo "c8192qsa|EMONE_QSA_GPU_SELECT=1|--prefill-chunk 8192" ;;
+    c8192wide) echo "c8192wide|EMONE_PREFILL_MPP_WIDE=1|--prefill-chunk 8192" ;;
+    c8192sg) echo "c8192sg|EMONE_PREFILL_SG_QMM=1|--prefill-chunk 8192" ;;
+    c8192routed) echo "c8192routed|EMONE_PREFILL_ROUTED_MPP=1|--prefill-chunk 8192" ;;
+    c8192widerouted) echo "c8192widerouted|EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1|--prefill-chunk 8192" ;;
+    c8192fast) echo "c8192fast|EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1 EMONE_QSA_SCORE_MMA=1|--prefill-chunk 8192" ;;
+    c16384fast) echo "c16384fast|EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1 EMONE_QSA_SCORE_MMA=1|--prefill-chunk 16384" ;;
+    c8192attn) echo "c8192attn|EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1 EMONE_QSA_SCORE_MMA=1 EMONE_PREFILL_QSA_MMA=1|--prefill-chunk 8192" ;;
+    c16384attn) echo "c16384attn|EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_ROUTED_MPP=1 EMONE_QSA_SCORE_MMA=1 EMONE_PREFILL_QSA_MMA=1|--prefill-chunk 16384" ;;
     c32768) echo "c32768||--prefill-chunk 32768" ;;
-    gdnchunk) echo "gdnchunk|TINYTITAN_PREFILL_GDN_CHUNK=1|" ;;
-    gdnseq) echo "gdnseq|TINYTITAN_PREFILL_GDN_CHUNK=0|" ;;
-    qsaflash) echo "qsaflash|TINYTITAN_PREFILL_QSA_FLASH=1|" ;;
-    qsagather) echo "qsagather|TINYTITAN_PREFILL_QSA_FLASH=0|" ;;
-    coalesce) echo "coalesce|TINYTITAN_PREFILL_COALESCE=1|" ;;
-    qqmm) echo "qqmm|TINYTITAN_PREFILL_Q_QMM=1|" ;;
-    hcfused) echo "hcfused|TINYTITAN_HC_FUSED=1|" ;;
-    qsagpu) echo "qsagpu|TINYTITAN_QSA_GPU_SELECT=1|" ;;
-    combo) echo "combo|TINYTITAN_PREFILL_COALESCE=1 TINYTITAN_HC_FUSED=1 TINYTITAN_QSA_GPU_SELECT=1|" ;;
-    split) echo "split|TINYTITAN_PREFILL_SPLIT=1|" ;;
-    mppwide) echo "mppwide|TINYTITAN_PREFILL_MPP_WIDE=1|" ;;
-    all) echo "all|TINYTITAN_PREFILL_COALESCE=1 TINYTITAN_HC_FUSED=1 TINYTITAN_QSA_GPU_SELECT=1 TINYTITAN_PREFILL_MPP_WIDE=1|" ;;
-    gqa) echo "gqa|TINYTITAN_PREFILL_QSA_GQA=1|" ;;
-    wide) echo "wide|TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_QSA_GQA=1|" ;;
-    splitwide) echo "splitwide|TINYTITAN_PREFILL_SPLIT=1 TINYTITAN_PREFILL_MPP_WIDE=1 TINYTITAN_PREFILL_QSA_GQA=1|" ;;
+    gdnchunk) echo "gdnchunk|EMONE_PREFILL_GDN_CHUNK=1|" ;;
+    gdnseq) echo "gdnseq|EMONE_PREFILL_GDN_CHUNK=0|" ;;
+    qsaflash) echo "qsaflash|EMONE_PREFILL_QSA_FLASH=1|" ;;
+    qsagather) echo "qsagather|EMONE_PREFILL_QSA_FLASH=0|" ;;
+    coalesce) echo "coalesce|EMONE_PREFILL_COALESCE=1|" ;;
+    qqmm) echo "qqmm|EMONE_PREFILL_Q_QMM=1|" ;;
+    hcfused) echo "hcfused|EMONE_HC_FUSED=1|" ;;
+    qsagpu) echo "qsagpu|EMONE_QSA_GPU_SELECT=1|" ;;
+    combo) echo "combo|EMONE_PREFILL_COALESCE=1 EMONE_HC_FUSED=1 EMONE_QSA_GPU_SELECT=1|" ;;
+    split) echo "split|EMONE_PREFILL_SPLIT=1|" ;;
+    mppwide) echo "mppwide|EMONE_PREFILL_MPP_WIDE=1|" ;;
+    all) echo "all|EMONE_PREFILL_COALESCE=1 EMONE_HC_FUSED=1 EMONE_QSA_GPU_SELECT=1 EMONE_PREFILL_MPP_WIDE=1|" ;;
+    gqa) echo "gqa|EMONE_PREFILL_QSA_GQA=1|" ;;
+    wide) echo "wide|EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_QSA_GQA=1|" ;;
+    splitwide) echo "splitwide|EMONE_PREFILL_SPLIT=1 EMONE_PREFILL_MPP_WIDE=1 EMONE_PREFILL_QSA_GQA=1|" ;;
     *) return 1 ;;
   esac
 }
@@ -263,7 +263,7 @@ free_pct() {
 
 check_quiet_machine() {
   local busy
-  busy="$(pgrep -fl 'TinyTitanServer|TinyTitanCLI|TinyTitanPackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm' || true)"
+  busy="$(pgrep -fl 'EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm' || true)"
   [ -z "$busy" ] || die "another model or test process is running; stop it first:
 $busy"
   local free
@@ -304,9 +304,9 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
   run swift build -c release
 fi
 BIN_DIR="$(swift build -c release --show-bin-path)"
-CLI="$BIN_DIR/TinyTitanCLI"
+CLI="$BIN_DIR/EmoneCLI"
 if [ "$DRY_RUN" -eq 0 ]; then
-  [ -x "$CLI" ] || die "no release TinyTitanCLI at $CLI; run without --skip-build"
+  [ -x "$CLI" ] || die "no release EmoneCLI at $CLI; run without --skip-build"
   archs="$(lipo -archs "$CLI")"
   [ "$archs" = "arm64" ] || die "release binary is '$archs', expected exactly arm64"
 fi
@@ -384,7 +384,7 @@ run_arm() {
   out="$OUT/r${round}-${arm}.out"
 
   # TURBO_FIELDFARE_PHASES adds the per-chunk host-time breakdown (stderr).
-  local envs=(TINYTITAN_KERNEL_STATS=1 TINYTITAN_RUNNER_STATS=1 TURBO_FIELDFARE_PHASES=1)
+  local envs=(EMONE_KERNEL_STATS=1 EMONE_RUNNER_STATS=1 TURBO_FIELDFARE_PHASES=1)
   local assignment
   for assignment in $env_part; do envs+=("$assignment"); done
   local extra=()
@@ -394,7 +394,7 @@ run_arm() {
 
   echo
   echo "== round $round, arm $arm =="
-  echo "+ env ${envs[*]+"${envs[*]}"} TinyTitanCLI --model $MODEL --prompt <prompt.txt> --max-new $MAX_NEW --temperature 0 --seed 1 --max-context 65536 ${extra[*]+"${extra[*]}"}"
+  echo "+ env ${envs[*]+"${envs[*]}"} EmoneCLI --model $MODEL --prompt <prompt.txt> --max-new $MAX_NEW --temperature 0 --seed 1 --max-context 65536 ${extra[*]+"${extra[*]}"}"
   [ "$DRY_RUN" -eq 0 ] || return 0
 
   check_quiet_machine
@@ -424,7 +424,7 @@ run_arm() {
     die "the model's install receipt names a different path (the model was moved).
 $(grep -m1 '^error:' "$log" || true)
 Either move it back to the path above, or re-issue the receipt in place:
-  swift run -c release TinyTitanRepack --verify-install --input-gturbo \"$MODEL\""
+  swift run -c release EmoneRepack --verify-install --input-gturbo \"$MODEL\""
   fi
 
   local footer prefill_tok prefill_s decode_tps prefill_tps occ hit gib rss sha swap_delta
@@ -570,7 +570,7 @@ fi
       print "     s256 and a >4096 chunk are the levers to build on."
       print "  c2048 much slower than base -> prefill cost tracks the chunk count."
       print "  s256 faster with swap +0 -> run with --expert-cache-slots 256 (or --ram-budget) now."
-      print "  nobound faster -> the page-cache trade pays on this machine (TINYTITAN_BOUNDED_IO=0)."
+      print "  nobound faster -> the page-cache trade pays on this machine (EMONE_BOUNDED_IO=0)."
       print "  c2048 may legitimately differ in output (different chunking); the others should not."
       print "Spike 2:"
       print "  coalesce MUST read \"same as base\"; if it does not, that is a bug, not a trade."

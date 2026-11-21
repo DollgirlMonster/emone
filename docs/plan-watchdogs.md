@@ -30,7 +30,7 @@ derived from the prompt length, not by this watchdog. Without this fix the
 watchdog is not merely useless, it is destructive.
 
 **B2 — the ping-pong watchdog is in the wrong place.** It inspects the
-*incoming* request's message history, because TinyTitan returns tool calls to
+*incoming* request's message history, because emone returns tool calls to
 the client and repeats appear in the next request, not in the output stream.
 It belongs in request validation, beside the existing unresolved-tool-call
 check, not in `publish`. Corrected below.
@@ -102,7 +102,7 @@ protocol Watchdog {
 enum WatchdogVerdict { case fine, concern(String), stop(String) }
 ```
 
-Driven from `publish(_:)` in `sources/TinyTitanServer/Core/ServerInference.swift`,
+Driven from `publish(_:)` in `sources/EmoneServer/Core/ServerInference.swift`,
 which is already the single point every content chunk passes through and
 already owns a `shouldStop` flag for the stop-string matcher. A `stop`
 verdict sets the same flag and records a finish reason of `watchdog`.
@@ -132,13 +132,13 @@ more from here would be the first false-positive source.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TINYTITAN_WATCHDOGS` | `0` | `1` enables observation and logging |
-| `TINYTITAN_WATCHDOG_ACT` | `` | comma list of watchdogs allowed to stop a generation: `loop,stall,stub,pingpong` |
-| `TINYTITAN_WATCHDOG_STALL_SECONDS` | `90` | stall threshold |
-| `TINYTITAN_WATCHDOG_LOOP_REPEATS` | `4` | repeats before a loop is called |
+| `EMONE_WATCHDOGS` | `0` | `1` enables observation and logging |
+| `EMONE_WATCHDOG_ACT` | `` | comma list of watchdogs allowed to stop a generation: `loop,stall,stub,pingpong` |
+| `EMONE_WATCHDOG_STALL_SECONDS` | `90` | stall threshold |
+| `EMONE_WATCHDOG_LOOP_REPEATS` | `4` | repeats before a loop is called |
 
-Off by default. With `TINYTITAN_WATCHDOGS=1` they only log; a watchdog stops a
-generation only when named in `TINYTITAN_WATCHDOG_ACT`. The startup line gains
+Off by default. With `EMONE_WATCHDOGS=1` they only log; a watchdog stops a
+generation only when named in `EMONE_WATCHDOG_ACT`. The startup line gains
 `watchdogs=off|observe|act(...)`.
 
 ## What the user sees
@@ -154,7 +154,7 @@ this" reason and inventing one breaks clients.
 
 ## Tests
 
-**Unit — `tests/TinyTitanServer/WatchdogTests.swift` (new)**
+**Unit — `tests/EmoneServer/WatchdogTests.swift` (new)**
 
 Synthetic streams, no model, fully deterministic:
 
@@ -168,7 +168,7 @@ Synthetic streams, no model, fully deterministic:
   on a 5-token reply that ended in a tool call
 - `pingpong` fires on the same call three times, not on the same tool with
   different arguments
-- every watchdog with `TINYTITAN_WATCHDOGS=0` returns `.fine` without inspecting
+- every watchdog with `EMONE_WATCHDOGS=0` returns `.fine` without inspecting
   anything
 
 **Corpus calibration — `benchmark/watchdog_calibrate.py` (new)**
@@ -179,19 +179,19 @@ count per watchdog. The test asserts zero. This is what turns the thresholds
 from guesses into measurements, and it is re-runnable when a new model is
 added.
 
-**Integration — extend `tests/TinyTitanServer/HTTPServerTests.swift`**
+**Integration — extend `tests/EmoneServer/HTTPServerTests.swift`**
 
 - a scripted backend that emits a looping stream, with `loop` in
-  `TINYTITAN_WATCHDOG_ACT`, ends the response with `finish_reason` mapped
+  `EMONE_WATCHDOG_ACT`, ends the response with `finish_reason` mapped
   correctly on all three API surfaces
-- with `TINYTITAN_WATCHDOGS=0` the same stream completes untouched
+- with `EMONE_WATCHDOGS=0` the same stream completes untouched
 
 ## Gate before any watchdog may act by default
 
 - zero false positives on the recorded corpus for every watchdog
 - the observation-only mode run across one full book and coder install, with
   every trip reviewed by hand
-- only then may a watchdog be added to the default `TINYTITAN_WATCHDOG_ACT`, and
+- only then may a watchdog be added to the default `EMONE_WATCHDOG_ACT`, and
   the first candidate is `stall`, which has no plausible false positive
 
 ## Order of work
@@ -207,8 +207,8 @@ added.
 
 ## Outcome (2026-09-08)
 
-Built, calibrated and tested. Off by default; `TINYTITAN_WATCHDOGS=1` observes,
-and a watchdog acts only when named in `TINYTITAN_WATCHDOG_ACT`.
+Built, calibrated and tested. Off by default; `EMONE_WATCHDOGS=1` observes,
+and a watchdog acts only when named in `EMONE_WATCHDOG_ACT`.
 
 **The proposed loop threshold was wrong, and measurement is what said so.**
 A 40-byte window at four repeats fired on 8.1% of the recorded corpus, all
@@ -251,7 +251,7 @@ a watchdog never fails a completion. Rendering the history without the tool
 template is not an alternative: it is what the transcript is written in.
 
 So ping-pong reports and never intervenes. `WatchdogKind.canAct` records
-this, `TINYTITAN_WATCHDOG_ACT=pingpong` is dropped at parse time rather than
+this, `EMONE_WATCHDOG_ACT=pingpong` is dropped at parse time rather than
 honoured into a worse failure, and the client, which owns the loop, decides.
 This supersedes B7.
 

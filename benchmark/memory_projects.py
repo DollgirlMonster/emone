@@ -49,21 +49,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ARMS = ("control", "auto")
 OUT = Path(
-    os.environ.get("TINYTITAN_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-projects")
+    os.environ.get("EMONE_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-projects")
 )
-PORT = int(os.environ.get("TINYTITAN_PORT", "8096"))
+PORT = int(os.environ.get("EMONE_PORT", "8096"))
 BASE = f"http://127.0.0.1:{PORT}/v1"
 # Which run of the arm this is; results are kept per run so repeats can be
 # compared and averaged. Repeats only mean something with sampling on:
 # at temperature 0 a repeat is the same output.
-RUN = os.environ.get("TINYTITAN_MEMVAL_RUN", "1")
-TEMPERATURE = os.environ.get("TINYTITAN_MEMVAL_TEMPERATURE")  # unset: the server's default
-SERVER_LOG = os.environ.get("TINYTITAN_MEMVAL_SERVER_LOG")
+RUN = os.environ.get("EMONE_MEMVAL_RUN", "1")
+TEMPERATURE = os.environ.get("EMONE_MEMVAL_TEMPERATURE")  # unset: the server's default
+SERVER_LOG = os.environ.get("EMONE_MEMVAL_SERVER_LOG")
 # The arm's memory directory. One .ndjson per workspace, so its filenames are
 # the second, independent witness that the two projects were kept apart. Kept
 # as the raw string: an unset value must read as "no directory", and Path("")
 # is the working directory.
-MEMDIR = os.environ.get("TINYTITAN_MEMVAL_MEMDIR", "")
+MEMDIR = os.environ.get("EMONE_MEMVAL_MEMDIR", "")
 
 
 def sampling():
@@ -255,7 +255,7 @@ def post(messages, model, workspace, max_tokens=1200):
     request = urllib.request.Request(
         f"{BASE}/chat/completions",
         data=body,
-        headers={"Content-Type": "application/json", "X-TinyTitan-Workspace": workspace},
+        headers={"Content-Type": "application/json", "X-Emone-Workspace": workspace},
     )
     started = time.time()
     with urllib.request.urlopen(request, timeout=3600) as response:
@@ -283,7 +283,7 @@ def assert_arm_is_real(arm: str, prompt: str, prompt_tokens: int):
             raise SystemExit(
                 f"ABORT: arm 'control' but the server placed sessions in memory "
                 f"({placed[0][0]} via {placed[0][1]}). Memory is on in the arm "
-                f"whose whole job is to have none. Check TINYTITAN_MEMORY."
+                f"whose whole job is to have none. Check EMONE_MEMORY."
             )
         # Without a server log there is nothing authoritative to check, so
         # fall back to size: the memory system prompt fragment is ~90 tokens
@@ -294,17 +294,17 @@ def assert_arm_is_real(arm: str, prompt: str, prompt_tokens: int):
             raise SystemExit(
                 f"ABORT: arm 'control' saw {prompt_tokens} prompt tokens for a "
                 f"~{estimate}-token prompt; something is being prepended. "
-                f"Check TINYTITAN_MEMORY and TINYTITAN_MEMORY_TOOLS."
+                f"Check EMONE_MEMORY and EMONE_MEMORY_TOOLS."
             )
     elif SERVER_LOG and not placed:
         raise SystemExit(
             f"ABORT: arm '{arm}' claims memory but the server logged no session "
-            f"placement. Rebuild the release binary and check TINYTITAN_MEMORY."
+            f"placement. Rebuild the release binary and check EMONE_MEMORY."
         )
 
 
 def assert_header_is_honoured(model: str):
-    """Four tokens that prove X-TinyTitan-Workspace decides the workspace.
+    """Four tokens that prove X-Emone-Workspace decides the workspace.
 
     Two sessions of a 35B model are ten minutes; this finds an ignored header
     in seconds, which is the difference between a rerun and an afternoon. The
@@ -320,7 +320,7 @@ def assert_header_is_honoured(model: str):
         time.sleep(2)
     placed = placements_logged()
     raise SystemExit(
-        f"ABORT: a request carrying X-TinyTitan-Workspace: {PROBE_WORKSPACE} was placed "
+        f"ABORT: a request carrying X-Emone-Workspace: {PROBE_WORKSPACE} was placed "
         f"in {sorted({scope for scope, _ in placed}) or 'no logged workspace'} "
         f"(via {sorted({via for _, via in placed}) or '-'}). The header is not "
         f"choosing the workspace, so both projects would share one store and the "
@@ -350,7 +350,7 @@ def assert_projects_are_separate():
         if sources and sources != {"header"}:
             raise SystemExit(
                 f"ABORT: the server placed sessions via {sorted(sources)}, not "
-                f"'header'. X-TinyTitan-Workspace is not reaching the placement "
+                f"'header'. X-Emone-Workspace is not reaching the placement "
                 f"decision, so both projects share a store."
             )
         if not workspaces <= scopes:
@@ -448,9 +448,9 @@ def run_arm(arm: str):
     # tell isolation from a harness bug, and would report the bug as a leak.
     if memory_on and not SERVER_LOG and not MEMDIR:
         raise SystemExit(
-            "ABORT: set TINYTITAN_MEMVAL_SERVER_LOG or TINYTITAN_MEMVAL_MEMDIR. Without "
+            "ABORT: set EMONE_MEMVAL_SERVER_LOG or EMONE_MEMVAL_MEMDIR. Without "
             "one of them this run cannot show that the two projects went to two "
-            "workspaces, and an ignored X-TinyTitan-Workspace header would be "
+            "workspaces, and an ignored X-Emone-Workspace header would be "
             "reported as a total leak."
         )
     model = model_id()

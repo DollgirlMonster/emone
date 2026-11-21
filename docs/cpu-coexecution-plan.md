@@ -1,6 +1,6 @@
 # Using the idle CPU cores and the spare memory bus
 
-TinyTitan decodes with one CPU thread orchestrating and seven idle, and it uses
+emone decodes with one CPU thread orchestrating and seven idle, and it uses
 roughly half the memory bus. This is the plan for spending both.
 
 Every number here was measured on the development machine (M3, 24 GiB, ~100
@@ -134,7 +134,7 @@ that cost -- int8, or 4-bit pre-swizzled so a NEON lane loads without shift and
 mask. Roughly 2x on the CPU path is plausible, which either raises the CPU's
 share or frees cores.
 
-This is a `TinyTitanRepack` change plus a second expert section in the `.gturbo`
+This is a `EmoneRepack` change plus a second expert section in the `.gturbo`
 container. It does not need a re-download; it is a repack of installed weights.
 
 Estimated +10-15% beyond Phase 1, and it is the phase that makes the split
@@ -250,7 +250,7 @@ property being traded, and it is why the streaming path should stay selectable.
 
 ### Second prototype: the real access pattern, measured
 
-`TINYTITAN_ROUTE_TRACE=<path>` dumps `position layer e0..e7` for every decode layer,
+`EMONE_ROUTE_TRACE=<path>` dumps `position layer e0..e7` for every decode layer,
 so the question can be answered from what decode actually does rather than from
 a synthetic sweep. A 383-token generation at 4-bit, 128 slots:
 
@@ -346,7 +346,7 @@ clocks, and this says that assumption needs testing before the work is trusted.
 
 ## Reshaping the weights: TRIED, NOTHING TO RECOVER
 
-Reducing precision is not an option -- TinyTitan offers 4/6/8-bit as a user-facing
+Reducing precision is not an option -- emone offers 4/6/8-bit as a user-facing
 quality choice -- so the lossless version of "move fewer bytes" is reshaping:
 same values, better arrangement. Two measurements say there is nothing there.
 
@@ -397,7 +397,7 @@ with EAGLE-family drafters (DSpark, semi-autoregressive) and a block-diffusion
 variant (DFlash), plus a small-M quantised matmul and hardware-aware cap
 calibration. Only one part of that is worth taking here.
 
-**The drafter transfers.** TinyTitan's MTP problem is acceptance, not
+**The drafter transfers.** emone's MTP problem is acceptance, not
 implementation: break-even needs p > 0.585 and the current drafter reaches
 0.574, missing by 1.1 points. A trained EAGLE-family drafter attacks exactly
 that. Running their acceptance range through the union costs measured here:
@@ -435,7 +435,7 @@ first and stack the drafter afterwards if it is still wanted.
 
 One caveat on provenance: the description of their approach comes from reading
 the repository earlier in this work, not from a fresh review. The numbers drawn
-from TinyTitan's own measurements stand on their own; their internals should be
+from emone's own measurements stand on their own; their internals should be
 re-verified before any port is committed to.
 
 ## Risks
@@ -471,7 +471,7 @@ Two false positives came from skipping this: 32 MTP sidecar slots "beating" 8
 by 11%, and 128 expert-cache slots "beating" 64 by 15%. Both vanished under an
 interleaved retest.
 
-`TINYTITAN_KERNEL_STATS=1` reports merged GPU occupancy; `TURBO_FIELDFARE_PHASES=1`
+`EMONE_KERNEL_STATS=1` reports merged GPU occupancy; `TURBO_FIELDFARE_PHASES=1`
 reports per-chunk route/tile/tail split and active experts per layer.
 
 ## Lossless compression: TRIED, THERE IS NOTHING TO COMPRESS
@@ -608,7 +608,7 @@ GPU then does the remaining 68% at 0.69x speed -- slower overall than the GPU
 doing all of it alone. There is no split ratio that wins.
 
 Phase 1 and Phase 2 above are therefore dead, not deferred. The CPUExpertFFN
-kernel and TinyTitanKernelsC target remain in the tree because they are correct,
+kernel and EmoneKernelsC target remain in the tree because they are correct,
 tested, and cheap to keep, but nothing should call them from the decode path.
 
 ### What this leaves for a 2x
@@ -705,7 +705,7 @@ nearly double the pure-CPU case, so the ANE contribution dominates.
 The three resources were nominated as idle: cores, ANE, bus. The unifying result
 is that **only one of them was ever the constraint, and it is the bus.**
 
-TinyTitan moves ~1.8 GB per token. This machine delivers ~78 GB/s in practice. That
+emone moves ~1.8 GB per token. This machine delivers ~78 GB/s in practice. That
 sets an 23 ms/token floor -- and during the 27.6 ms the GPU actually works, it
 already pulls ~65 GB/s, 83% of that. Compute units are idle; *bandwidth* is not.
 
@@ -756,19 +756,19 @@ nothing, so it is purely bandwidth-bound and the compute unit does not matter. T
 ANE's 4 TFLOP/s only shows up at batch 64, where reuse exists. It never exceeds
 ~64 GB/s of weight streaming at any batch size.
 
-TinyTitan's GPU achieves ~65 GB/s during its busy window. **The ANE and the GPU hit
+emone's GPU achieves ~65 GB/s during its busy window. **The ANE and the GPU hit
 the same wall, because it is the same wall.**
 
 So an all-ANE engine would land at 1.8 GB / 64 GB/s = 28 ms/token, about 36 tok/s.
 That is a legitimate architecture for reaching it -- Core ML executes the whole
-graph without the per-layer CPU round trips that produce TinyTitan's 16.7 ms of idle,
+graph without the per-layer CPU round trips that produce emone's 16.7 ms of idle,
 so the idle would be absent by construction rather than engineered away. But it is
 the *same* 36 tok/s that eliminating GPU idle reaches, from the opposite direction.
 
 It would also cost: no weight streaming, so the whole model resident (viable only
 if Core ML's 4-bit palettisation holds ~18 GB, and worse for the 6/8-bit
 variants); the MoE expressed as a gather over all 256 stacked experts, whose ANE
-efficiency is unknown; and TinyTitan's engine, prompt cache and quantisation choice
+efficiency is unknown; and emone's engine, prompt cache and quantisation choice
 replaced wholesale.
 
 ### The corrected ceiling
@@ -812,7 +812,7 @@ penalty.
 **6-bit is the outlier and it is actionable.** 46.8 GB/s against 60 for both 4-bit
 and 8-bit, and only 0.12 ms faster than 8-bit despite storing 25% fewer bytes.
 That is the signature of a non-power-of-two packing being padded or unpacked
-inefficiently. Worth checking whether TinyTitan's own 6-bit GPU path has the same
+inefficiently. Worth checking whether emone's own 6-bit GPU path has the same
 shape: the earlier 6-bit measurement (6.68 tok/s) was dominated by the model not
 fitting RAM, so a packing inefficiency would have been invisible underneath it. If
 present, 6-bit users are paying twice -- once for not fitting, once for the
@@ -834,7 +834,7 @@ The answer depends entirely on arithmetic intensity, and the crossover is sharp.
 
 **At batch 1 they are the same**, within 7%. Both sit at ~60-64 GB/s of weight
 reads and neither exceeds 64 GFLOP/s, because a single-row matmul reuses no weight
-and the memory system decides the outcome. This is the regime TinyTitan decode lives
+and the memory system decides the outcome. This is the regime emone decode lives
 in, which is why swapping units changes nothing.
 
 **At batch 64 the ANE is 2x faster** -- 4010 against 2026 GFLOP/s -- and notably
@@ -850,16 +850,16 @@ a tie either way.
 Practical reading: the ANE is the better dense-matmul engine once there is reuse to
 exploit, and it also decompresses 4-bit weights in hardware. The GPU is the only
 one that can run arbitrary kernels, any dtype, and dynamic control flow -- which is
-what a per-token top-8-of-256 MoE router requires. For TinyTitan's decode path neither
+what a per-token top-8-of-256 MoE router requires. For emone's decode path neither
 is faster, because neither is the bottleneck.
 
 # v4.0 research: GPU vs ANE per workload
 
-Benchmarked rather than assumed. ANE measured through Core ML at TinyTitan's exact
+Benchmarked rather than assumed. ANE measured through Core ML at emone's exact
 shapes with 4-bit palettised weights, so bytes-moved matches what the GPU reads.
 Per-op cost is the *marginal* cost from a slope (N and 2N repetitions of the op in
 one graph), which removes Core ML's ~1 ms fixed invocation overhead. GPU figures
-are TinyTitan's own `TINYTITAN_KERNEL_STATS` roles, divided by 40 layers.
+are emone's own `EMONE_KERNEL_STATS` roles, divided by 40 layers.
 
 ## ANE efficiency collapses with tensor size
 
@@ -878,7 +878,7 @@ worst at 11.6 GB/s -- a 5.7x efficiency gap against `qkv_proj` for the same clas
 of operation, and note it is worse than `expert_gate` despite identical byte count,
 so the narrow 512-wide input hurts as much as the small size.
 
-**TinyTitan's MoE is built entirely from 0.5 MiB tensors.** That is precisely the
+**emone's MoE is built entirely from 0.5 MiB tensors.** That is precisely the
 regime where the ANE is weakest.
 
 ## Where each unit wins
@@ -927,7 +927,7 @@ packing being padded. On a 24 GiB machine 6-bit also does not fit, measuring
 
 Everything above concerns decode. Prefill is a different machine.
 
-TinyTitan prefill throughput against chunk width, 3752-token prompt, 4-bit, 128 slots:
+emone prefill throughput against chunk width, 3752-token prompt, 4-bit, 128 slots:
 
 | chunk | prefill | tok/s | ms/token |
 | ---: | ---: | ---: | ---: |
@@ -954,7 +954,7 @@ is roughly **400-500 GFLOP/s -- about 13% of the M3 GPU's peak.**
 
 ### ANE at prefill widths
 
-Marginal per-op cost, 4-bit palettised, TinyTitan's real shapes, with a nonlinearity
+Marginal per-op cost, 4-bit palettised, emone's real shapes, with a nonlinearity
 between repetitions so `sum(W_i x)` cannot be folded to `(sum W_i) x`:
 
 | shape | width 1 | width 256 | width 1024 |
@@ -964,7 +964,7 @@ between repetitions so `sum(W_i x)` cannot be folded to `(sum W_i) x`:
 | expert_down 512->2048 | 34 | 7845 | **8223** |
 
 The ANE goes from useless at width 1 (34-247 GFLOP/s) to **8-17 TFLOP/s** at
-prefill widths -- a 100x swing driven entirely by weight reuse. Against TinyTitan's
+prefill widths -- a 100x swing driven entirely by weight reuse. Against emone's
 ~400-500 GFLOP/s GPU prefill, the dense-matmul portion is 20-30x faster on ANE.
 
 Treat the absolute figures with some caution: 13-16 TFLOP/s brushes the M3 ANE's
@@ -1004,7 +1004,7 @@ Prefill is the one real opportunity, and for a long prompt it is large -- 53 s f
 3752 tokens today.
 
 But **do not start with Core ML.** The GPU is running prefill at 13% of its own
-peak, and the first question is why. If TinyTitan's prefill kernels are simply
+peak, and the first question is why. If emone's prefill kernels are simply
 inefficient at width 4096, fixing them is a contained kernel change that keeps the
 engine, the quantisation choice and the KV cache intact. Adopting Core ML means a
 second model artifact, all 256 experts resident, and handing the ANE-produced KV
@@ -1026,7 +1026,7 @@ prefill 3752 tokens: 52,350 ms total
   active experts/layer: 201.25 of 256
 ```
 
-Two notes on reading this. The `TINYTITAN_KERNEL_STATS` roles are useless here -- their
+Two notes on reading this. The `EMONE_KERNEL_STATS` roles are useless here -- their
 counts are 120 = 40 layers x 3 decode tokens, because prefill runs through
 `executePrefillChunk`, which never calls `recordKernelGPU`. Prefill has no
 occupancy instrumentation at all. And "route readback + GPU" is a coarse label
@@ -1063,7 +1063,7 @@ bottleneck and the change was reverted rather than shipping a knob for nothing.
 
 `recordKernelGPU` now covers the prefill path -- `prefill_attn_router`,
 `prefill_routed_tile`, `prefill_shared_expert`, `prefill_moe_reduce`. Prefill was
-previously invisible to `TINYTITAN_KERNEL_STATS`, which reported only a request's
+previously invisible to `EMONE_KERNEL_STATS`, which reported only a request's
 decode tokens.
 
 Same 3752-token prefill:
@@ -1100,7 +1100,7 @@ small at prefill widths (13.7 MB per layer for attention), the GPU is never idle
 and the memory bus -- the wall that governs decode -- is irrelevant here.
 
 The next question is whether `prefillQMM` exploits `simdgroup_matrix` MMA well. If
-it does not, this is the one place in TinyTitan where the mlx-dspark matmul insight
+it does not, this is the one place in emone where the mlx-dspark matmul insight
 genuinely applies: not at the 2-row decode width where it was first considered, but
 at prefill widths of 1024-4096 where the hardware's matrix units should dominate.
 That is where ANE's measured 8-17 TFLOP/s comes from, and it is a fair target for a
@@ -1112,7 +1112,7 @@ Prefill is the one real opportunity, and for a long prompt it is large -- 53 s f
 3752 tokens today.
 
 But **do not start with Core ML.** The GPU is running prefill at 13% of its own
-peak, and the first question is why. If TinyTitan's prefill kernels are simply
+peak, and the first question is why. If emone's prefill kernels are simply
 inefficient at width 4096, fixing them is a contained kernel change that keeps the
 engine, the quantisation choice and the KV cache intact. Adopting Core ML means a
 second model artifact, all 256 experts resident, and handing the ANE-produced KV
@@ -1134,7 +1134,7 @@ prefill 3752 tokens: 52,350 ms total
   active experts/layer: 201.25 of 256
 ```
 
-Two notes on reading this. The `TINYTITAN_KERNEL_STATS` roles are useless here -- their
+Two notes on reading this. The `EMONE_KERNEL_STATS` roles are useless here -- their
 counts are 120 = 40 layers x 3 decode tokens, because prefill runs through
 `executePrefillChunk`, which never calls `recordKernelGPU`. Prefill has no
 occupancy instrumentation at all. And "route readback + GPU" is a coarse label
@@ -1184,7 +1184,7 @@ before any Core ML work, and before the compute half is investigated.
 
 Three corrections to earlier sections in this document, each from measurement.
 
-**TinyTitan does use the GPU's matrix units.** An earlier note here claimed no MMA
+**emone does use the GPU's matrix units.** An earlier note here claimed no MMA
 because `grep simdgroup_matrix` found nothing. Wrong API name: `tensorops.metal`
 uses Metal 4's `matmul2d<descriptor, execution_simdgroups<4>>` with 64x32x64 tiles,
 via `MPPPrefillInt4QMM`.
@@ -1253,7 +1253,7 @@ So during prefill the GPU runs at its **maximum** DVFS state, thermals never lea
 Nominal, occupancy is 97.4%, and the achieved rate is still ~600 GFLOP/s.
 
 **That closes the 15%-of-peak question. Nothing is throttling, waiting or idle.**
-The nominal ~4 TFLOP/s figure is fp32 FMA throughput; TinyTitan's kernels unpack a
+The nominal ~4 TFLOP/s figure is fp32 FMA throughput; emone's kernels unpack a
 nibble and apply a per-group scale and bias for *every* weight, several ALU ops on
 top of the two the multiply-accumulate needs. At max clocks with the GPU saturated,
 ~600 GFLOP/s of useful matmul is what that costs.
@@ -1269,12 +1269,12 @@ hardware.
 The precondition set earlier -- "do not start with Core ML until the counters
 explain the 15%" -- has now been met, and the answer favours Core ML. The ANE
 reaches 13 TFLOP/s on `qkv 2048->9216` at width 1024 precisely because it
-decompresses low-bit weights in hardware and never pays TinyTitan's dequant ALU cost.
+decompresses low-bit weights in hardware and never pays emone's dequant ALU cost.
 That is an architectural advantage, not a tuning difference, and it is the only
 measured path to faster prefill.
 
 For a 3752-token prompt prefill is 53 s today. That is the largest single
-user-visible cost anywhere in TinyTitan, and it is the one place where the three-unit
+user-visible cost anywhere in emone, and it is the one place where the three-unit
 research produced a real opportunity rather than negative knowledge.
 
 What a Core ML prefill path still has to solve, unchanged: all 256 experts resident

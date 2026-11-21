@@ -5,7 +5,7 @@
 choice** (`<id>@cpu` / `<id>@gpu`, alongside the bare id, which is the GPU
 default). All six installs produce the numpy reference's own three
 continuations; both golden baselines are byte-identical; and the opt-in
-equivalence test (`TINYTITAN_DENSE_GPU_EQUIV=1`) checks the GPU against the oracle's
+equivalence test (`EMONE_DENSE_GPU_EQUIV=1`) checks the GPU against the oracle's
 continuations with teeth -- reverting the width fix makes it emit garbage. What
 follows is the design as written before the work, kept because it is the record
 of what the port had to solve; the checklist says what landed, and the last
@@ -115,7 +115,7 @@ the routed half conditional.
 
 A new family is trusted here by **numbers against a reference**, not by a
 smoke test. The reference already exists: the CPU engine, which the opt-in
-dense equivalence gate and `TinyTitanBench cpu35` both check against the numpy
+dense equivalence gate and `EmoneBench cpu35` both check against the numpy
 oracle.
 
 1. **Logit equivalence, GPU vs CPU, on the real install**: the same prompt
@@ -124,7 +124,7 @@ oracle.
    snapshot-vs-install. This is the step that decides whether the port is
    correct, and it is written before the refusal is lifted.
 2. **The three oracle continuations** through the GPU path
-   (`TinyTitanBench cpu35`'s checks, or their GPU equivalent): "Once upon a time",
+   (`EmoneBench cpu35`'s checks, or their GPU equivalent): "Once upon a time",
    "The capital of France is Paris", "… lazy dog" — greedy, fixed seed.
 3. If the numbers match, and only then: the refusal is removed, the catalog
    lists both engines, and the launcher's engine question becomes real.
@@ -204,7 +204,7 @@ install and the loader:
       FFN 12288). The dense family must take its `ArchConfig` from the
       manifest's `arch` block (which carries every field, GDN widths included),
       at the three call sites that currently refuse it
-      (`TinyTitanCLI/Run.swift:131`, `ServerInference.swift:647`, and the two app
+      (`EmoneCLI/Run.swift:131`, `ServerInference.swift:647`, and the two app
       probes, which do not offer dense models and can keep their behaviour).
       Until this lands, `Model.load` is not reached for a dense install and the
       S1a validation is not yet exercised by a load — which is why S1a is

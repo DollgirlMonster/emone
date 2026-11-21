@@ -3,11 +3,11 @@
 > **Superseded in part, 2026-09-22.** The opt-in switches this document records
 > are no longer in the engine. Each was measured on the current build and turned
 > out a wash or a loss, so all of them were deleted rather than left as knobs:
-> `TINYTITAN_EXPERT_CACHE_POLICY` (lru, aging-lfu, decayed),
-> `TINYTITAN_CACHE_DECAY_HALFLIFE`, `TINYTITAN_EXPERT_CACHE_LAYOUT` (the pooled
-> layout), `TINYTITAN_EARLY_HITS` (with the pooled phase-1 kernel),
-> `TINYTITAN_KEEP_WIRED`, `TINYTITAN_PARALLEL_IO`, `TINYTITAN_PREFETCH_MIN_MARGIN`
-> and `TINYTITAN_PREFETCH_IO_TIER`. What survives from it is the *default* each
+> `EMONE_EXPERT_CACHE_POLICY` (lru, aging-lfu, decayed),
+> `EMONE_CACHE_DECAY_HALFLIFE`, `EMONE_EXPERT_CACHE_LAYOUT` (the pooled
+> layout), `EMONE_EARLY_HITS` (with the pooled phase-1 kernel),
+> `EMONE_KEEP_WIRED`, `EMONE_PARALLEL_IO`, `EMONE_PREFETCH_MIN_MARGIN`
+> and `EMONE_PREFETCH_IO_TIER`. What survives from it is the *default* each
 > experiment confirmed: LFU, per-slot buffers, no early hits, the cache wired per
 > the profile row, parallel fills, rank-order prefetch with no margin gate, and
 > the default disk tier.
@@ -115,7 +115,7 @@ it is 98 ms/token and 29% of decode time.
 
 What was fixed: the per-layer `ProcessInfo.environment` read in the pin
 path (the env-reads regression pattern, ~1.5 ms/token) is a static, the
-48-layer walk returns early once complete, and `TINYTITAN_KEEP_WIRED=1` now
+48-layer walk returns early once complete, and `EMONE_KEEP_WIRED=1` now
 wires each layer as it opens instead of at model load before any layer
 exists. Measured at 512 tokens, kept wired vs shipped: 5.75 / 5.52 vs 5.72
 / 5.88, a wash on throughput; prefill was not slower with the cache held
@@ -166,7 +166,7 @@ weighted trace:
 | margin >= 0.02, cap 4 | 0.64 | 0.59 | 0.37 | 35 |
 | margin >= 0.03, cap 4 | 0.44 | 0.67 | 0.30 | 20 |
 
-Implemented behind `TINYTITAN_PREFETCH_MIN_MARGIN` (default 0 = shipped).
+Implemented behind `EMONE_PREFETCH_MIN_MARGIN` (default 0 = shipped).
 Files: `RealForwardRunner+Decode.swift` (prefetch site, weights readback),
 `RealForwardRunner.swift` (static). Correctness risk: none to output; the
 ring only changes which speculative reads it issues. Expected upside: the
@@ -191,7 +191,7 @@ LFU is best on a short prompt and worst on a long one, because prefill's
 use counts outlive their relevance. A decayed count is within a point on
 the short prompt and 5.7 points better on the long one, which is the
 agentic case. Implemented as `ExpertCachePolicy.decayed` behind
-`TINYTITAN_EXPERT_CACHE_POLICY` (with `aging-lfu` now selectable too). Files:
+`EMONE_EXPERT_CACHE_POLICY` (with `aging-lfu` now selectable too). Files:
 `PreadExpertStreamer.swift` (scoring, eviction), `RuntimeConfiguration.swift`
 (override). Correctness risk: none to output; eviction order only. Expected
 upside on a long prompt: ~28 fewer misses/token, ~20 ms of SSD time. The
@@ -289,8 +289,8 @@ path; it does not reproduce today.
 | keep cache wired through prefill (profile row, Qwen 3.8) | first token +1.6-4.7 s | 0 | TTFT; decode wash (5.75 / 5.52 vs 5.72 / 5.88) | golden identical |
 | prefetch ring: token-boundary reclaim (bug fix) | ring clogged | ring works | n/a alone | golden identical |
 | prefetch off on every profile row | clogged ring (~off) | off | 0 vs measured state; +19-24% vs the repaired ring on | golden identical |
-| probe-margin gate (opt-in, `TINYTITAN_PREFETCH_MIN_MARGIN`) | | | loses at 0.03 and 0.06 | off by default |
-| decayed cache policy (opt-in, `TINYTITAN_EXPERT_CACHE_POLICY=decayed`) | 81.3% hit, 5.62 / 5.85 | 80.0%, 5.55 / 5.60 (short prompt) | -4% short; long prompt in section 10 | off by default |
+| probe-margin gate (opt-in, `EMONE_PREFETCH_MIN_MARGIN`) | | | loses at 0.03 and 0.06 | off by default |
+| decayed cache policy (opt-in, `EMONE_EXPERT_CACHE_POLICY=decayed`) | 81.3% hit, 5.62 / 5.85 | 80.0%, 5.55 / 5.60 (short prompt) | -4% short; long prompt in section 10 | off by default |
 | zero-copy prefetch adoption | memcpy 0.06 ms x ~1.5/token | not built | <0.1% | closed |
 | n-gram gather parallel | 1.55 ms/token | 0.30 possible | ~+0.7% | not built |
 | MTP | 4.73 | 1.94 | -59% | closed |
@@ -322,7 +322,7 @@ in both rounds. Not shipped as the default: the sign depends on the
 prompt. A longer half-life (32-64 replayed at 0.84 short / 0.73-0.75
 long) is the tuning to try; a policy that switches from LFU to decayed
 once decode has run for a few dozen tokens is the structural version.
-Opt-in: `TINYTITAN_EXPERT_CACHE_POLICY=decayed`, `TINYTITAN_CACHE_DECAY_HALFLIFE`.
+Opt-in: `EMONE_EXPERT_CACHE_POLICY=decayed`, `EMONE_CACHE_DECAY_HALFLIFE`.
 
 ## 11. Retraction: multi-variable chain arms were the shipped configuration
 
@@ -374,7 +374,7 @@ The story harness then disagreed: early hits on 5.07 / 5.43, off 5.34 /
 Two protocols, opposite signs, four runs each -- not enough to ship a
 default on, and the same shape as the utility-tier result retracted in
 section 11. `earlyExpertHits` therefore ships **off** on every row and is
-opt-in as `TINYTITAN_EARLY_HITS=1`, which also selects the GPU residency
+opt-in as `EMONE_EARLY_HITS=1`, which also selects the GPU residency
 classifier and the pooled cache layout (both underlying switches still
 override individually). A five-pair interleaved run is in section 13.
 
@@ -407,7 +407,7 @@ behind. Removing the CPU round trip in front of the hits moves work
 earlier in an interval that is still bounded by the SSD, which is the
 same wall every other lever hit.
 
-The code ships **off by default** on every row: `TINYTITAN_EARLY_HITS=1`
+The code ships **off by default** on every row: `EMONE_EARLY_HITS=1`
 selects it (and with it the GPU residency classifier and the pooled cache
 layout), output byte-identical either way. Kept rather than reverted
 because it is the only implementation of "the GPU starts resident-expert

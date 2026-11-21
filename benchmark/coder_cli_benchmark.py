@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible Ornith coding-client and TinyTitan feature benchmark rounds.
+"""Reproducible Ornith coding-client and Emone feature benchmark rounds.
 
 The default ``coder`` round runs Codex, Qwen Code, OpenCode, and (through the
 adjacent loopback adapter) Claude Code against Ornith 8-bit with fixed short,
@@ -30,7 +30,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from tinytitan_profile import (
+from emone_profile import (
     DEFAULT_CONTEXT_TOKENS,
     DEFAULT_KV_BITS,
     DEFAULT_THINKING_MODE,
@@ -41,9 +41,9 @@ from tinytitan_profile import (
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SERVER = ROOT / ".build/release/TinyTitanServer"
+SERVER = ROOT / ".build/release/EmoneServer"
 ADAPTER = ROOT / "benchmark/claude_openai_adapter.py"
-CLIENTS_LIBRARY = ROOT / "tools/tinytitan_models.sh"
+CLIENTS_LIBRARY = ROOT / "tools/emone_models.sh"
 MODEL_PATHS = {
     "ornith": {
         4: ROOT / "models/ornith-1.5_35B_A3B_4Bit",
@@ -84,7 +84,7 @@ MTP_PATHS = {
     "ornith": ROOT / "models/ornith-1.5_35B_A3B_MTP_4Bit",
 }
 PROCESS_PATTERN = (
-    "TinyTitanServer|TinyTitanCLI|TinyTitanPackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
+    "EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
 )
 DEFAULT_TEMPERATURE = 0.6
 DEFAULT_TOP_P = 0.95
@@ -95,7 +95,7 @@ DEFAULT_PRESENCE_PENALTY = 0.0
 def client_catalogue() -> list[dict[str, Any]]:
     """The client list the launcher uses, read from its one definition.
 
-    `tools/tinytitan_models.sh` carries `TINYTITAN_CLIENTS` as `id|label|kind|binaries`
+    `tools/emone_models.sh` carries `EMONE_CLIENTS` as `id|label|kind|binaries`
     entries. The launcher builds its menu, its labels and its `--client`
     validation from that array; this harness builds its `--clients` choices and
     its binary search from the same array, so the two cannot list different
@@ -106,9 +106,9 @@ def client_catalogue() -> list[dict[str, Any]]:
     launcher configures those, and only their wiring can be checked here.
     """
     text = CLIENTS_LIBRARY.read_text()
-    block = re.search(r"TINYTITAN_CLIENTS=\((.*?)\n\)", text, re.S)
+    block = re.search(r"EMONE_CLIENTS=\((.*?)\n\)", text, re.S)
     if block is None:
-        raise RuntimeError(f"no TINYTITAN_CLIENTS array in {CLIENTS_LIBRARY}")
+        raise RuntimeError(f"no EMONE_CLIENTS array in {CLIENTS_LIBRARY}")
     clients: list[dict[str, Any]] = []
     for match in re.finditer(r'"([^"]+)"', block.group(1)):
         fields = match.group(1).split("|")
@@ -121,7 +121,7 @@ def client_catalogue() -> list[dict[str, Any]]:
             {"id": client_id, "label": label, "kind": kind, "binaries": binaries.split()}
         )
     if not clients:
-        raise RuntimeError("TINYTITAN_CLIENTS is empty")
+        raise RuntimeError("EMONE_CLIENTS is empty")
     return clients
 
 
@@ -226,12 +226,12 @@ def fixed_prompts() -> dict[str, str]:
             "Keep the answer within 60 words."
         ),
         "medium": (
-            f"{instruction}\n\nUsing the README below, summarize TinyTitan's purpose, "
+            f"{instruction}\n\nUsing the README below, summarize Emone's purpose, "
             "core features, and basic usage in at most 80 words.\n\n"
             f"--- README.md ---\n{readme}\n--- end README.md ---"
         ),
         "long": (
-            f"{instruction}\n\nUsing the repository documents below, explain TinyTitan's "
+            f"{instruction}\n\nUsing the repository documents below, explain Emone's "
             "bounded expert-streaming architecture, its safety constraints, and the correct "
             "model install/run workflow in at most 80 words.\n\n"
             f"--- README.md ---\n{readme}\n--- end README.md ---\n\n"
@@ -415,7 +415,7 @@ def command_version(binary: str) -> str:
 def client_binaries() -> dict[str, str | None]:
     """Every client in the shared catalogue, with the first binary on PATH.
 
-    The order and the binary names come from `TINYTITAN_CLIENTS`, which is also what
+    The order and the binary names come from `EMONE_CLIENTS`, which is also what
     the launcher resolves, so a client installed for one is found by both.
     """
     found: dict[str, str | None] = {}
@@ -436,11 +436,11 @@ def prepare_client_config(
     home.mkdir(parents=True, exist_ok=True)
     if client == "codex":
         # The timeout keys belong to the top-level table, so they go *before*
-        # `[model_providers.tinytitan]`: after a table header TOML scopes them to
+        # `[model_providers.emone]`: after a table header TOML scopes them to
         # that table, where they would be ignored (and codex reports unknown
         # fields only as warnings).
         (home / "config.toml").write_text(
-            f'model = "{model}"\nmodel_provider = "tinytitan"\n'
+            f'model = "{model}"\nmodel_provider = "emone"\n'
             # Codex gives up on a stream that has produced nothing for five
             # minutes and retries -- and a retry is a *cold* prefill again,
             # because a request that never finished publishes no prompt-cache
@@ -453,7 +453,7 @@ def prepare_client_config(
             "stream_idle_timeout_ms = 3600000\n"
             "request_max_retries = 0\n"
             "stream_max_retries = 0\n\n"
-            '[model_providers.tinytitan]\nname = "TinyTitan"\n'
+            '[model_providers.emone]\nname = "Emone"\n'
             f'base_url = "{base_url}"\nwire_api = "responses"\n'
         )
     elif client == "qwen":
@@ -464,9 +464,9 @@ def prepare_client_config(
                     "openai": [
                         {
                             "id": model,
-                            "name": f"[TinyTitan] {model}",
+                            "name": f"[Emone] {model}",
                             "baseUrl": base_url,
-                            "description": "TinyTitan local benchmark",
+                            "description": "Emone local benchmark",
                             "envKey": "OPENAI_API_KEY",
                         }
                     ]
@@ -485,12 +485,12 @@ def prepare_client_config(
             home / "opencode" / "opencode.json",
             {
                 "$schema": "https://opencode.ai/config.json",
-                "model": f"tinytitan/{model}",
-                "small_model": f"tinytitan/{model}",
+                "model": f"emone/{model}",
+                "small_model": f"emone/{model}",
                 "provider": {
-                    "tinytitan": {
+                    "emone": {
                         "npm": "@ai-sdk/openai-compatible",
-                        "name": "TinyTitan",
+                        "name": "Emone",
                         "options": {
                             "baseURL": base_url,
                             "headers": {"Authorization": "Bearer local"},
@@ -592,7 +592,7 @@ def run_client(
             "--dir",
             str(ROOT),
             "-m",
-            f"tinytitan/{model}",
+            f"emone/{model}",
             prompt,
         ]
     elif client == "claude":
@@ -698,7 +698,7 @@ def quality_check(prompt_name: str, answer: str, exit_code: int) -> dict[str, An
             failures.append("concurrency use case missing")
     elif prompt_name == "medium":
         for label, terms in {
-            "project": ("tinytitan",),
+            "project": ("emone",),
             "model": ("ornith",),
             "streaming": ("ssd", "expert"),
             "quantization": ("4-bit", "8-bit"),

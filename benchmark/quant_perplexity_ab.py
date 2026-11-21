@@ -36,13 +36,13 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BENCH = ROOT / ".build/release/TinyTitanBench"
+BENCH = ROOT / ".build/release/EmoneBench"
 # Natural prose, not part of any golden, and cheap to read. Order is fixed so
 # the token hash is reproducible.
 CORPUS = [
     "docs/side-engine-tasks.md",
     "docs/agent-memory.md",
-    "docs/handover-tinytitan.md",
+    "docs/handover-emone.md",
     ".qwen/wiki/Engineering-Notes.md",
 ]
 
@@ -112,7 +112,7 @@ def main() -> int:
     args = ap.parse_args()
     if not BENCH.exists():
         print(
-            f"build it first: swift build -c release --product TinyTitanBench\n  missing {BENCH}",
+            f"build it first: swift build -c release --product EmoneBench\n  missing {BENCH}",
             file=sys.stderr,
         )
         return 2

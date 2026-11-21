@@ -7,7 +7,7 @@ that put the hit rate at 65% for 64 slots and 78% at 128. The runtime's own
 counters tell a different story -- 81.3% at 96 slots on a short prompt -- so the
 decision needs the runtime's numbers, not the trace's.
 
-`TinyTitanCLI --expert-cache-slots N` sets the count directly (bypassing the
+`EmoneCLI --expert-cache-slots N` sets the count directly (bypassing the
 half-of-RAM affordability cap in `decodeTuning`), and the CLI prints
 `[decode expert io] hits H misses M (X% hit) B GiB = MiB/token`. Memory comes
 from `/usr/bin/time -l` (maximum resident set size) wrapped around the process.
@@ -34,7 +34,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CLI = ROOT / ".build/release/TinyTitanCLI"
+CLI = ROOT / ".build/release/EmoneCLI"
 RESULTS = ROOT / "benchmark/expert-cache"
 
 DEFAULT_SOURCE = "docs/qwen38-flash-next-port.md"
@@ -69,11 +69,11 @@ def swap_used_gib() -> float:
 
 def run_once(model: pathlib.Path, messages: pathlib.Path, slots: int, max_new: int) -> dict:
     before = swap_used_gib()
-    # `TINYTITAN_DECODE_IO_TRACE` is what makes the runner take a statistics
+    # `EMONE_DECODE_IO_TRACE` is what makes the runner take a statistics
     # baseline; without it `decodeExpertIO()` returns nil and the CLI prints no
     # `[decode expert io]` line at all.
     env = dict(os.environ)
-    env["TINYTITAN_DECODE_IO_TRACE"] = "1"
+    env["EMONE_DECODE_IO_TRACE"] = "1"
     proc = subprocess.run(
         [
             "/usr/bin/time",
@@ -156,7 +156,7 @@ def main() -> int:
     if not (model / "verified-install.json").exists():
         raise SystemExit(f"not an installed model: {model}")
     busy = subprocess.run(
-        ["pgrep", "-fl", "TinyTitanCLI|TinyTitanServer"], capture_output=True, text=True
+        ["pgrep", "-fl", "EmoneCLI|EmoneServer"], capture_output=True, text=True
     ).stdout.strip()
     if busy:
         raise SystemExit(f"a model process is already running:\n{busy}")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""9ul.5: replay a TINYTITAN_PREFETCH_TRACE through per-layer expert caches.
+"""9ul.5: replay a EMONE_PREFETCH_TRACE through per-layer expert caches.
 
 Policies: the shipped LFU (cumulative per-layer use count, ties by least
 recent), LRU, and Belady's offline optimum (evict the resident expert whose

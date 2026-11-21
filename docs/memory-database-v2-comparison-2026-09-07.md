@@ -114,12 +114,12 @@ cost is a prompt-size problem with a known fix.
 ## Reproduce
 
 ```bash
-git checkout memory-v2 && swift build -c release --product TinyTitanServer
+git checkout memory-v2 && swift build -c release --product EmoneServer
 benchmark/memval_run.sh smoke
 benchmark/memval_run.sh book      # 3 runs x 4 arms, ~4 h
 benchmark/memval_run.sh pong      # 3 runs x 4 arms, ~2 h
-TINYTITAN_MEMVAL_RESULTS=.build/benchmark-logs/memory-book python3 benchmark/memory_book.py report
+EMONE_MEMVAL_RESULTS=.build/benchmark-logs/memory-book python3 benchmark/memory_book.py report
 ```
 
 Results for both versions are kept under `.build/benchmark-logs/memory-*-v1`
-and `-v2`; point `TINYTITAN_MEMVAL_RESULTS` at either.
+and `-v2`; point `EMONE_MEMVAL_RESULTS` at either.

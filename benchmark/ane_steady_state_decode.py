@@ -44,7 +44,7 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CLI = ROOT / ".build/release/TinyTitanCLI"
+CLI = ROOT / ".build/release/EmoneCLI"
 RESULTS = ROOT / "benchmark/ane-prefill"
 
 # The same pinned body the qualification harness uses, so a number here is
@@ -92,9 +92,9 @@ def run_cli(
 ) -> dict:
     """One arm at one length: a fresh process, so each run pays its own transient."""
     env = dict(os.environ)
-    env["TINYTITAN_PREFILL_ANE"] = "on" if ane else "off"
+    env["EMONE_PREFILL_ANE"] = "on" if ane else "off"
     if wire_trace:
-        env["TINYTITAN_WIRE_TRACE"] = "1"
+        env["EMONE_WIRE_TRACE"] = "1"
     proc = subprocess.run(
         [
             str(CLI),
@@ -191,7 +191,7 @@ def main() -> int:
     parser.add_argument(
         "--wire-trace",
         action="store_true",
-        help="TINYTITAN_WIRE_TRACE=1, to record the pin/unpin calls",
+        help="EMONE_WIRE_TRACE=1, to record the pin/unpin calls",
     )
     parser.add_argument("--label", default="tt007")
     parser.add_argument(
@@ -205,7 +205,7 @@ def main() -> int:
     if not (model / "ane_prefill").is_dir():
         raise SystemExit(f"no ANE sidecar under {model}")
     busy = subprocess.run(
-        ["pgrep", "-fl", "TinyTitanCLI|TinyTitanServer|mlx_lm|mlx-lm"],
+        ["pgrep", "-fl", "EmoneCLI|EmoneServer|mlx_lm|mlx-lm"],
         capture_output=True,
         text=True,
     ).stdout.strip()

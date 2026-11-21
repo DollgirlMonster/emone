@@ -87,7 +87,7 @@ class StagingPathTests(unittest.TestCase):
         self.assertIn('ROOT="$(cd "$(dirname "$0")/.." && pwd)"', self.script)
 
     def test_the_work_root_defaults_under_the_install_root(self) -> None:
-        self.assertIn('WORK="${TINYTITAN_WORK_DIR:-$ROOT/.build}"', self.script)
+        self.assertIn('WORK="${EMONE_WORK_DIR:-$ROOT/.build}"', self.script)
 
     def test_no_staging_path_is_relative_to_the_working_directory(self) -> None:
         # Comments may name `.build/release` (the repack binary default) or the
@@ -134,7 +134,7 @@ class DiskSpaceAndCleanupTests(unittest.TestCase):
         self.bin = self.root / "bin"
         for path in (self.work, self.models, self.bin):
             path.mkdir(parents=True)
-        repack = self.bin / "TinyTitanRepack"
+        repack = self.bin / "EmoneRepack"
         repack.write_text('#!/bin/sh\necho "FAKE-REPACK $*"\n')
         repack.chmod(0o755)
         self.df_dir = self.root / "dfbin"
@@ -151,10 +151,10 @@ class DiskSpaceAndCleanupTests(unittest.TestCase):
     def run_tool(self, *args: str, available_gb: int | None = None):
         env = dict(
             os.environ,
-            TINYTITAN_WORK_DIR=str(self.work),
-            TINYTITAN_MODELS_DIR=str(self.models),
-            TINYTITAN_BIN_DIR=str(self.bin),
-            TINYTITAN_PYTHON="/usr/bin/true",
+            EMONE_WORK_DIR=str(self.work),
+            EMONE_MODELS_DIR=str(self.models),
+            EMONE_BIN_DIR=str(self.bin),
+            EMONE_PYTHON="/usr/bin/true",
         )
         if available_gb is not None:
             self.stub_df(available_gb)
@@ -178,7 +178,7 @@ class DiskSpaceAndCleanupTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("but about", output)
         self.assertIn("Not starting ornith15", output)
-        self.assertIn("TINYTITAN_WORK_DIR", output)
+        self.assertIn("EMONE_WORK_DIR", output)
         self.assertNotIn("FAKE-REPACK", output)
         self.assertFalse((self.models / self.ORNITH_4).exists())
 
@@ -192,11 +192,11 @@ class DiskSpaceAndCleanupTests(unittest.TestCase):
     def test_the_precheck_can_be_skipped_explicitly(self) -> None:
         env = dict(
             os.environ,
-            TINYTITAN_WORK_DIR=str(self.work),
-            TINYTITAN_MODELS_DIR=str(self.models),
-            TINYTITAN_BIN_DIR=str(self.bin),
-            TINYTITAN_PYTHON="/usr/bin/true",
-            TINYTITAN_SKIP_DISK_CHECK="1",
+            EMONE_WORK_DIR=str(self.work),
+            EMONE_MODELS_DIR=str(self.models),
+            EMONE_BIN_DIR=str(self.bin),
+            EMONE_PYTHON="/usr/bin/true",
+            EMONE_SKIP_DISK_CHECK="1",
         )
         self.stub_df(3)
         env["PATH"] = f"{self.df_dir}:{env['PATH']}"

@@ -60,7 +60,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-BINARY = ROOT / ".build/release/TinyTitanServer"
+BINARY = ROOT / ".build/release/EmoneServer"
 # The two dense installs both engines serve, small enough to run this quickly.
 DEFAULT_MODELS = ["models/qwen3.5_2B_4Bit", "models/qwen3.5_4B_4Bit"]
 

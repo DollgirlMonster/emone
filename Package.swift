@@ -16,7 +16,7 @@ import PackageDescription
 /// this array (24 of 24 at the time of writing), so the flag cannot be dodged
 /// by a new target either. The tree builds and tests clean with it
 /// (`swift build --build-tests`, `swift test --no-parallel`).
-let tinytitanLanguageStandard: [SwiftSetting] = [
+let emoneLanguageStandard: [SwiftSetting] = [
     .enableUpcomingFeature("InferIsolatedConformances"),
     .enableUpcomingFeature("ImmutableWeakCaptures"),
     .enableUpcomingFeature("MemberImportVisibility"),
@@ -24,27 +24,27 @@ let tinytitanLanguageStandard: [SwiftSetting] = [
 ]
 
 let package = Package(
-    name: "TinyTitan",
+    name: "Emone",
     platforms: [
         .macOS(.v26)
     ],
     products: [
-        .library(name: "TinyTitan", targets: ["TinyTitan"]),
-        .library(name: "TinyTitanFormat", targets: ["TinyTitanFormat"]),
+        .library(name: "Emone", targets: ["Emone"]),
+        .library(name: "EmoneFormat", targets: ["EmoneFormat"]),
         .library(name: "ContinuityCore", targets: ["ContinuityCore"]),
-        .executable(name: "TinyTitanRepack", targets: ["TinyTitanRepack"]),
-        .executable(name: "TinyTitanCLI", targets: ["TinyTitanCLI"]),
-        .executable(name: "TinyTitanServer", targets: ["TinyTitanServer"]),
-        .executable(name: "TinyTitanBench", targets: ["TinyTitanBench"]),
+        .executable(name: "EmoneRepack", targets: ["EmoneRepack"]),
+        .executable(name: "EmoneCLI", targets: ["EmoneCLI"]),
+        .executable(name: "EmoneServer", targets: ["EmoneServer"]),
+        .executable(name: "EmoneBench", targets: ["EmoneBench"]),
         .executable(name: "ContinuityDemo", targets: ["ContinuityDemo"]),
-        .executable(name: "tinytitan-memory", targets: ["TinyTitanMemoryTool"]),
-        // TinyTitan DSH LAN Manager: the fleet manager for
+        .executable(name: "emone-memory", targets: ["EmoneMemoryTool"]),
+        // Emone DSH LAN Manager: the fleet manager for
         // `plugins/dsh-lan-manager`. The command is `ttlanmanager` while the
-        // targets keep the long name, as `tinytitan-memory` sits on
-        // TinyTitanMemoryTool. Deliberately *not* in `release.sh`'s PRODUCTS: it
+        // targets keep the long name, as `emone-memory` sits on
+        // EmoneMemoryTool. Deliberately *not* in `release.sh`'s PRODUCTS: it
         // drives a group of DeepSeek Harness instances, so it is an operator tool
         // and not part of the engine users install.
-        .executable(name: "ttlanmanager", targets: ["TinyTitanFleet"]),
+        .executable(name: "ttlanmanager", targets: ["EmoneFleet"]),
     ],
     dependencies: [
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
@@ -52,9 +52,9 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "TinyTitanFormat",
-            path: "sources/TinyTitanFormat",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneFormat",
+            path: "sources/EmoneFormat",
+            swiftSettings: emoneLanguageStandard
         ),
         // C99 + NEON for the inner loops where Swift's vector types do not
         // lower well. Kept deliberately small: one file, one entry point,
@@ -66,7 +66,7 @@ let package = Package(
         // the CPU int8 GEMV is 1.24x -- 2.06 against 1.66 ms per pass, min of
         // six interleaved rounds an arm, checksum identical
         // (390266.62). `.unsafeFlags` is the only way to set it, which is why
-        // this package cannot be consumed as a dependency; TinyTitan is an
+        // this package cannot be consumed as a dependency; Emone is an
         // application package and nothing depends on it. Raising Swift to
         // `-O3` was tried and rejected for the same constraint, having measured
         // the same as the release default (0.675 vs 0.680 ms).
@@ -80,8 +80,8 @@ let package = Package(
         // (AUDIT/tool-coverage.md, proof L8), and `-pedantic-errors` rejects the
         // implicit declarations and GNU extensions C99 does not have.
         .target(
-            name: "TinyTitanKernelsC",
-            path: "sources/TinyTitanKernelsC",
+            name: "EmoneKernelsC",
+            path: "sources/EmoneKernelsC",
             cSettings: [
                 .unsafeFlags([
                     "-O2",
@@ -93,55 +93,55 @@ let package = Package(
                     "-Werror",
                 ])
             ],
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
         .target(
-            name: "TinyTitan",
+            name: "Emone",
             dependencies: [
-                "TinyTitanFormat",
-                "TinyTitanKernelsC",
+                "EmoneFormat",
+                "EmoneKernelsC",
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
-            path: "sources/TinyTitan",
+            path: "sources/Emone",
             resources: [
                 .copy("Metal")
             ],
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
         .target(
-            name: "TinyTitanRepackCore",
-            dependencies: ["TinyTitanFormat"],
-            path: "sources/TinyTitanRepack/Core",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneRepackCore",
+            dependencies: ["EmoneFormat"],
+            path: "sources/EmoneRepack/Core",
+            swiftSettings: emoneLanguageStandard
         ),
         .executableTarget(
-            name: "TinyTitanRepack",
-            dependencies: ["TinyTitanRepackCore"],
-            path: "sources/TinyTitanRepack/Command",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneRepack",
+            dependencies: ["EmoneRepackCore"],
+            path: "sources/EmoneRepack/Command",
+            swiftSettings: emoneLanguageStandard
         ),
         // The live expert-grid view: the renderer, the terminal handling and the
         // trace model, shared by the CLI's `--live-trace` and the server's. A
         // library of its own so neither front end depends on the other; it
         // links the runtime only for the trace ring and the runner hook.
         .target(
-            name: "TinyTitanLiveTrace",
-            dependencies: ["TinyTitan"],
-            path: "sources/TinyTitanLiveTrace",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneLiveTrace",
+            dependencies: ["Emone"],
+            path: "sources/EmoneLiveTrace",
+            swiftSettings: emoneLanguageStandard
         ),
         .target(
-            name: "TinyTitanCLICore",
-            dependencies: ["TinyTitan", "TinyTitanLiveTrace"],
-            path: "sources/TinyTitanCLI",
+            name: "EmoneCLICore",
+            dependencies: ["Emone", "EmoneLiveTrace"],
+            path: "sources/EmoneCLI",
             exclude: ["Command"],
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
         .executableTarget(
-            name: "TinyTitanCLI",
-            dependencies: ["TinyTitanCLICore"],
-            path: "sources/TinyTitanCLI/Command",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneCLI",
+            dependencies: ["EmoneCLICore"],
+            path: "sources/EmoneCLI/Command",
+            swiftSettings: emoneLanguageStandard
         ),
         // Continuity: sessions, task memory and context assembly, in this
         // process. Depends on nothing at all, not even NIO, so it cannot
@@ -152,10 +152,10 @@ let package = Package(
             // Documentation that lives next to the code it describes. SwiftPM
             // treats any undeclared file under a target path as unhandled and
             // warns on every clean plan; excluding it says so explicitly and
-            // leaves the file where it is. (`sources/TinyTitanCLICore`'s
+            // leaves the file where it is. (`sources/EmoneCLICore`'s
             // `exclude: ["Command"]` is the same mechanism.)
             exclude: ["README.md"],
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
         // Worked examples and a scale check for ContinuityCore. Not part of
         // the server; it exists so the package's claims can be run.
@@ -163,7 +163,7 @@ let package = Package(
             name: "ContinuityDemo",
             dependencies: ["ContinuityCore"],
             path: "sources/ContinuityDemo",
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
         // Agent memory: the model-facing surface (keys, tools, prompt
         // fragment, journal filter) over ContinuityCore. Depends on nothing
@@ -171,128 +171,128 @@ let package = Package(
         // subsystem being able to reach back into inference, and on no
         // networking, so it cannot reach off the machine.
         .target(
-            name: "TinyTitanMemory",
+            name: "EmoneMemory",
             dependencies: ["ContinuityCore"],
-            path: "sources/TinyTitanMemory",
-            swiftSettings: tinytitanLanguageStandard
+            path: "sources/EmoneMemory",
+            swiftSettings: emoneLanguageStandard
         ),
         // See and correct what the server remembers: list, show, delete.
         // Reads take no lock; writes need the workspace.
         .executableTarget(
-            name: "TinyTitanMemoryTool",
-            dependencies: ["TinyTitanMemory", "ContinuityCore"],
-            path: "sources/TinyTitanMemoryTool",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneMemoryTool",
+            dependencies: ["EmoneMemory", "ContinuityCore"],
+            path: "sources/EmoneMemoryTool",
+            swiftSettings: emoneLanguageStandard
         ),
         .target(
-            name: "TinyTitanServerCore",
+            name: "EmoneServerCore",
             dependencies: [
-                "TinyTitan",
-                "TinyTitanLiveTrace",
-                "TinyTitanMemory",
+                "Emone",
+                "EmoneLiveTrace",
+                "EmoneMemory",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
             ],
-            path: "sources/TinyTitanServer/Core",
-            swiftSettings: tinytitanLanguageStandard
+            path: "sources/EmoneServer/Core",
+            swiftSettings: emoneLanguageStandard
         ),
         .executableTarget(
-            name: "TinyTitanServer",
-            dependencies: ["TinyTitanServerCore"],
-            path: "sources/TinyTitanServer/Command",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneServer",
+            dependencies: ["EmoneServerCore"],
+            path: "sources/EmoneServer/Command",
+            swiftSettings: emoneLanguageStandard
         ),
         .executableTarget(
-            name: "TinyTitanBench",
-            dependencies: ["TinyTitan"],
-            path: "sources/TinyTitanBench",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneBench",
+            dependencies: ["Emone"],
+            path: "sources/EmoneBench",
+            swiftSettings: emoneLanguageStandard
         ),
         .target(
-            name: "TinyTitanValidationSupport",
-            dependencies: ["TinyTitan"],
-            path: "sources/TinyTitanValidation/Support",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneValidationSupport",
+            dependencies: ["Emone"],
+            path: "sources/EmoneValidation/Support",
+            swiftSettings: emoneLanguageStandard
         ),
         // The fleet manager: Core is a library so its selection, aggregation and
         // request-building logic is testable without a network or a live fleet;
         // Command is the thin CLI over it.
         .target(
-            name: "TinyTitanFleetCore",
-            path: "sources/TinyTitanFleet/Core",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneFleetCore",
+            path: "sources/EmoneFleet/Core",
+            swiftSettings: emoneLanguageStandard
         ),
         .executableTarget(
-            name: "TinyTitanFleet",
-            dependencies: ["TinyTitanFleetCore"],
-            path: "sources/TinyTitanFleet/Command",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneFleet",
+            dependencies: ["EmoneFleetCore"],
+            path: "sources/EmoneFleet/Command",
+            swiftSettings: emoneLanguageStandard
         ),
         .testTarget(
-            name: "TinyTitanFleetTests",
-            dependencies: ["TinyTitanFleetCore"],
-            path: "tests/TinyTitanFleet",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneFleetTests",
+            dependencies: ["EmoneFleetCore"],
+            path: "tests/EmoneFleet",
+            swiftSettings: emoneLanguageStandard
         ),
         .testTarget(
-            name: "TinyTitanTests",
+            name: "EmoneTests",
             dependencies: [
-                "TinyTitan", "TinyTitanValidationSupport", "TinyTitanRepackCore",
-                "TinyTitanCLICore", "TinyTitanLiveTrace",
+                "Emone", "EmoneValidationSupport", "EmoneRepackCore",
+                "EmoneCLICore", "EmoneLiveTrace",
             ],
-            path: "tests/TinyTitan",
+            path: "tests/Emone",
             resources: [
                 .copy("Tokenization/Fixtures"),
                 .copy("Runtime/qwen38_tensor_names.txt"),
                 .copy("Runtime/ple_golden.json"),
             ],
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
         .testTarget(
-            name: "TinyTitanRepackTests",
-            // `TinyTitanFormat` directly: the manifest and resident-index validation
+            name: "EmoneRepackTests",
+            // `EmoneFormat` directly: the manifest and resident-index validation
             // tests assert on those types rather than on JSON dictionaries.
-            dependencies: ["TinyTitanRepackCore", "TinyTitanFormat"],
-            path: "tests/TinyTitanRepack/Core",
+            dependencies: ["EmoneRepackCore", "EmoneFormat"],
+            path: "tests/EmoneRepack/Core",
             resources: [.copy("Support/qwen38_tensor_names.txt")],
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
         .testTarget(
             name: "ContinuityCoreTests",
             dependencies: ["ContinuityCore"],
             path: "tests/ContinuityCore",
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
         .testTarget(
-            name: "TinyTitanMemoryTests",
-            dependencies: ["TinyTitanMemory", "ContinuityCore"],
-            path: "tests/TinyTitanMemory",
-            swiftSettings: tinytitanLanguageStandard
+            name: "EmoneMemoryTests",
+            dependencies: ["EmoneMemory", "ContinuityCore"],
+            path: "tests/EmoneMemory",
+            swiftSettings: emoneLanguageStandard
         ),
         .testTarget(
-            name: "TinyTitanServerTests",
+            name: "EmoneServerTests",
             dependencies: [
-                "TinyTitanServerCore",
-                "TinyTitanMemory",
+                "EmoneServerCore",
+                "EmoneMemory",
                 // The live-trace view's types, for the server's `--live-trace`
                 // tests that read what it drew.
-                "TinyTitanLiveTrace",
+                "EmoneLiveTrace",
                 // `GenerationDefaults.Sampling`, so the mapper tests can pin
                 // that an omitted field follows the served model's profile
                 // rather than a hardcoded house default.
-                "TinyTitan",
+                "Emone",
                 .product(name: "NIOEmbedded", package: "swift-nio"),
             ],
-            path: "tests/TinyTitanServer",
+            path: "tests/EmoneServer",
             resources: [.copy("Fixtures")],
-            swiftSettings: tinytitanLanguageStandard
+            swiftSettings: emoneLanguageStandard
         ),
     ],
     swiftLanguageModes: [.v6],
     // The C in this package is written to strict C99; declaring it here makes
     // the compiler enforce it instead of documenting an intention. Together
-    // with the TinyTitanKernelsC cSettings below this is the C language
+    // with the EmoneKernelsC cSettings below this is the C language
     // standard in force, and AUDIT/tool-coverage.md proves a violation fails.
     cLanguageStandard: .c99
 )

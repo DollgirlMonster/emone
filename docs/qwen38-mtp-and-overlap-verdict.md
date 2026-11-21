@@ -17,9 +17,9 @@ by measurement. All runs used `--ram-budget 8G`.
 
 ### The project's own gate could not run
 
-`benchmark/tinytitan_mtp_b3_qualification.py` called
+`benchmark/emone_mtp_b3_qualification.py` called
 `ph.one_run(args.quant, mtp, tag)` — three positional arguments, the first a
-model *key* — while `tinytitan_mtp_phases.one_run` takes
+model *key* — while `emone_mtp_phases.one_run` takes
 `(target, sidecar, mtp, tag, ram_budget)`. So the Track B3 gate raised a
 `TypeError` before it could measure anything.
 

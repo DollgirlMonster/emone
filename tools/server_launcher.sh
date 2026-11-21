@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The one TinyTitan launcher: start the server, or start it and open a coding
+# The one Emone launcher: start the server, or start it and open a coding
 # client against it. Interactive by default; every question has a default, so
 # pressing Enter through them launches the recommended setup.
 #
@@ -35,7 +35,7 @@
 # Flags (override the positional form, and work in any order):
 #
 #   --client <c>    server|@CLIENTS@
-#              (the list is filled from TINYTITAN_CLIENTS in tools/tinytitan_models.sh,
+#              (the list is filled from EMONE_CLIENTS in tools/emone_models.sh,
 #              which the coder benchmark reads too)
 #   --model <m>     model key or catalog id
 #   --bits <4|8>    quantization for a model key
@@ -59,7 +59,7 @@
 #   --context <n|native|max> native 262144, or 524288/1048576 with --yarn
 #   --kv <4|8|16>   KV-cache precision (default 8)
 #   --yarn          enable YaRN context scaling
-#   --port <n>      default 8080 (TINYTITAN_PORT overrides)
+#   --port <n>      default 8080 (EMONE_PORT overrides)
 #   --concurrency <n>  generations served at once through one model (default 1:
 #              one at a time). A power of two up to 256 -- 1, 2, 4, 8, 16, ... --
 #              because an agentic workload may want many, and the runtime clamps
@@ -73,9 +73,9 @@
 #              swapping. GPU models only: the CPU engine runs one generation at a
 #              time whatever it is told.
 #   --memory        enable persistent agent memory for this project
-#   --web           after the server is up, open TinyTitan's own DeepSeek
+#   --web           after the server is up, open Emone's own DeepSeek
 #              Harness in the default browser: a local page with a prompt box,
-#              installed under ~/.tinytitan and isolated from any dsh you run
+#              installed under ~/.emone and isolated from any dsh you run
 #              yourself (see tools/dsh_local.sh). 7788 is its port, or the next
 #              free one.
 #   --dry-run       print the server command and client setup; start nothing
@@ -115,11 +115,11 @@
 # quantized KV and no expert cache, so --kv, --context, --yarn and --ram are
 # reported as not applying rather than passed or dropped in silence.
 #
-# Overrides: TINYTITAN_PORT, TINYTITAN_THINKING_MODE, TINYTITAN_CATALOG_JSON,
-# TINYTITAN_PHYSICAL_RAM_BYTES (the RAM-ceiling test seam), TINYTITAN_MODELS_DIR (the
-# installs directory, models/ by default), TINYTITAN_LAUNCHER_DRY_RUN=1, and the
+# Overrides: EMONE_PORT, EMONE_THINKING_MODE, EMONE_CATALOG_JSON,
+# EMONE_PHYSICAL_RAM_BYTES (the RAM-ceiling test seam), EMONE_MODELS_DIR (the
+# installs directory, models/ by default), EMONE_LAUNCHER_DRY_RUN=1, and the
 # per-client ones below.
-# TINYTITAN_LAUNCHER_ASSUME_TTY=1 answers the interactive questions from a pipe
+# EMONE_LAUNCHER_ASSUME_TTY=1 answers the interactive questions from a pipe
 # while still starting nothing (it is the test seam for this script's
 # questions, not something a person needs).
 set -euo pipefail
@@ -127,15 +127,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Where the built binaries are. A checkout builds into `.build/release`; an
-# install from the release tarball keeps them in `~/.tinytitan/bin` and says so
-# with TINYTITAN_BIN_DIR, because there is no `.build` in that layout — the whole
+# install from the release tarball keeps them in `~/.emone/bin` and says so
+# with EMONE_BIN_DIR, because there is no `.build` in that layout — the whole
 # point of installing a release is that nothing had to be built.
-BIN_DIR="${TINYTITAN_BIN_DIR:-$BASE_DIR/.build/release}"
-BINARY="$BIN_DIR/TinyTitanServer"
-MODELS_DIR="${TINYTITAN_MODELS_DIR:-$BASE_DIR/models}"
+BIN_DIR="${EMONE_BIN_DIR:-$BASE_DIR/.build/release}"
+BINARY="$BIN_DIR/EmoneServer"
+MODELS_DIR="${EMONE_MODELS_DIR:-$BASE_DIR/models}"
 # One catalogue for the model list, the install paths and the port.
-# shellcheck source=tools/tinytitan_models.sh
-source "$SCRIPT_DIR/tinytitan_models.sh"
+# shellcheck source=tools/emone_models.sh
+source "$SCRIPT_DIR/emone_models.sh"
 
 say()  { printf '%s\n' "$*"; }
 rule() { printf '%s\n' "------------------------------------------------------------"; }
@@ -159,12 +159,12 @@ usage() {
   # here, so this help cannot name a client the launcher does not accept.
   sed -n '2,/^set -euo pipefail/p' "$0" \
     | sed 's/^# \{0,1\}//' \
-    | sed "s/@CLIENTS@/$(tinytitan_client_ids_csv '|')/" \
+    | sed "s/@CLIENTS@/$(emone_client_ids_csv '|')/" \
     | sed '$d'
 }
 
 DRY_RUN=0
-if [[ "${TINYTITAN_LAUNCHER_DRY_RUN:-0}" == 1 ]]; then DRY_RUN=1; fi
+if [[ "${EMONE_LAUNCHER_DRY_RUN:-0}" == 1 ]]; then DRY_RUN=1; fi
 
 # A dry run and a piped run must never block on a question: they take every
 # default instead. Interactive only when a person is actually there -- except
@@ -172,15 +172,15 @@ if [[ "${TINYTITAN_LAUNCHER_DRY_RUN:-0}" == 1 ]]; then DRY_RUN=1; fi
 # run still decides that nothing is started.
 INTERACTIVE=1
 if [[ "$DRY_RUN" == "1" || ! -t 0 ]]; then INTERACTIVE=0; fi
-if [[ "${TINYTITAN_LAUNCHER_ASSUME_TTY:-0}" == "1" ]]; then INTERACTIVE=1; fi
+if [[ "${EMONE_LAUNCHER_ASSUME_TTY:-0}" == "1" ]]; then INTERACTIVE=1; fi
 
 CLIENT=""; MODE=""; MODEL_ARG=""; BITS=""; ANSWERS=""; THINKING_ARG=""
 RAM_ARG=""; CONTEXT_ARG=""; KV_ARG=""; YARN=0; PORT_ARG=""; MEMORY=0; ENGINE_ARG=""
 CACHE_ARG=""; DISK_CACHE_GIB=0; MTP_MODEL_ARG=""; MTP_MEMORY_ARG=""; CONCURRENCY_ARG=""
-# --web: after the server is up, hand the terminal over to TinyTitan's own
+# --web: after the server is up, hand the terminal over to Emone's own
 # DeepSeek Harness, which opens a prompt box in the default browser. It is a
 # mode rather than a `--client` entry on purpose: the client list in
-# tools/tinytitan_models.sh is shared with the coder benchmark, which rejects
+# tools/emone_models.sh is shared with the coder benchmark, which rejects
 # any kind that is not `coder` or `editor` and asserts the id set exactly.
 WEB=0
 # The tiers are the sizes a person can reason about, not the runtime's own
@@ -194,7 +194,7 @@ WEB=0
 ram_tier() {
   # A whole number of GB, with or without the "G" suffix, from 4 up. The
   # runtime's --ram-budget enforces the same floor and the benchmark profile
-  # passes its own value through TINYTITAN_BENCH_RAM_BUDGET. The interactive
+  # passes its own value through EMONE_BENCH_RAM_BUDGET. The interactive
   # question offers 4/8/16/32 or the install's own profile.
   local value="${1%[Gg]}"
   case "$value" in
@@ -325,7 +325,7 @@ done
 client_label() {
   case "$1" in
     server) echo "Server only (no client)" ;;
-    *)      tinytitan_client_label "$1" || echo "$1" ;;
+    *)      emone_client_label "$1" || echo "$1" ;;
   esac
 }
 
@@ -339,7 +339,7 @@ normalize_client() {
     openai|anthropic)   echo server; return 0 ;;
   esac
   # Everything else has to be a client the shared catalogue carries.
-  if tinytitan_client_label "$1" >/dev/null 2>&1; then echo "$1"; return 0; fi
+  if emone_client_label "$1" >/dev/null 2>&1; then echo "$1"; return 0; fi
   return 1
 }
 
@@ -348,7 +348,7 @@ normalize_client() {
 # terminal.
 if [[ -z "$CLIENT" ]] && (( INTERACTIVE )) && (( ! WEB )); then
   menu_ids=()
-  while IFS= read -r id; do menu_ids+=("$id"); done < <(tinytitan_client_ids)
+  while IFS= read -r id; do menu_ids+=("$id"); done < <(emone_client_ids)
   echo "What do you want to launch?"
   echo "  1) Server only — start the API, no client (default)"
   for (( menu_index = 0; menu_index < ${#menu_ids[@]}; menu_index++ )); do
@@ -370,7 +370,7 @@ fi
 requested_client="$CLIENT"
 if ! CLIENT="$(normalize_client "$requested_client")"; then
   # Name what was asked for: the assignment above has already emptied CLIENT.
-  echo "unknown client: $requested_client (server|$(tinytitan_client_ids_csv '|'))" >&2
+  echo "unknown client: $requested_client (server|$(emone_client_ids_csv '|'))" >&2
   exit 2
 fi
 
@@ -418,34 +418,34 @@ fi
 # are held to installs that are really on disk, so the menu never offers a model
 # or a width that cannot be loaded.
 dynamic=0
-if tinytitan_load_catalog "$BINARY" "$MODELS_DIR"; then
-  if tinytitan_catalog_keep_installed; then
+if emone_load_catalog "$BINARY" "$MODELS_DIR"; then
+  if emone_catalog_keep_installed; then
     dynamic=1
   else
     catalog_error="none of the models it lists are under $MODELS_DIR"
   fi
 else
-  catalog_error="$TINYTITAN_CATALOG_ERROR"
+  catalog_error="$EMONE_CATALOG_ERROR"
 fi
 if (( ! dynamic )); then
   echo "" >&2
   echo "NOTE: the model catalog is unavailable ($catalog_error)." >&2
   echo "      Offering the installs this checkout has instead; the server will" >&2
   echo "      serve only the model chosen here, and switching needs a restart." >&2
-  if ! tinytitan_static_catalog "$MODELS_DIR"; then
+  if ! emone_static_catalog "$MODELS_DIR"; then
     echo "" >&2
-    echo "ERROR: $TINYTITAN_CATALOG_ERROR." >&2
+    echo "ERROR: $EMONE_CATALOG_ERROR." >&2
     echo "       Add one first: docs/adding-a-model.md, or tools/install_models.sh." >&2
     exit 2
   fi
-  if (( ${#TINYTITAN_CATALOG_MISSING[@]} > 0 )); then
-    echo "      Supported but not installed here: ${TINYTITAN_CATALOG_MISSING[*]+"${TINYTITAN_CATALOG_MISSING[*]}"}" >&2
+  if (( ${#EMONE_CATALOG_MISSING[@]} > 0 )); then
+    echo "      Supported but not installed here: ${EMONE_CATALOG_MISSING[*]+"${EMONE_CATALOG_MISSING[*]}"}" >&2
   fi
 fi
 
 if [[ -z "$MODEL_ARG" ]]; then
-  count=${#TINYTITAN_CAT_ID[@]}
-  default_idx="$(tinytitan_catalog_find_dir ornith-1.5_35B_A3B_8Bit)" || default_idx=0
+  count=${#EMONE_CAT_ID[@]}
+  default_idx="$(emone_catalog_find_dir ornith-1.5_35B_A3B_8Bit)" || default_idx=0
   echo ""
   if (( dynamic )); then
     echo "Which model? (loaded first; every other one stays available by name)"
@@ -471,13 +471,13 @@ if [[ -z "$MODEL_ARG" ]]; then
     "#" "model" "bits" "engine" "size" "api id" "thinking" ""
   for (( i = 0; i < count; i++ )); do
     size=""
-    if [[ "${TINYTITAN_CAT_SIZE[$i]}" != "-" ]]; then size="${TINYTITAN_CAT_SIZE[$i]} GB"; fi
+    if [[ "${EMONE_CAT_SIZE[$i]}" != "-" ]]; then size="${EMONE_CAT_SIZE[$i]} GB"; fi
     note=""
     if (( i == default_idx )); then note="  (default)"; fi
     printf "  %2d) %-28s %s-bit  %-4s %8s  %-22s %-24s%s\n" "$((i + 1))" \
-      "${TINYTITAN_CAT_NAME[$i]}" "${TINYTITAN_CAT_QUANT[$i]}" \
-      "$( engine_column "${TINYTITAN_CAT_ENGINES[$i]:-${TINYTITAN_CAT_BACKEND[$i]}}" )" \
-      "$size" "${TINYTITAN_CAT_ID[$i]}" "${TINYTITAN_CAT_THINKING[$i]//,/, }" "$note"
+      "${EMONE_CAT_NAME[$i]}" "${EMONE_CAT_QUANT[$i]}" \
+      "$( engine_column "${EMONE_CAT_ENGINES[$i]:-${EMONE_CAT_BACKEND[$i]}}" )" \
+      "$size" "${EMONE_CAT_ID[$i]}" "${EMONE_CAT_THINKING[$i]//,/, }" "$note"
   done
   printf "Choice [1-%d] (default %d): " "$count" "$((default_idx + 1))"
   read -r pick || exit 1
@@ -488,33 +488,33 @@ if [[ -z "$MODEL_ARG" ]]; then
     echo "invalid choice: $pick" >&2; exit 2
   fi
 else
-  if idx="$(tinytitan_catalog_find_id "$MODEL_ARG")"; then
+  if idx="$(emone_catalog_find_id "$MODEL_ARG")"; then
     if [[ -n "$BITS" ]]; then
       case "$BITS" in
         4|8|4bit|8bit)
-          if [[ "${BITS%bit}" != "${TINYTITAN_CAT_QUANT[$idx]}" ]]; then
-            echo "$MODEL_ARG is ${TINYTITAN_CAT_QUANT[$idx]}-bit, not ${BITS%bit}-bit" >&2
+          if [[ "${BITS%bit}" != "${EMONE_CAT_QUANT[$idx]}" ]]; then
+            echo "$MODEL_ARG is ${EMONE_CAT_QUANT[$idx]}-bit, not ${BITS%bit}-bit" >&2
             exit 2
           fi ;;
         *) echo "unknown bits: $BITS (4|8)" >&2; exit 2 ;;
       esac
     fi
   else
-    if ! tinytitan_resolve_model "$MODEL_ARG" 2>/dev/null; then
+    if ! emone_resolve_model "$MODEL_ARG" 2>/dev/null; then
       echo "unknown model: $MODEL_ARG (a model id, or ornith|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|qwen38-27b)" >&2
-      if (( dynamic )); then echo "installed: ${TINYTITAN_CAT_ID[*]+"${TINYTITAN_CAT_ID[*]}"}" >&2; fi
+      if (( dynamic )); then echo "installed: ${EMONE_CAT_ID[*]+"${EMONE_CAT_ID[*]}"}" >&2; fi
       exit 2
     fi
     # No width given means 8-bit, the historical default.
-    tinytitan_resolve_quant "${BITS:-8}" || exit 2
-    if ! idx="$(tinytitan_catalog_find_dir "${TINYTITAN_MODEL_STEM}_${TINYTITAN_QUANT_DIR}")"; then
-      echo "ERROR: $TINYTITAN_MODEL_LABEL ${TINYTITAN_QUANT%bit}-bit is not installed (no ${TINYTITAN_MODEL_STEM}_${TINYTITAN_QUANT_DIR} under $MODELS_DIR)" >&2
+    emone_resolve_quant "${BITS:-8}" || exit 2
+    if ! idx="$(emone_catalog_find_dir "${EMONE_MODEL_STEM}_${EMONE_QUANT_DIR}")"; then
+      echo "ERROR: $EMONE_MODEL_LABEL ${EMONE_QUANT%bit}-bit is not installed (no ${EMONE_MODEL_STEM}_${EMONE_QUANT_DIR} under $MODELS_DIR)" >&2
       # Name the widths that are here: "not installed" alone reads like the
       # whole model is missing when only the one asked for is.
       installed_widths=""
-      for width_idx in "${!TINYTITAN_CAT_PATH[@]}"; do
-        if [[ "$(basename "${TINYTITAN_CAT_PATH[$width_idx]}")" == "${TINYTITAN_MODEL_STEM}_"* ]]; then
-          installed_widths="$installed_widths ${TINYTITAN_CAT_QUANT[$width_idx]}-bit"
+      for width_idx in "${!EMONE_CAT_PATH[@]}"; do
+        if [[ "$(basename "${EMONE_CAT_PATH[$width_idx]}")" == "${EMONE_MODEL_STEM}_"* ]]; then
+          installed_widths="$installed_widths ${EMONE_CAT_QUANT[$width_idx]}-bit"
         fi
       done
       if [[ -n "$installed_widths" ]]; then
@@ -526,12 +526,12 @@ else
   fi
 fi
 
-MODEL_ID="${TINYTITAN_CAT_ID[$idx]}"
-MODEL_NAME="${TINYTITAN_CAT_NAME[$idx]}"
-MODEL_QUANT="${TINYTITAN_CAT_QUANT[$idx]}"
-MODEL_BACKEND="${TINYTITAN_CAT_BACKEND[$idx]}"
-MODEL_DIR="${TINYTITAN_CAT_PATH[$idx]}"
-IFS=',' read -r -a levels <<< "${TINYTITAN_CAT_THINKING[$idx]}"
+MODEL_ID="${EMONE_CAT_ID[$idx]}"
+MODEL_NAME="${EMONE_CAT_NAME[$idx]}"
+MODEL_QUANT="${EMONE_CAT_QUANT[$idx]}"
+MODEL_BACKEND="${EMONE_CAT_BACKEND[$idx]}"
+MODEL_DIR="${EMONE_CAT_PATH[$idx]}"
+IFS=',' read -r -a levels <<< "${EMONE_CAT_THINKING[$idx]}"
 
 # ============================================================
 # 3b) Engine: which engine serves this install, and what was asked for
@@ -543,9 +543,9 @@ IFS=',' read -r -a levels <<< "${TINYTITAN_CAT_THINKING[$idx]}"
 # Qwen 3.5 models (2B/4B/9B) are implemented by *both*, from the same `.gturbo`
 # payload. That is the one case where the engine is a real choice, so it is the
 # one case that asks.
-IFS=',' read -r -a engines <<< "${TINYTITAN_CAT_ENGINES[$idx]:-$MODEL_BACKEND}"
-default_engine="${TINYTITAN_CAT_BACKEND[$idx]}"
-engine_family="${TINYTITAN_CAT_FAMILY[$idx]:--}"
+IFS=',' read -r -a engines <<< "${EMONE_CAT_ENGINES[$idx]:-$MODEL_BACKEND}"
+default_engine="${EMONE_CAT_BACKEND[$idx]}"
+engine_family="${EMONE_CAT_FAMILY[$idx]:--}"
 engine_name() { if [[ "$1" == cpu ]]; then echo CPU; else echo GPU; fi; }
 engine_available() {
   local candidate
@@ -678,16 +678,16 @@ level_names() {
   echo "$out"
 }
 
-thinking_default="${TINYTITAN_THINKING_MODE:-off}"
+thinking_default="${EMONE_THINKING_MODE:-off}"
 if ! default_word="$(normalize_level "$thinking_default")"; then
-  echo "invalid TINYTITAN_THINKING_MODE: $thinking_default (off|on|minimal|low|medium|high|xhigh|max)" >&2
+  echo "invalid EMONE_THINKING_MODE: $thinking_default (off|on|minimal|low|medium|high|xhigh|max)" >&2
   exit 2
 fi
 if ! default_level="$(level_for_model "$default_word")"; then
   # A default the model cannot render is a person's mistake worth naming, not
   # a level to substitute in silence.
   default_level="${levels[0]}"
-  echo "NOTE: TINYTITAN_THINKING_MODE=$thinking_default is not a level $MODEL_NAME ${MODEL_QUANT}-bit renders" >&2
+  echo "NOTE: EMONE_THINKING_MODE=$thinking_default is not a level $MODEL_NAME ${MODEL_QUANT}-bit renders" >&2
   echo "      ($(level_names)); using $default_level." >&2
 fi
 
@@ -764,11 +764,11 @@ think_word="$(thinking_label "$thinking_level")"
 # KV/slot headroom to half of physical memory less the expert cache; that half is
 # about concurrency, not about this flag.)
 #
-# `TINYTITAN_PHYSICAL_RAM_BYTES` is the test seam: this mapping has to be checkable
+# `EMONE_PHYSICAL_RAM_BYTES` is the test seam: this mapping has to be checkable
 # on a machine of any size.
 physical_ram_bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
-if [[ -n "${TINYTITAN_PHYSICAL_RAM_BYTES:-}" ]]; then
-  physical_ram_bytes="$TINYTITAN_PHYSICAL_RAM_BYTES"
+if [[ -n "${EMONE_PHYSICAL_RAM_BYTES:-}" ]]; then
+  physical_ram_bytes="$EMONE_PHYSICAL_RAM_BYTES"
 fi
 case "$physical_ram_bytes" in
   *[!0-9]*|"") physical_ram_bytes=0 ;;
@@ -996,25 +996,25 @@ fi
 warn_concurrency_if_many
 
 # The port is the last question about the *server* rather than the model, so it is
-# asked last and it is skippable: `--port` or `TINYTITAN_PORT` answers it, and an
+# asked last and it is skippable: `--port` or `EMONE_PORT` answers it, and an
 # unattended run takes the default. The default itself lives in one place —
-# `TINYTITAN_DEFAULT_PORT` in tinytitan_models.sh — so a changed default cannot
+# `EMONE_DEFAULT_PORT` in emone_models.sh — so a changed default cannot
 # leave one script pointing where the others do not.
 if [[ -n "$PORT_ARG" ]]; then
   PORT="$PORT_ARG"
-elif [[ -n "${TINYTITAN_PORT:-}" ]]; then
-  PORT="$TINYTITAN_PORT"
+elif [[ -n "${EMONE_PORT:-}" ]]; then
+  PORT="$EMONE_PORT"
 elif (( INTERACTIVE )); then
   echo ""
   echo "Port for the server?"
-  echo "  Clients reach the API at http://127.0.0.1:<port>. ${TINYTITAN_DEFAULT_PORT} is the default;"
+  echo "  Clients reach the API at http://127.0.0.1:<port>. ${EMONE_DEFAULT_PORT} is the default;"
   echo "  change it when something else already holds that port, or to run a"
   echo "  second model beside this one."
-  printf "Port [1-65535] (default %s): " "$TINYTITAN_DEFAULT_PORT"
+  printf "Port [1-65535] (default %s): " "$EMONE_DEFAULT_PORT"
   read -r port_choice || exit 1
-  PORT="${port_choice:-$TINYTITAN_DEFAULT_PORT}"
+  PORT="${port_choice:-$EMONE_DEFAULT_PORT}"
 else
-  PORT="$TINYTITAN_DEFAULT_PORT"
+  PORT="$EMONE_DEFAULT_PORT"
 fi
 case "$PORT" in
   ''|*[!0-9]*) echo "unknown port: $PORT (a number 1-65535)" >&2; exit 2 ;;
@@ -1028,7 +1028,7 @@ if (( PORT < 1024 )); then
   echo "NOTE: port $PORT is privileged; macOS requires root to bind it." >&2
 fi
 non_default_port=0
-if (( PORT != TINYTITAN_DEFAULT_PORT )); then non_default_port=1; fi
+if (( PORT != EMONE_DEFAULT_PORT )); then non_default_port=1; fi
 
 # The context, KV and YaRN flags reach the GPU runtime only. Asking for one of
 # them against a CPU model is a misunderstanding worth naming: the CPU engine
@@ -1048,14 +1048,14 @@ if [[ "$ENGINE" == "cpu" ]]; then
 fi
 
 if [[ "$MEMORY" == "1" ]]; then
-  export TINYTITAN_MEMORY=1
+  export EMONE_MEMORY=1
 fi
 
 # Prefix-reuse measurement: hashes only, one line per request, read by
-# benchmark/prefix_log_report.py. Set TINYTITAN_PREFIX_LOG= (empty) to turn it off.
-export TINYTITAN_PREFIX_LOG="${TINYTITAN_PREFIX_LOG-$BASE_DIR/.prompt-cache/prefix-log/${MODEL_NAME}.jsonl}"
-if [[ -n "$TINYTITAN_PREFIX_LOG" ]]; then
-  mkdir -p "$(dirname "$TINYTITAN_PREFIX_LOG")"
+# benchmark/prefix_log_report.py. Set EMONE_PREFIX_LOG= (empty) to turn it off.
+export EMONE_PREFIX_LOG="${EMONE_PREFIX_LOG-$BASE_DIR/.prompt-cache/prefix-log/${MODEL_NAME}.jsonl}"
+if [[ -n "$EMONE_PREFIX_LOG" ]]; then
+  mkdir -p "$(dirname "$EMONE_PREFIX_LOG")"
 fi
 
 # ============================================================
@@ -1172,14 +1172,14 @@ api_model_note=""
 print_setup() {
   echo ""
   echo "============================================================"
-  echo " TinyTitanServer ready — $MODEL_NAME ${MODEL_QUANT}-bit ($( [[ "$MODEL_BACKEND" == cpu ]] && echo CPU || echo GPU ))"
+  echo " EmoneServer ready — $MODEL_NAME ${MODEL_QUANT}-bit ($( [[ "$MODEL_BACKEND" == cpu ]] && echo CPU || echo GPU ))"
   echo "                                            answers ${mode_word}, thinking ${think_word}"
   echo "============================================================"
   echo ""
   if [[ "$API" == "anthropic" ]]; then
     echo "Anthropic API setup — point any Anthropic Messages client at this:"
     echo "  ANTHROPIC_BASE_URL=http://127.0.0.1:${PORT}"
-    echo "  ANTHROPIC_API_KEY=tinytitan   (any value; the server does not authenticate)"
+    echo "  ANTHROPIC_API_KEY=emone   (any value; the server does not authenticate)"
     echo "  Model:      $launch_model $api_model_note"
     echo "  Endpoint:   POST /v1/messages"
   else
@@ -1194,7 +1194,7 @@ print_setup() {
     echo "DeepSeek Harness is opening in your default browser: a prompt box"
     echo "pointed at this server. It is this install's own copy under"
     # shellcheck disable=SC2088  # prose in a message, not a path being used
-    echo "~/.tinytitan (port ${TINYTITAN_DSH_PORT:-7788}, or the next free one), so a"
+    echo "~/.emone (port ${EMONE_DSH_PORT:-7788}, or the next free one), so a"
     echo "DeepSeek Harness you run yourself is not touched."
     echo "Engine is in fast mode: the coding agent's system prompt and tool"
     echo "definitions are stripped before prefill, so answers start in seconds."
@@ -1203,10 +1203,10 @@ print_setup() {
   # --web path, so the "regenerate it yourself" advice below would be noise there.
   if (( non_default_port && ! WEB )); then
     echo ""
-    echo "Port $PORT is not the default, so anything that assumes ${TINYTITAN_DEFAULT_PORT} needs"
+    echo "Port $PORT is not the default, so anything that assumes ${EMONE_DEFAULT_PORT} needs"
     echo "telling. The DeepSeek Harness route is one of those; regenerate it"
     echo "against this server with:"
-    echo "  TINYTITAN_PORT=$PORT tools/dsh_route.sh --write"
+    echo "  EMONE_PORT=$PORT tools/dsh_route.sh --write"
   fi
   echo ""
   if (( dynamic )); then
@@ -1255,39 +1255,39 @@ if [[ "$DRY_RUN" == "1" ]]; then
   echo "Client setup the launcher would write/use:"
   case "$CLIENT" in
     server)   echo "  Server only; nothing to configure." ;;
-    codex)    echo "  ~/.codex-tinytitan/config.toml -> $launch_model via $API at port $PORT" ;;
+    codex)    echo "  ~/.codex-emone/config.toml -> $launch_model via $API at port $PORT" ;;
     claude)   echo "  ANTHROPIC_BASE_URL=http://127.0.0.1:$PORT, model $launch_model" ;;
-    qwen)     echo "  ~/.qwen-tinytitan/settings.json -> $launch_model at port $PORT" ;;
-    opencode) echo "  ~/.config/opencode/opencode.jsonc provider 'tinytitan' (model $launch_model)" ;;
-    zed)      echo "  ~/.config/zed/settings.json openai_compatible 'tinytitan' (model $launch_model)" ;;
+    qwen)     echo "  ~/.qwen-emone/settings.json -> $launch_model at port $PORT" ;;
+    opencode) echo "  ~/.config/opencode/opencode.jsonc provider 'emone' (model $launch_model)" ;;
+    zed)      echo "  ~/.config/zed/settings.json openai_compatible 'emone' (model $launch_model)" ;;
   esac
   echo ""
   print_setup
   exit 0
 fi
 
-# Persistent memory, when TINYTITAN_MEMORY=1. The workspace is the directory this
+# Persistent memory, when EMONE_MEMORY=1. The workspace is the directory this
 # was launched from, so each repository keeps its own memory.
-tinytitan_export_memory_environment "$PWD"
+emone_export_memory_environment "$PWD"
 
 if [[ "$MEMORY" == "1" ]]; then
-  echo "Memory: on (in-process, ${TINYTITAN_MEMORY_DIR}${TINYTITAN_MEMORY_CACHE_MIB:+, cap ${TINYTITAN_MEMORY_CACHE_MIB} MiB}, workspace $(basename "$PWD"))"
+  echo "Memory: on (in-process, ${EMONE_MEMORY_DIR}${EMONE_MEMORY_CACHE_MIB:+, cap ${EMONE_MEMORY_CACHE_MIB} MiB}, workspace $(basename "$PWD"))"
 fi
 
 # ============================================================
 # 10) Start the server
 # ============================================================
 
-# Stop only a stale TinyTitanServer on this port -- never an unrelated process --
+# Stop only a stale EmoneServer on this port -- never an unrelated process --
 # then wait until the port actually frees, so a slow teardown cannot race the
 # new server's bind.
 if lsof -i :"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "Stopping the existing TinyTitanServer on port $PORT..."
+  echo "Stopping the existing EmoneServer on port $PORT..."
   for pid in $(lsof -ti :"$PORT" -sTCP:LISTEN); do
-    if ps -p "$pid" -o command= | grep -q TinyTitanServer; then
+    if ps -p "$pid" -o command= | grep -q EmoneServer; then
       kill "$pid"
     else
-      echo "  skipping non-TinyTitanServer pid $pid on port $PORT" >&2
+      echo "  skipping non-EmoneServer pid $pid on port $PORT" >&2
     fi
   done
   for _ in $(seq 1 100); do
@@ -1298,7 +1298,7 @@ if lsof -i :"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   # purpose. Name it and stop, instead of letting the server fail to bind after
   # the model has been chosen and the client wiring decided.
   if lsof -i :"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "ERROR: port $PORT is held by a process that is not a TinyTitanServer:" >&2
+    echo "ERROR: port $PORT is held by a process that is not a EmoneServer:" >&2
     lsof -i :"$PORT" -sTCP:LISTEN | tail -n +2 | sed 's/^/  /' >&2
     echo "       Choose another port with --port, or stop that process yourself." >&2
     exit 2
@@ -1311,9 +1311,9 @@ if [[ ! -e "$MODEL_DIR" ]]; then
   exit 1
 fi
 
-echo "Starting TinyTitanServer ($MODEL_NAME ${MODEL_QUANT}-bit, $model_word, $mode_word, thinking $think_word) on port $PORT..."
+echo "Starting EmoneServer ($MODEL_NAME ${MODEL_QUANT}-bit, $model_word, $mode_word, thinking $think_word) on port $PORT..."
 
-# --web runs the engine in **fast mode**: TINYTITAN_STRIP_CLI_PROMPT enables the
+# --web runs the engine in **fast mode**: EMONE_STRIP_CLI_PROMPT enables the
 # same CLI-strip the "<model>-fast" alias selects, for every request. The harness
 # is a coding agent, so each turn carries a multi-thousand-token system prompt
 # and 27 tool definitions that a plain prompt box never needs; stripping them
@@ -1322,7 +1322,7 @@ echo "Starting TinyTitanServer ($MODEL_NAME ${MODEL_QUANT}-bit, $model_word, $mo
 # page sitting on "Deep diving...". The engine logs a strip report per request,
 # so what was removed is visible rather than assumed.
 if (( WEB )); then
-  TINYTITAN_STRIP_CLI_PROMPT=1 "${server_cmd[@]+"${server_cmd[@]}"}" &
+  EMONE_STRIP_CLI_PROMPT=1 "${server_cmd[@]+"${server_cmd[@]}"}" &
 else
   "${server_cmd[@]+"${server_cmd[@]}"}" &
 fi
@@ -1342,7 +1342,7 @@ for _ in $(seq 1 240); do
   sleep 2
 done
 if ! models_json="$(curl -s --max-time 5 "http://127.0.0.1:${PORT}/v1/models" 2>/dev/null)" || [[ -z "$models_json" ]]; then
-  echo "ERROR: TinyTitanServer did not come up on port $PORT" >&2
+  echo "ERROR: EmoneServer did not come up on port $PORT" >&2
   kill "$server_pid" 2>/dev/null || true
   exit 1
 fi
@@ -1371,21 +1371,21 @@ BASE_URL="http://127.0.0.1:${PORT}/v1"
 backup_once() {
   local file="$1"
   [[ -f "$file" ]] || return 0
-  local backup="${file}.tinytitan-backup"
+  local backup="${file}.emone-backup"
   [[ -f "$backup" ]] || cp "$file" "$backup"
 }
 
 configure_codex() {
-  local dir="${CODEX_HOME_TinyTitan:-$HOME/.codex-tinytitan}"
+  local dir="${CODEX_HOME_Emone:-$HOME/.codex-emone}"
   mkdir -p "$dir"
   backup_once "$dir/config.toml"
   cat > "$dir/config.toml" <<EOF
-# Written by TinyTitan tools/server_launcher.sh
+# Written by Emone tools/server_launcher.sh
 model = "$launch_model"
-model_provider = "tinytitan"
+model_provider = "emone"
 
-[model_providers.tinytitan]
-name = "TinyTitan"
+[model_providers.emone]
+name = "Emone"
 base_url = "$BASE_URL"
 wire_api = "responses"
 EOF
@@ -1399,7 +1399,7 @@ configure_claude() {
   # no file to write. The two extra model variables matter: without them it
   # asks for a claude-* id for its background tasks and gets a 404.
   export ANTHROPIC_BASE_URL="http://127.0.0.1:${PORT}"
-  export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-tinytitan}"
+  export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-emone}"
   export ANTHROPIC_MODEL="$launch_model"
   export ANTHROPIC_DEFAULT_HAIKU_MODEL="$launch_model"
   export ANTHROPIC_SMALL_FAST_MODEL="$launch_model"
@@ -1410,7 +1410,7 @@ configure_qwen() {
   # Qwen Code reads JSON settings from $QWEN_HOME (default ~/.qwen/), not a
   # Codex-style TOML. A dedicated home leaves the user's real qwen-code
   # config (providers, keys, memories) untouched.
-  local dir="${QWEN_HOME_TinyTitan:-$HOME/.qwen-tinytitan}"
+  local dir="${QWEN_HOME_Emone:-$HOME/.qwen-emone}"
   mkdir -p "$dir"
   backup_once "$dir/settings.json"
   cat > "$dir/settings.json" <<EOF
@@ -1419,9 +1419,9 @@ configure_qwen() {
     "openai": [
       {
         "id": "$launch_model",
-        "name": "[TinyTitan] $launch_model",
+        "name": "[Emone] $launch_model",
         "baseUrl": "$BASE_URL",
-        "description": "TinyTitan local server",
+        "description": "Emone local server",
         "envKey": "OPENAI_API_KEY"
       }
     ]
@@ -1443,7 +1443,7 @@ configure_qwen() {
 EOF
   export QWEN_HOME="$dir"
   export OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
-  # TinyTitan's cold prefill of qwen-code's large system prompt can exceed
+  # Emone's cold prefill of qwen-code's large system prompt can exceed
   # qwen-code's default 240s stream-idle timeout; disable it so the request is
   # not aborted mid-generation. Also disable the 900s stream-lifetime cap,
   # which would otherwise abort long reasoning generations mid-answer.
@@ -1452,7 +1452,7 @@ EOF
   echo "  Qwen Code configured: $dir/settings.json"
 }
 
-# Merge the TinyTitan provider into a JSONC settings file, keeping everything
+# Merge the Emone provider into a JSONC settings file, keeping everything
 # else. Comments and trailing commas are tolerated on read; the file is
 # rewritten as plain JSON (Zed and OpenCode both accept that) with a backup
 # kept beside it. Each client has its own schema, so the shape is passed in:
@@ -1462,17 +1462,17 @@ merge_client_config() {
   local file="$1" schema="$2" provider="$3" model="$4" context="$5"
   mkdir -p "$(dirname "$file")"
   backup_once "$file"
-  TINYTITAN_MERGE_FILE="$file" TINYTITAN_MERGE_SCHEMA="$schema" TINYTITAN_MERGE_PROVIDER="$provider" \
-  TINYTITAN_MERGE_MODEL="$model" TINYTITAN_MERGE_URL="$BASE_URL" TINYTITAN_MERGE_CONTEXT="$context" \
+  EMONE_MERGE_FILE="$file" EMONE_MERGE_SCHEMA="$schema" EMONE_MERGE_PROVIDER="$provider" \
+  EMONE_MERGE_MODEL="$model" EMONE_MERGE_URL="$BASE_URL" EMONE_MERGE_CONTEXT="$context" \
   python3 - <<'PY'
 import json, os, re, sys
 
-path = os.environ["TINYTITAN_MERGE_FILE"]
-schema = os.environ["TINYTITAN_MERGE_SCHEMA"]
-provider = os.environ["TINYTITAN_MERGE_PROVIDER"]
-model = os.environ["TINYTITAN_MERGE_MODEL"]
-base_url = os.environ["TINYTITAN_MERGE_URL"]
-context = int(os.environ["TINYTITAN_MERGE_CONTEXT"])
+path = os.environ["EMONE_MERGE_FILE"]
+schema = os.environ["EMONE_MERGE_SCHEMA"]
+provider = os.environ["EMONE_MERGE_PROVIDER"]
+model = os.environ["EMONE_MERGE_MODEL"]
+base_url = os.environ["EMONE_MERGE_URL"]
+context = int(os.environ["EMONE_MERGE_CONTEXT"])
 
 
 def strip_comments(text):
@@ -1534,11 +1534,11 @@ def table(parent, key):
 if schema == "opencode":
     block = {
         "npm": "@ai-sdk/openai-compatible",
-        "name": "TinyTitan (local)",
-        "options": {"baseURL": base_url, "apiKey": "tinytitan"},
+        "name": "Emone (local)",
+        "options": {"baseURL": base_url, "apiKey": "emone"},
         "models": {
             model: {
-                "name": f"TinyTitan — {model}",
+                "name": f"Emone — {model}",
                 "limit": {"context": context, "output": 65536},
             }
         },
@@ -1550,7 +1550,7 @@ else:  # zed
         "available_models": [
             {
                 "name": model,
-                "display_name": f"TinyTitan — {model}",
+                "display_name": f"Emone — {model}",
                 "max_tokens": context,
                 "capabilities": {
                     "tools": True,
@@ -1575,16 +1575,16 @@ PY
 configure_opencode() {
   local file="$HOME/.config/opencode/opencode.jsonc"
   # OpenCode has no environment override for a provider, so the provider block
-  # is written into its config. The provider is named "tinytitan" so nothing of
+  # is written into its config. The provider is named "emone" so nothing of
   # the user's own "openai" setup is touched.
-  merge_client_config "$file" opencode tinytitan "$launch_model" "${max_context:-262144}"
-  echo "  Pick \"$launch_model\" under the tinytitan provider in OpenCode's model list."
+  merge_client_config "$file" opencode emone "$launch_model" "${max_context:-262144}"
+  echo "  Pick \"$launch_model\" under the emone provider in OpenCode's model list."
 }
 
 configure_zed() {
   local file="$HOME/.config/zed/settings.json"
-  merge_client_config "$file" zed tinytitan "$launch_model" "${max_context:-262144}"
-  echo "  In Zed: Settings -> AI -> LLM Providers; choose the tinytitan provider's model."
+  merge_client_config "$file" zed emone "$launch_model" "${max_context:-262144}"
+  echo "  In Zed: Settings -> AI -> LLM Providers; choose the emone provider's model."
 }
 
 case "$CLIENT" in
@@ -1608,7 +1608,7 @@ esac
 # hands off to — started a server and never told the user its address.
 print_setup
 
-# --web: bring up TinyTitan's own DeepSeek Harness and let it take the terminal.
+# --web: bring up Emone's own DeepSeek Harness and let it take the terminal.
 # It opens the default browser itself and prints the tokenised URL, so there is
 # nothing else to tell the user. `ensure` writes the route against *this*
 # server's port, which is why it runs here rather than at install time: the port
@@ -1636,10 +1636,10 @@ if (( WEB )); then
   # and **72s** once the cache held the working set. A throwaway prefill moves
   # that cost to startup, where this script can say what it is doing, instead of
   # leaving it on the person's first question with the page stuck on "Deep
-  # diving...". Set TINYTITAN_WARM=0 to skip it, or TINYTITAN_WARM_TOKENS to
+  # diving...". Set EMONE_WARM=0 to skip it, or EMONE_WARM_TOKENS to
   # change the size.
-  if [[ "${TINYTITAN_WARM:-1}" != "0" ]]; then
-    warm_tokens="${TINYTITAN_WARM_TOKENS:-4000}"
+  if [[ "${EMONE_WARM:-1}" != "0" ]]; then
+    warm_tokens="${EMONE_WARM_TOKENS:-4000}"
     echo
     echo "Warming the expert cache (one throwaway prompt, ~$warm_tokens tokens;"
     echo "this is the slow part of the first answer, moved here)."
@@ -1660,7 +1660,7 @@ if (( WEB )); then
     done
     warm_body="$(printf '{"model":"%s","messages":[{"role":"user","content":"%s\\nReply with the single word: ready"}],"max_tokens":1,"stream":false}' "$MODEL" "$warm_text")"
     warm_started="$(date +%s)"
-    if curl -s --max-time "${TINYTITAN_WARM_TIMEOUT:-900}" \
+    if curl -s --max-time "${EMONE_WARM_TIMEOUT:-900}" \
          "http://127.0.0.1:${PORT}/v1/chat/completions" \
          -H 'Content-Type: application/json' -d "$warm_body" >/dev/null 2>&1; then
       echo "Expert cache warm ($(( $(date +%s) - warm_started ))s)."
@@ -1671,7 +1671,7 @@ if (( WEB )); then
   echo
   echo "Opening DeepSeek Harness in your default browser..."
   # `--port` matters here as much as it does to `ensure`: `web` exports it as
-  # TINYTITAN_PORT so the plugin's boot-time route refresh keeps this server's
+  # EMONE_PORT so the plugin's boot-time route refresh keeps this server's
   # address instead of rewriting it to the default 8080.
   "$SCRIPT_DIR/dsh_local.sh" web --port "$PORT"
   exit $?
@@ -1694,7 +1694,7 @@ client_bin() {
   esac
   if [[ -n "$var" && -n "${!var-}" ]]; then echo "${!var}"; return 0; fi
   # The binary names the shared catalogue carries, first one on PATH.
-  for candidate in $(tinytitan_client_binaries "$id"); do
+  for candidate in $(emone_client_binaries "$id"); do
     if override="$(command -v "$candidate" 2>/dev/null)"; then
       echo "$override"
       return 0

@@ -17,7 +17,7 @@ open and closes it.
 
 ## Method: ground truth instead of inference
 
-`TINYTITAN_PREFETCH_TRACE=<path>` writes one JSON line per (layer, position) with
+`EMONE_PREFETCH_TRACE=<path>` writes one JSON line per (layer, position) with
 `experts` (the router's exact selection), `misses`, `resident` (both captured
 before that layer's plan), `next_layer_prediction` and `next_weights` (the probe
 for the next layer), and `next2_layer_prediction`. Two traces were captured: a
@@ -65,7 +65,7 @@ every slot it filled; `readyBuffers` adopts a slot only when its operation is
 `.completed`, so a slow sibling gates a fast one. That is why the earlier
 `PREFETCH_TOP_M=2` arm adopted just 15.8/token while issuing 76.1.
 
-Fix (in this commit, opt-in `TINYTITAN_PREFETCH_PER_EXPERT=1`): submit one
+Fix (in this commit, opt-in `EMONE_PREFETCH_PER_EXPERT=1`): submit one
 operation per staged expert so readiness is per slot. Two interleaved rounds per
 arm, 256-token prose prompt:
 
@@ -101,7 +101,7 @@ cannot be cashed in while the device is saturated.
 The one predictor-side avenue left is **lookahead length**, not ranking quality:
 two layers ahead gives about 9 ms of completion headroom instead of 4.5, which is
 the measured difference between a staged read arriving and not. A trace captured
-with `TINYTITAN_PROBE2_TRACE=1` scores the engine's two-layer-ahead prediction
+with `EMONE_PROBE2_TRACE=1` scores the engine's two-layer-ahead prediction
 against the same ground truth:
 
 | prediction | issued/token | would-adopt/token | P@1 |
@@ -110,7 +110,7 @@ against the same ground truth:
 | L+2 probe | 42.9 | 19.8 | **0.462** |
 
 So the far-horizon prediction is nearly as good (46.2%), and the earlier
-`TINYTITAN_PREFETCH_AHEAD=2` A/B adopted **19.0**/token — essentially all of what
+`EMONE_PREFETCH_AHEAD=2` A/B adopted **19.0**/token — essentially all of what
 the L+2 ranking offers, i.e. unlike the two-slot case the reads *did* arrive in
 time with double the headroom. It still lost 3.7%.
 
@@ -152,7 +152,7 @@ then **reverted**: the tree carries no losing code, only the measurement. The
 patch was two `begin` calls where the shipped path makes one, plus enabling the
 L+2 probe behind a `prefetchMixedHorizon` flag — neither is in the tree. The arms
 below are reproducible from this description and from
-`benchmark/tinytitan_knob_sweep.py`'s `prefetch_per_expert`.
+`benchmark/emone_knob_sweep.py`'s `prefetch_per_expert`.
 
 | arm | r1 | r2 | mean | delta | issued/token | adopted/token | adopt/issued | demand MiB/token | io_ms | wait_ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

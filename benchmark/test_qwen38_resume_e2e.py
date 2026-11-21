@@ -1171,7 +1171,7 @@ class CrossFilesystemTests(unittest.TestCase):
                     "-fs",
                     "APFS",
                     "-volname",
-                    "TinyTitanTest",
+                    "EmoneTest",
                     str(self.image),
                 ],
                 check=True,
