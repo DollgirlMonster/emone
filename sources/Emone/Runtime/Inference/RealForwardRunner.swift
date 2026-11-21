@@ -317,6 +317,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     let prefillSharedExpert: PrefillSharedExpert
     let prefillGroupedMoE: PrefillGroupedRoutedMoE
     let prefillMoE: PrefillMoE
+    /// The short-branch routed stage grouped on the GPU (EMONE_SHORT_BRANCH_GROUPED=1);
+    /// nil unless that switch is set and the family's experts exist.
+    let shortBranchGrouped: ShortBranchGroupedMoE?
     let prefillFinalRowHead: PrefillFinalRowHeadInt4
 
     // Scratch — preallocated per spec'd D / F / vocab.
@@ -735,6 +738,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             batchedMPP: profile.prefillWideMPP,
             batchedSimdgroup: profile.prefillDenseQMM)
         self.prefillSharedExpert = sharedExpert
+        self.shortBranchGrouped =
+            Self.shortBranchGroupedEnabled && model.config.numExperts > 0
+            ? try ShortBranchGroupedMoE(
+                context: context, weightBits: model.routedExpertWeightBits,
+                siluActivation: silu)
+            : nil
         self.prefillRoutedGEMM =
             profile.prefillRoutedMPP && model.config.numExperts > 0
             ? try PrefillRoutedExpertGEMM(
@@ -1542,6 +1551,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// stage leaves its last layer's buffer unwaited, so the head's wait is the
     /// branch's only one (`finishResidentPrefillBuffers` checks the rest).
     var residentPrefillDeferLastWait = false
+    /// Set when a short branch's layer ran the grouped routed stage.
+    var residentPrefillRanGrouped = false
     /// Scratch of the row-batched routed stage: rows*8 pointers, rows*8*F
     /// activations and the picks the resolve kernel logs.
     var residentRowsArgBuffer: MTLBuffer?
