@@ -73,12 +73,7 @@ function readCatalog() {
 /** `tools/dsh_route.sh --print`, with the ambient Emone env removed. */
 function shellBlock(extra = []) {
   const env = { ...process.env };
-  for (const name of [
-    "EMONE_CATALOG_JSON",
-    "EMONE_MODELS_DIR",
-    "EMONE_PORT",
-    "EMONE_SERVER",
-  ]) {
+  for (const name of ["EMONE_CATALOG_JSON", "EMONE_MODELS_DIR", "EMONE_PORT", "EMONE_SERVER"]) {
     delete env[name];
   }
   return execFileSync("bash", [SHELL, "--print", ...extra], {

@@ -247,8 +247,7 @@ public struct MemoryConfiguration: Sendable, Equatable {
         if let value = environment["EMONE_MEMORY_MAX_WORKSPACES"].flatMap(Int.init) {
             configuration.storage.maximumWorkspaces = max(0, value)
         }
-        if let cacheMiB = environment["EMONE_MEMORY_CACHE_MIB"].flatMap(Int.init), cacheMiB > 0
-        {
+        if let cacheMiB = environment["EMONE_MEMORY_CACHE_MIB"].flatMap(Int.init), cacheMiB > 0 {
             configuration.storage.maximumMemoryBytes = cacheMiB << 20
         }
 

@@ -52,7 +52,7 @@ than stranding its result.
 <namespace> / <user> / <workspace>
 ```
 
-- **namespace** separates deployments sharing one machine (`emone` by default).
+- **namespace** separates deployments sharing one machine (`tinytitan` by default).
 - **user** separates people sharing one server (the OS user by default).
 - **workspace** is the repository. The start scripts pass the directory they
   were launched from, and the identifier is the directory name plus a digest
@@ -125,7 +125,7 @@ Environment variables, which is how the start scripts pass them:
 | `EMONE_MEMORY_MAX_WORKSPACES` | `100` | Keep at most this many project files, oldest first out; `0` is no cap |
 | `EMONE_MEMORY_FSYNC` | `0` | `1` forces every append to disk |
 | `EMONE_MEMORY_CACHE_MIB` | none | Optional ceiling for the whole store, in MiB |
-| `EMONE_MEMORY_NAMESPACE` | `emone` | Deployment namespace |
+| `EMONE_MEMORY_NAMESPACE` | `tinytitan` | Deployment namespace |
 | `EMONE_MEMORY_USER` | OS user | User component of the scope |
 | `EMONE_MEMORY_WORKSPACE` | from `EMONE_WORKSPACE_DIR` | Explicit workspace id |
 | `EMONE_WORKSPACE_DIR` | launch directory | Directory the workspace id derives from |

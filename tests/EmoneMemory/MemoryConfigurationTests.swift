@@ -64,13 +64,13 @@ import Testing
     @Test func storageLandsOneFilePerWorkspace() throws {
         var storage = ContinuityStorageConfiguration(
             directory: URL(fileURLWithPath: "/tmp/emone-memory"))
-        let scope = try MemoryScope(namespace: "emone", user: "ada", workspace: "repo-1234abcd")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "ada", workspace: "repo-1234abcd")
         #expect(
             storage.journalURL(for: scope).path
-                == "/tmp/emone-memory/emone/ada/repo-1234abcd.ndjson")
+                == "/tmp/emone-memory/tinytitan/ada/repo-1234abcd.ndjson")
         // Two workspaces never share a file, which is what makes deleting one
         // project's memory a file removal rather than an edit.
-        let other = try MemoryScope(namespace: "emone", user: "ada", workspace: "repo-5678ef00")
+        let other = try MemoryScope(namespace: "tinytitan", user: "ada", workspace: "repo-5678ef00")
         #expect(storage.journalURL(for: scope) != storage.journalURL(for: other))
         storage.directory = URL(fileURLWithPath: "/var/lib/emone")
         #expect(storage.journalURL(for: scope).path.hasPrefix("/var/lib/emone/"))

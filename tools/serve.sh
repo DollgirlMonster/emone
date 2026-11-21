@@ -2,8 +2,8 @@
 # Serve one installed model on 127.0.0.1, tuned by its own profile row.
 #
 #   tools/serve.sh                     # every install in <checkout>/models
-#   tools/serve.sh /Volumes/Chai/Emone/models          # any models folder
-#   tools/serve.sh /Volumes/Chai/Emone/models/qwen38flash.gturbo
+#   tools/serve.sh /Volumes/Chai/TinyTitan/models          # any models folder
+#   tools/serve.sh /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
 #   EMONE_MODEL=/path/to/install tools/serve.sh --idle 600
 #   tools/serve.sh <install> --reasoning xhigh -- --kv-bits 4
 #
