@@ -317,9 +317,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     let prefillSharedExpert: PrefillSharedExpert
     let prefillGroupedMoE: PrefillGroupedRoutedMoE
     let prefillMoE: PrefillMoE
-    /// The short-branch routed stage grouped on the GPU (EMONE_SHORT_BRANCH_GROUPED=1);
-    /// nil unless that switch is set and the family's experts exist.
-    let shortBranchGrouped: ShortBranchGroupedMoE?
+    /// The short-branch grouped routed stage's pipelines, built on first use
+    /// (`shortBranchGroupedKernels`), so nothing outside a short branch pays
+    /// for them.
+    var shortBranchGroupedStorage: ShortBranchGroupedMoE?
+    /// Set by a short branch whose row count the router sends to the grouped stage.
+    var shortBranchGroupedChosen = false
     let prefillFinalRowHead: PrefillFinalRowHeadInt4
 
     // Scratch — preallocated per spec'd D / F / vocab.
@@ -738,12 +741,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             batchedMPP: profile.prefillWideMPP,
             batchedSimdgroup: profile.prefillDenseQMM)
         self.prefillSharedExpert = sharedExpert
-        self.shortBranchGrouped =
-            Self.shortBranchGroupedEnabled && model.config.numExperts > 0
-            ? try ShortBranchGroupedMoE(
-                context: context, weightBits: model.routedExpertWeightBits,
-                siluActivation: silu)
-            : nil
         self.prefillRoutedGEMM =
             profile.prefillRoutedMPP && model.config.numExperts > 0
             ? try PrefillRoutedExpertGEMM(

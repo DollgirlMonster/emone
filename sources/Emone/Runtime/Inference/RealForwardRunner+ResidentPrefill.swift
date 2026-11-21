@@ -84,9 +84,9 @@ extension RealForwardRunner {
         try encodePrefillSharedBranch(
             commandBuffer: cb, layer: L, scratch: scratch, tokenCount: t, hiddenSize: D)
         try prefillSplitPoint(&cb, role: "prefill_split_shared")
-        if let grouped = shortBranchGrouped, residentPrefillDeferLastWait,
+        if shortBranchGroupedChosen,
             try encodeGroupedRoutedPrefill(
-                grouped, cb: &cb, layer: L, addresses: addresses,
+                try shortBranchGroupedKernels(), cb: &cb, layer: L, addresses: addresses,
                 scratch: scratch, tokenCount: t, hiddenSize: D)
         {
             return
@@ -168,11 +168,15 @@ extension RealForwardRunner {
         cb = next
     }
 
-    /// EMONE_SHORT_BRANCH_GROUPED=1: a short branch's routed stage runs grouped
-    /// by expert on the GPU (`ShortBranchGroupedMoE`), with the tile path's
-    /// reduce and tail, instead of per row. Off by default.
-    static let shortBranchGroupedEnabled =
-        ProcessInfo.processInfo.environment["EMONE_SHORT_BRANCH_GROUPED"] == "1"
+    /// The grouped stage's pipelines, built the first time a short branch takes it.
+    func shortBranchGroupedKernels() throws -> ShortBranchGroupedMoE {
+        if let built = shortBranchGroupedStorage { return built }
+        let built = try ShortBranchGroupedMoE(
+            context: ctx, weightBits: model.routedExpertWeightBits,
+            siluActivation: cfg.hiddenActivation == "silu")
+        shortBranchGroupedStorage = built
+        return built
+    }
 
     /// The grouped routed stage and the tile path's tail for one layer of a
     /// short branch; the shared branch is already in `cb` (into h1). False,
@@ -189,16 +193,17 @@ extension RealForwardRunner {
                 d: D, f: f, numExperts: cfg.numExperts, offsets: routedOffsets)
         else { return false }
         try grouped.encode(
-            commandBuffer: cb, routeIDs: scratch.routeIDs, routeWeights: scratch.routeWeights,
+            commandBuffer: &cb, routeIDs: scratch.routeIDs, routeWeights: scratch.routeWeights,
             hidden: scratch.routedX, routePartials: scratch.routePartials,
             expertAddresses: addresses, residentBuffers: residentLayers[L].buffers,
             offsets: routedOffsets, tokens: t, topK: cfg.topKExperts, d: D, f: f,
-            numExperts: cfg.numExperts)
+            numExperts: cfg.numExperts,
+            split: { [self] buffer, role in try prefillSplitPoint(&buffer, role: role) })
         try prefillMoE.encodeReduceTokenMajor(
             commandBuffer: cb, routePartials: scratch.routePartials,
             routeWeights: scratch.routeWeights, h2: scratch.h2,
             queryCount: UInt32(t), topK: UInt32(cfg.topKExperts), d: UInt32(D))
-        try prefillSplitPoint(&cb, role: "prefill_split_routed_grouped")
+        try prefillSplitPoint(&cb, role: "prefill_split_grouped_reduce")
         // The tile path's tail, call for call.
         if hyperConnection != nil {
             try requireElementwise().encodeResidualAdd(

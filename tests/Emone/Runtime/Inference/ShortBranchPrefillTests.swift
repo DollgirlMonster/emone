@@ -60,4 +60,47 @@ import Testing
         #expect(options.maxRows == RealForwardRunner.residentPrefillMaxBlockedRows)
         #expect(options.warmToResidency)
     }
+
+    @Test func theThresholdIsTheMeasuredCrossoverAtBothEnds() {
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 0) == 37)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 1024) == 37)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 16384) == 61)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 65536) == 61)
+        // Interpolated in log2(N): 4096 is halfway from 1024 to 16384.
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 4096) == 49)
+    }
+
+    @Test func theThresholdNeverFallsAsTheContextGrows() {
+        var last = 0
+        for context in stride(from: 0, through: 70_000, by: 512) {
+            let rows = ShortBranchRouting.groupedMinRows(heldContext: context)
+            #expect(rows >= last)
+            last = rows
+        }
+    }
+
+    @Test func theOverrideTakesMinRowsFirstThenTheSwitch() {
+        typealias R = ShortBranchRouting
+        #expect(R.override(environment: [:]) == nil)
+        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "0"]) == 0)
+        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": " 48 "]) == 48)
+        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "1"]) == 0)
+        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "0"]) == Int.max)
+        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "yes"]) == nil)
+        #expect(
+            R.override(environment: [
+                "EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "20", "EMONE_SHORT_BRANCH_GROUPED": "0",
+            ]) == 20)
+        // Unparseable or negative counts are ignored, not read as 0.
+        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "-1"]) == nil)
+        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "lots"]) == nil)
+        #expect(R.groupedMinRows(heldContext: 1024, override: 5) == 5)
+        #expect(R.groupedMinRows(heldContext: 1024, override: nil) == 37)
+    }
+
+    @Test func theGroupedGridCoversTheWorstCaseWorkList() {
+        // One partial item per live expert plus one per full 64 rows.
+        #expect(ShortBranchGroupedMoE.workCapacity(pairs: 64, numExperts: 256) == 66)
+        #expect(ShortBranchGroupedMoE.workCapacity(pairs: 1024, numExperts: 256) == 273)
+    }
 }
