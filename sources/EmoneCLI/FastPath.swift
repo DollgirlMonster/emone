@@ -284,57 +284,74 @@ public enum FastPathCommand {
             // then restores; with EMONE_KERNEL_STATS it prints per-role GPU sums.
             if let rowList = ProcessInfo.processInfo.environment["EMONE_FASTPATH_ROWS"] {
                 let kstats = ProcessInfo.processInfo.environment["EMONE_KERNEL_STATS"] != nil
+                // EMONE_FASTPATH_DUMP=<dir>: read out every row and write rep 1's
+                // rows as raw Float32 to <dir>/<N>-<R>.f32, for numerics checks.
+                let dump = ProcessInfo.processInfo.environment["EMONE_FASTPATH_DUMP"]
                 for r in rowList.split(separator: ",").compactMap({ Int($0) }) {
                     let row = ids[newBase..<(newBase + r)]
                     var totals: [Double] = []
                     for rep in 0...o.reps {
                         runner.resetKernelGPUTimings()
                         let started = now()
-                        _ = try await readout(row, from: n, offsets: [r - 1])
+                        let got = try await readout(
+                            row, from: n, offsets: dump == nil ? [r - 1] : Array(0..<r))
+                        if let dump, rep == 1 {
+                            let flat = got.flatMap { $0 }
+                            try flat.withUnsafeBytes {
+                                try Data($0).write(
+                                    to: URL(fileURLWithPath: "\(dump)/\(n)-\(r).f32"))
+                            }
+                        }
                         let total = ms(now() - started)
                         if kstats {
                             for s in runner.kernelGPUTimingSummary() {
-                                say("kstat\t\(n)\t\(r)\t\(rep)\t\(s.role)\t\(String(format: "%.3f", s.millis))\t\(s.count)")
+                                say(
+                                    "kstat\t\(n)\t\(r)\t\(rep)\t\(s.role)\t\(String(format: "%.3f", s.millis))\t\(s.count)"
+                                )
                             }
                             let occ = runner.kernelGPUOccupancy()
-                            say("kocc\t\(n)\t\(r)\t\(rep)\tbusy=\(String(format: "%.3f", occ.busyMillis))\tspan=\(String(format: "%.3f", occ.spanMillis))")
+                            say(
+                                "kocc\t\(n)\t\(r)\t\(rep)\tbusy=\(String(format: "%.3f", occ.busyMillis))\tspan=\(String(format: "%.3f", occ.spanMillis))"
+                            )
                         }
                         try await runner.restoreDecisionBranchPoint(point)
                         say("rows\t\(n)\t\(r)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))")
                         if rep > 0 { totals.append(total) }
                     }
-                    say("ROWS\t\(n)\t\(r)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))")
-                }
-            } else {
-            for m in o.ms {
-                for k in o.ks {
-                    let q = question(k: k, pool: questionPool)
-                    let branch = branchRow(q, marker: q.instruction[0])
-                    let row = Array(ids[newBase..<(newBase + m)]) + branch.ids
-                    var totals: [Double] = []
-                    for rep in 0...o.reps {
-                        let started = now()
-                        let rows = try await readout(
-                            row[...], from: n, offsets: branch.readouts.map { m + $0 })
-                        let decided = now()
-                        _ = head.logits(decide: rows[0], options: Array(rows.dropFirst()))
-                        let headDone = now()
-                        try await runner.restoreDecisionBranchPoint(point)
-                        let done = now()
-                        let total = ms(done - started)
-                        let detail =
-                            "prefill+branch=\(f1(ms(decided - started))) "
-                            + "head=\(f1(ms(headDone - decided))) restore=\(f1(ms(done - headDone)))"
-                        say(
-                            "moe\t\(n)\t\(m)\t\(k)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))\t\(detail)"
-                        )
-                        if rep > 0 { totals.append(total) }
-                    }
                     say(
-                        "SUMMARY\tmoe\t\(n)\t\(m)\t\(k)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
+                        "ROWS\t\(n)\t\(r)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
                     )
                 }
-            }
+            } else {
+                for m in o.ms {
+                    for k in o.ks {
+                        let q = question(k: k, pool: questionPool)
+                        let branch = branchRow(q, marker: q.instruction[0])
+                        let row = Array(ids[newBase..<(newBase + m)]) + branch.ids
+                        var totals: [Double] = []
+                        for rep in 0...o.reps {
+                            let started = now()
+                            let rows = try await readout(
+                                row[...], from: n, offsets: branch.readouts.map { m + $0 })
+                            let decided = now()
+                            _ = head.logits(decide: rows[0], options: Array(rows.dropFirst()))
+                            let headDone = now()
+                            try await runner.restoreDecisionBranchPoint(point)
+                            let done = now()
+                            let total = ms(done - started)
+                            let detail =
+                                "prefill+branch=\(f1(ms(decided - started))) "
+                                + "head=\(f1(ms(headDone - decided))) restore=\(f1(ms(done - headDone)))"
+                            say(
+                                "moe\t\(n)\t\(m)\t\(k)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))\t\(detail)"
+                            )
+                            if rep > 0 { totals.append(total) }
+                        }
+                        say(
+                            "SUMMARY\tmoe\t\(n)\t\(m)\t\(k)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
+                        )
+                    }
+                }
             }
             let after = try await probeLogits(at: point)
             let same = before == after
