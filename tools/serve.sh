@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Serve one installed model on 127.0.0.1, tuned by its own profile row.
 #
+#   tools/serve.sh                     # the default install, below
 #   tools/serve.sh /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
 #   TINYTITAN_MODEL=/path/to/install tools/serve.sh --idle 600
 #   tools/serve.sh <install> --reasoning xhigh -- --kv-bits 4
@@ -22,6 +23,11 @@
 # a Qwen3.8 snapshot at 40K tokens is ~2.8 GB, so the server's own 8 GiB
 # default keeps only about three conversations.
 #
+# With no install named, it serves TINYTITAN_DEFAULT_MODEL (Qwen 3.6 35B-A3B
+# 4-bit on the external drive). The install's own directory is passed as
+# --models-dir, so a request naming another model there switches to it, and
+# on a terminal the live trace view (--live-trace) is on.
+#
 # Nothing here downloads or installs a model, and nothing is killed: another
 # model process, or an install without its receipt, stops it.
 set -Eeuo pipefail
@@ -29,7 +35,11 @@ trap 'echo "serve: stopped at line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEFAULT_MODEL="${TINYTITAN_DEFAULT_MODEL:-/Volumes/Chai/TinyTitan/models/qwen3.6_35B_A3B_4Bit}"
 MODEL="${TINYTITAN_MODEL:-}"
+MODELS_DIR=""
+CATALOG=1
+LIVE_TRACE=auto
 PORT="${TINYTITAN_PORT:-8089}"
 IDLE=900
 CACHE_ROOT="${TINYTITAN_PROMPT_CACHE_ROOT:-$ROOT/.prompt-cache}"
@@ -42,7 +52,12 @@ usage() {
   sed -n '2,/^set -/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
   cat <<'USAGE'
 Options:
-  <install>            model directory (or TINYTITAN_MODEL)
+  <install>            model directory (or TINYTITAN_MODEL; default
+                       TINYTITAN_DEFAULT_MODEL, Qwen 3.6 35B-A3B 4-bit)
+  --models-dir <dir>   catalog for model switching (default: the install's
+                       own directory)
+  --no-catalog         serve the one install only, no --models-dir
+  --no-live-trace      plain log output even on a terminal
   --port <n>           default 8089 (TINYTITAN_PORT)
   --idle <seconds>     release the model after this long idle (default 900;
                        0 keeps it loaded from the first request on)
@@ -66,6 +81,9 @@ while [ $# -gt 0 ]; do
     --idle) IDLE="$2"; shift 2 ;;
     --reasoning) REASONING="$2"; shift 2 ;;
     --disk-cache-gib) DISK_GIB="$2"; shift 2 ;;
+    --models-dir) MODELS_DIR="$2"; shift 2 ;;
+    --no-catalog) CATALOG=0; shift ;;
+    --no-live-trace) LIVE_TRACE=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h | --help) usage; exit 0 ;;
     --) shift; EXTRA=("$@"); break ;;
@@ -74,7 +92,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$MODEL" ] || die "name an install: tools/serve.sh <model-dir> (or set TINYTITAN_MODEL)"
+[ -n "$MODEL" ] || MODEL="$DEFAULT_MODEL"
 case "$MODEL" in
   /*) ;;
   *) MODEL="$PWD/$MODEL" ;;
@@ -96,6 +114,17 @@ server_args=(--model "$MODEL" --port "$PORT" --prompt-cache-disk "$cache_dir"
   --prompt-cache-disk-mib "$((DISK_GIB * 1024))" --prompt-cache-entries 16)
 if [ "$IDLE" -gt 0 ]; then
   server_args+=(--idle-unload-seconds "$IDLE")
+fi
+if [ "$CATALOG" -eq 1 ]; then
+  server_args+=(--models-dir "${MODELS_DIR:-$(dirname "$MODEL")}")
+fi
+# The trace view owns the terminal; under a pipe or a service it would only
+# garble the log, so auto means "when stdout is a terminal".
+if [ "$LIVE_TRACE" = auto ]; then
+  if [ -t 1 ]; then LIVE_TRACE=1; else LIVE_TRACE=0; fi
+fi
+if [ "$LIVE_TRACE" -eq 1 ]; then
+  server_args+=(--live-trace)
 fi
 # The server refuses --reasoning alongside --thinking/--reasoning-effort, so
 # a reasoning flag passed through after -- replaces this default outright.

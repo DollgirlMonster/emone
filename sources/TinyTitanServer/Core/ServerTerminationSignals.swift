@@ -1,6 +1,7 @@
 import Darwin
 import Dispatch
 import Foundation
+import TinyTitanLiveTrace
 
 public actor ServerTerminationSignals {
     // Graceful shutdown on SIGINT/SIGTERM: stop accepting work, drain, exit.
@@ -19,7 +20,13 @@ public actor ServerTerminationSignals {
 
     public init(
         _ signals: [Int32] = [SIGINT, SIGTERM],
-        forceExit: @escaping @Sendable () -> Void = { exit(1) }
+        forceExit: @escaping @Sendable () -> Void = {
+            // A live view hides the cursor and turns autowrap off; a second
+            // signal must not leave the shell that way. (An `atexit` handler
+            // does the same for any other `exit`; this makes the order plain.)
+            LiveTraceServerView.restoreTerminal()
+            exit(1)
+        }
     ) {
         // `makeStream` returns the continuation directly, so there is no
         // captured-optional to force unwrap.

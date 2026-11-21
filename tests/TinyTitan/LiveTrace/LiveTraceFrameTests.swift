@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import TinyTitan
 
-@testable import TinyTitanCLICore
+@testable import TinyTitanLiveTrace
 
 @Suite struct LiveTraceFrameTests {
     static let shape = ExpertTraceShape(

@@ -1,6 +1,6 @@
 import Testing
 
-@testable import TinyTitanCLICore
+@testable import TinyTitanLiveTrace
 
 @Suite struct LiveTraceTextTests {
     @Test func wrapsAtWordsAndKeepsEveryLineWithinWidth() {

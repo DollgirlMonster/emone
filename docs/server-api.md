@@ -163,6 +163,34 @@ reasoning request — so no client switch is needed any more. The Responses
 surface still merges `developer` items into the leading system message, which is
 the same turn by a different road.
 
+### Prefilling a reply from elsewhere (`x_prefill_reply`)
+
+For a client that answered a turn with another model (a fallback while this
+server was still prefilling) and wants this server's prompt cache to catch up
+to that turn, so the next request resumes instead of re-prefilling it.
+
+```json
+{"model": "...", "x_prefill_reply": true,
+ "messages": [{"role": "system", ...}, {"role": "user", ...},
+              {"role": "assistant", "content": "the reply to commit"}]}
+```
+
+The final message is the reply. The server prefills the history through it,
+resuming from any cached prefix as an ordinary request would, and publishes
+the result as a finished turn, so a later request that replays the same
+messages followed by a user turn hits the cache (`cached_tokens` shows it).
+Nothing is sampled and no text comes back: `finish_reason` is `prefill`, and
+`usage` reports the prompt and cached counts.
+
+- The reply is committed as plain text: no tool calls, no `stream`, no
+  `response_format`, no `x_hidden_states`, and not two assistant messages in
+  a row. Anything else is a 400.
+- Thinking in the reply is dropped. The turn is stored as one that thought
+  nothing: with thinking on, the reply closes the open thought first, which
+  is how the chat template renders an earlier assistant turn.
+- The model's own reasoning level applies as for any request; a level that
+  differs from the loaded one bypasses the cache and publishes nothing.
+
 ### Hidden-state readout (`x_hidden_states`)
 
 An opt-in request extension on `POST /v1/chat/completions` that returns the

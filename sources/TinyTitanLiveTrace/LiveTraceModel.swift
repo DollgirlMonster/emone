@@ -105,6 +105,8 @@ struct LiveTraceModel {
     /// SSD read rate per token, GB/s.
     private(set) var ssdGBPerSecond: [Double] = []
     private(set) var droppedEvents: UInt64 = 0
+    /// The expert hit rate when the last request ended, for the idle frame.
+    private(set) var lastHitRate: Double?
 
     /// Background heat for the grid; replaceable.
     let heatSource: ExpertHeatSource
@@ -160,6 +162,26 @@ struct LiveTraceModel {
         let tail = history.suffix(count)
         return tail.reduce(0, +) / Double(tail.count)
     }
+
+    /// A request starts or ends: forget the token in flight, so the next
+    /// request's first position is a new token whatever its number, and show no
+    /// picks. The history (rates, heat, the believed-resident set) stays; it is
+    /// the model's, not the request's. Used by a server's view, whose requests
+    /// follow one another in one model; a CLI run has exactly one.
+    mutating func clearLive() {
+        if let rate = hitRate { lastHitRate = rate }
+        position = -1
+        picks.removeAll(keepingCapacity: true)
+        for index in layerMisses.indices { layerMisses[index] = -1 }
+        tokenHits = 0
+        tokenPicks = 0
+        tokenMisses = 0
+        window.removeAll(keepingCapacity: true)
+    }
+
+    /// One step of idle time: heat decays by a token's worth, so a quiet server
+    /// shows its recent favourites cooling instead of a frozen picture.
+    mutating func idleStep() { heatSource.advanceToken() }
 
     mutating func apply(_ batch: ExpertTraceBatch) {
         droppedEvents = batch.dropped

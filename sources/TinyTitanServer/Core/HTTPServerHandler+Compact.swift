@@ -47,7 +47,8 @@ extension ServerHTTPHandler {
             let created = Int(Date().timeIntervalSince1970)
             let contextBox = SendableContext(context)
             activeTask = childChannels.startTask {
-                ServerLog.accepted(id: resourceID, streaming: false)
+                ServerLog.accepted(id: resourceID, streaming: false, clientModel: requestedModel)
+                defer { ServerLog.closed(id: resourceID) }
                 do {
                     let result = try await self.compacted(
                         conversation: conversation, target: target, budget: budget)

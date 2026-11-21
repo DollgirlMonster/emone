@@ -671,6 +671,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                 weightBits: model.lmHeadWeightBits)
         self.attention = try Attention(context: context)
         self.attention.simdPartialOverride = profile.attentionSimdPartial
+        self.attention.longDecodeOverride = profile.decodeLong
         self.kvQuantizer =
             runtimeConfiguration.kvCachePrecision.isQuantized
             ? try KVCacheQuantizer(context: context) : nil

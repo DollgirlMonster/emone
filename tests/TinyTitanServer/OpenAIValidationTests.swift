@@ -829,4 +829,48 @@ struct ServerArgumentTests {
         #expect(WorkspaceHeader.value(in: head(nil)) == nil)
         #expect(WorkspaceHeader.value(in: nil) == nil)
     }
+
+    // MARK: - x_prefill_reply
+
+    private func validatePrefill(_ body: String) throws -> ValidatedChatRequest {
+        let data = Data(#"{"model":"m",\#(body)}"#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        return try OpenAIRequestValidator.validate(request, modelID: "m")
+    }
+
+    @Test func aPrefillReplyRequestSplitsOffTheFinalAssistantMessage() throws {
+        let validated = try validatePrefill(
+            #"""
+            "x_prefill_reply":true,"messages":[{"role":"system","content":"s"},
+            {"role":"user","content":"q"},{"role":"assistant","content":"a"}]
+            """#)
+        #expect(validated.messages.map(\.role) == [.system, .user])
+        #expect(validated.prefillReply?.content == "a")
+        #expect(validated.maximumCompletionTokens == 1)
+    }
+
+    @Test func anOrdinaryRequestHasNoPrefillReply() throws {
+        let validated = try validatePrefill(
+            #""messages":[{"role":"user","content":"q"},{"role":"assistant","content":"a"}]"#)
+        #expect(validated.prefillReply == nil)
+        #expect(validated.messages.count == 2)
+    }
+
+    @Test func aPrefillReplyThatCannotBeCommittedIsRefused() {
+        let refused = [
+            // streaming
+            #""stream":true,"x_prefill_reply":true,"messages":[{"role":"user","content":"q"},{"role":"assistant","content":"a"}]"#,
+            // the reply is not last
+            #""x_prefill_reply":true,"messages":[{"role":"assistant","content":"a"},{"role":"user","content":"q"}]"#,
+            // nothing before the reply
+            #""x_prefill_reply":true,"messages":[{"role":"assistant","content":"a"}]"#,
+            // an empty reply
+            #""x_prefill_reply":true,"messages":[{"role":"user","content":"q"},{"role":"assistant","content":"  "}]"#,
+            // two assistant turns in a row
+            #""x_prefill_reply":true,"messages":[{"role":"user","content":"q"},{"role":"assistant","content":"a"},{"role":"assistant","content":"b"}]"#,
+        ]
+        for body in refused {
+            #expect(throws: ServerRequestError.self, "\(body)") { _ = try validatePrefill(body) }
+        }
+    }
 }
