@@ -6,39 +6,39 @@
 #   benchmark/memval_run.sh book            # summary, auto, minimal, full
 #   benchmark/memval_run.sh pong full       # one arm
 #
-# The install: TINYTITAN_MEMVAL_MODEL=ornith|qwen36|agentworld (default qwen36)
-# and TINYTITAN_MEMVAL_QUANT=4|8 (default 4). TINYTITAN_MEMVAL_ARMS="summary auto"
+# The install: EMONE_MEMVAL_MODEL=ornith|qwen36|agentworld (default qwen36)
+# and EMONE_MEMVAL_QUANT=4|8 (default 4). EMONE_MEMVAL_ARMS="summary auto"
 # limits the arms. Results go under .build/benchmark-logs/memory-<bench>-
-# <label>/ where the label is TINYTITAN_MEMVAL_LABEL or "<model>-<quant>bit".
+# <label>/ where the label is EMONE_MEMVAL_LABEL or "<model>-<quant>bit".
 #
 # Each arm gets a freshly started server with its own configuration and its
 # own empty memory directory under the scratch root, so nothing an arm writes
-# can reach another arm or the user's real ~/.tinytitan/memory. The server is
+# can reach another arm or the user's real ~/.emone/memory. The server is
 # stopped between arms. Never build while this is running.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BENCH="${1:?pong|book}"
 ONLY="${2:-}"
-PORT="${TINYTITAN_PORT:-8096}"
-MODEL="${TINYTITAN_MEMVAL_MODEL:-qwen36}"
-QUANT="${TINYTITAN_MEMVAL_QUANT:-4}"
+PORT="${EMONE_PORT:-8096}"
+MODEL="${EMONE_MEMVAL_MODEL:-qwen36}"
+QUANT="${EMONE_MEMVAL_QUANT:-4}"
 case "$MODEL" in
   ornith|qwen36|agentworld) : ;;
-  *) echo "TINYTITAN_MEMVAL_MODEL must be ornith, qwen36 or agentworld" >&2; exit 2 ;;
+  *) echo "EMONE_MEMVAL_MODEL must be ornith, qwen36 or agentworld" >&2; exit 2 ;;
 esac
 # One launcher for every model and client now; `codex` keeps the agent loop,
 # which is what these benchmarks drove before.
 LAUNCH=("$ROOT/tools/server_launcher.sh" codex full "$MODEL" "$QUANT" default off)
 [[ -x "${LAUNCH[0]}" ]] || { echo "no launcher at ${LAUNCH[0]}" >&2; exit 2; }
-LABEL="${TINYTITAN_MEMVAL_LABEL:-$MODEL-${QUANT}bit}"
-SCRATCH="${TINYTITAN_MEMVAL_SCRATCH:-$ROOT/.build/benchmark-logs/memval-scratch-$LABEL}"
+LABEL="${EMONE_MEMVAL_LABEL:-$MODEL-${QUANT}bit}"
+SCRATCH="${EMONE_MEMVAL_SCRATCH:-$ROOT/.build/benchmark-logs/memval-scratch-$LABEL}"
 # One results directory per benchmark and install. `pong` and `book` keep the
 # names their recorded runs already carry, because tools that read those runs
 # -- the simulator, the watchdog calibration -- glob for them.
 case "$BENCH" in
   pong)  BENCH_DIR=value ;;
   book|smoke) BENCH_DIR=book ;;
-  master) BENCH_DIR="${TINYTITAN_MASTER_SCENARIO:?set TINYTITAN_MASTER_SCENARIO}" ;;
+  master) BENCH_DIR="${EMONE_MASTER_SCENARIO:?set EMONE_MASTER_SCENARIO}" ;;
   *)     BENCH_DIR="$BENCH" ;;
 esac
 LOGS="$ROOT/.build/benchmark-logs/memory-$BENCH_DIR-$LABEL"
@@ -52,41 +52,41 @@ case "$BENCH" in
   projects) SCRIPT="$ROOT/benchmark/memory_projects.py"; ARMS=(control auto) ;;
   volume)  SCRIPT="$ROOT/benchmark/memory_volume.py";   ARMS=(control auto full) ;;
   # The ten master prompts: one scenario per invocation, named by
-  # TINYTITAN_MASTER_SCENARIO (see benchmark/memval_master.sh).
+  # EMONE_MASTER_SCENARIO (see benchmark/memval_master.sh).
   master)  SCRIPT="$ROOT/benchmark/memory_master.py";   ARMS=(summary auto) ;;
   *) echo "usage: $0 smoke|pong|book|correct|projects|volume|master [arm]" >&2; exit 2 ;;
 esac
 [[ -n "$ONLY" ]] && ARMS=("$ONLY")
-if [[ -n "${TINYTITAN_MEMVAL_ARMS:-}" && "$BENCH" != smoke ]]; then
-  read -r -a ARMS <<< "$TINYTITAN_MEMVAL_ARMS"
+if [[ -n "${EMONE_MEMVAL_ARMS:-}" && "$BENCH" != smoke ]]; then
+  read -r -a ARMS <<< "$EMONE_MEMVAL_ARMS"
 fi
 # Repeats. Only meaningful with sampling on: at temperature 0 a repeat is the
 # same output, so the default leaves temperature to the server, which is what
-# a real client does. TINYTITAN_MEMVAL_TEMPERATURE=0 pins it for a determinism
+# a real client does. EMONE_MEMVAL_TEMPERATURE=0 pins it for a determinism
 # check.
-RUNS="${TINYTITAN_MEMVAL_RUNS:-3}"
+RUNS="${EMONE_MEMVAL_RUNS:-3}"
 # Where the run numbering starts. Repeats of one configuration have to be
 # interleaved with the others to be worth anything -- three of A then three
 # of B measures the order as much as the arms -- and interleaving means
 # invoking this script once per run, which would otherwise overwrite run 1
 # every time.
-FIRST_RUN="${TINYTITAN_MEMVAL_FIRST_RUN:-1}"
+FIRST_RUN="${EMONE_MEMVAL_FIRST_RUN:-1}"
 [[ "$BENCH" == smoke ]] && RUNS=1
 # The server distils a session after this much quiet. Two minutes in
 # production; here the harness waits for the log line, so keep it short.
-IDLE="${TINYTITAN_MEMVAL_CONSOLIDATION_IDLE:-5}"
+IDLE="${EMONE_MEMVAL_CONSOLIDATION_IDLE:-5}"
 
-BINARY="$ROOT/.build/release/TinyTitanServer"
+BINARY="$ROOT/.build/release/EmoneServer"
 if [[ ! -x "$BINARY" ]]; then
-  echo "ERROR: no release binary at $BINARY; run: swift build -c release --product TinyTitanServer" >&2
+  echo "ERROR: no release binary at $BINARY; run: swift build -c release --product EmoneServer" >&2
   exit 1
 fi
 # The release binary must be newer than every source file, or the arms
 # measure whatever was last built. This is the check that was missing when
 # three arms of numbers turned out to be the same arm.
-# TinyTitanMemoryTool is the CLI; the server does not link it, so SwiftPM will
+# EmoneMemoryTool is the CLI; the server does not link it, so SwiftPM will
 # not relink the server when it changes, and it is not measured here.
-newest_source="$(find "$ROOT/sources" -path "$ROOT/sources/TinyTitanMemoryTool" -prune -o -name '*.swift' -newer "$BINARY" -print | head -1)"
+newest_source="$(find "$ROOT/sources" -path "$ROOT/sources/EmoneMemoryTool" -prune -o -name '*.swift' -newer "$BINARY" -print | head -1)"
 if [[ -n "$newest_source" ]]; then
   echo "ERROR: $newest_source is newer than the release binary; rebuild first." >&2
   exit 1
@@ -100,17 +100,17 @@ fi
 # compiled into a rebuild halfway through a ten-world run. So refuse a dirty
 # tree unless that is deliberate, and record what was actually measured.
 DIRTY="$(git -C "$ROOT" status --porcelain)"
-if [[ -n "$DIRTY" && "${TINYTITAN_MEMVAL_ALLOW_DIRTY:-0}" != "1" ]]; then
+if [[ -n "$DIRTY" && "${EMONE_MEMVAL_ALLOW_DIRTY:-0}" != "1" ]]; then
   echo "ERROR: the working tree is dirty, so a build from it is not the committed engine:" >&2
   printf '%s\n' "$DIRTY" | sed 's/^/       /' >&2
-  echo "       commit or stash the changes and rebuild, or set TINYTITAN_MEMVAL_ALLOW_DIRTY=1" >&2
+  echo "       commit or stash the changes and rebuild, or set EMONE_MEMVAL_ALLOW_DIRTY=1" >&2
   echo "       to measure a dirty tree deliberately." >&2
   exit 1
 fi
 {
   echo "commit: $(git -C "$ROOT" rev-parse HEAD)"
   echo "dirty: $([[ -n "$DIRTY" ]] && echo yes || echo no)"
-  echo "dirty_allowed: ${TINYTITAN_MEMVAL_ALLOW_DIRTY:-0}"
+  echo "dirty_allowed: ${EMONE_MEMVAL_ALLOW_DIRTY:-0}"
   echo "binary: $BINARY"
   echo "binary_sha256: $(shasum -a 256 "$BINARY" | awk '{print $1}')"
   echo "recorded_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -129,7 +129,7 @@ listening_pids() { lsof -ti :"$PORT" -sTCP:LISTEN 2>/dev/null || true; }
 stop_server() {
   local pid
   for pid in $(listening_pids); do
-    ps -p "$pid" -o command= | grep -q TinyTitanServer && kill -TERM "$pid" 2>/dev/null || true
+    ps -p "$pid" -o command= | grep -q EmoneServer && kill -TERM "$pid" 2>/dev/null || true
   done
   for _ in $(seq 1 90); do
     [[ -z "$(listening_pids)" ]] && break
@@ -199,18 +199,18 @@ for ARM in "${ARMS[@]+"${ARMS[@]}"}"; do
   fi
   (
     cd "$ROOT"
-    TINYTITAN_PORT="$PORT" TINYTITAN_MEMORY="$MEMORY" TINYTITAN_MEMORY_TOOLS="$TOOLS" \
-    TINYTITAN_MEMORY_DIR="$MEMDIR" TINYTITAN_MEMORY_JOURNAL=1 \
-    TINYTITAN_MEMORY_GUARD="${TINYTITAN_MEMORY_GUARD:-1}" \
-    TINYTITAN_MEMORY_CONSOLIDATION=1 TINYTITAN_MEMORY_CONSOLIDATION_IDLE_SECONDS="$IDLE" \
+    EMONE_PORT="$PORT" EMONE_MEMORY="$MEMORY" EMONE_MEMORY_TOOLS="$TOOLS" \
+    EMONE_MEMORY_DIR="$MEMDIR" EMONE_MEMORY_JOURNAL=1 \
+    EMONE_MEMORY_GUARD="${EMONE_MEMORY_GUARD:-1}" \
+    EMONE_MEMORY_CONSOLIDATION=1 EMONE_MEMORY_CONSOLIDATION_IDLE_SECONDS="$IDLE" \
       exec "${LAUNCH[@]+"${LAUNCH[@]}"}"
   ) >"$SERVER_LOG" 2>&1 &
   LAUNCHER_PID=$!
   wait_ready
   grep -m1 "memory enabled" "$SERVER_LOG" || echo "(memory line: none, as expected for $ARM)"
 
-  TINYTITAN_PORT="$PORT" TINYTITAN_MEMVAL_MEMDIR="$MEMDIR" TINYTITAN_MEMVAL_RUN="$RUN" \
-  TINYTITAN_MEMVAL_SERVER_LOG="$SERVER_LOG" TINYTITAN_MEMVAL_RESULTS="$LOGS" \
+  EMONE_PORT="$PORT" EMONE_MEMVAL_MEMDIR="$MEMDIR" EMONE_MEMVAL_RUN="$RUN" \
+  EMONE_MEMVAL_SERVER_LOG="$SERVER_LOG" EMONE_MEMVAL_RESULTS="$LOGS" \
     python3 "$SCRIPT" "$ARM" 2>&1 | tee "$LOGS/run-$ARM-r$RUN.log"
   stop_server
   echo "--- consolidations for $ARM run $RUN:"
@@ -218,4 +218,4 @@ for ARM in "${ARMS[@]+"${ARMS[@]}"}"; do
 done
 done
 
-[[ "$BENCH" == smoke ]] || { echo; echo "=== report ($LABEL)"; TINYTITAN_MEMVAL_RESULTS="$LOGS" python3 "$SCRIPT" report; }
+[[ "$BENCH" == smoke ]] || { echo; echo "=== report ($LABEL)"; EMONE_MEMVAL_RESULTS="$LOGS" python3 "$SCRIPT" report; }

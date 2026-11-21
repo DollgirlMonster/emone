@@ -20,7 +20,7 @@ showed the criterion was wrong.
 Four defects were found by running them, and every one was invisible to the
 unit suite:
 
-1. **`X-TinyTitan-Workspace` was documented in three places and read in none.**
+1. **`X-Emone-Workspace` was documented in three places and read in none.**
    Two projects sharing a server silently shared a memory store. Found by
    the isolation scenario refusing to run.
 2. **The first fix for it compiled, shipped and did nothing** — the handler
@@ -102,7 +102,7 @@ worth watching, but the ranking is the gate.
 Measured, the ranking is emphatic: on `guard-step0-ornith` the v3 store
 would have known 61% of the answers and the guarded store 98%.
 
-**6. CPU engine parity.** `TinyTitanBench cpu35` against
+**6. CPU engine parity.** `EmoneBench cpu35` against
 `tools/qwen35_reference.py`. Pass: cosine ≥ 0.99999 on every check, both
 widths.
 
@@ -178,7 +178,7 @@ the ping-pong watchdog gets its first real exposure.
 ## Part C — the two features, watched across every run above
 
 **15. Watchdogs observing.** Every scenario run in Part B runs with
-`TINYTITAN_WATCHDOGS=1`. Pass: no trip that hand review calls a false positive.
+`EMONE_WATCHDOGS=1`. Pass: no trip that hand review calls a false positive.
 A trip that is real is a finding, not a failure.
 
 **16. Guard step 0.** `benchmark/guard_source_rate.py` on every run's

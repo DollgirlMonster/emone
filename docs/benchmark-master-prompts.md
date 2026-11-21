@@ -28,7 +28,7 @@ from the truth.
 
 ```bash
 # all ten, one run each, shipped arms (summary + memory auto)
-TINYTITAN_MEMVAL_MODEL=qwen36 TINYTITAN_MEMVAL_QUANT=4 benchmark/memval_master.sh
+EMONE_MEMVAL_MODEL=qwen36 EMONE_MEMVAL_QUANT=4 benchmark/memval_master.sh
 benchmark/memval_master.sh ledger filing            # named scenarios
 python3 benchmark/memory_master.py report-all       # the picture, all ten
 ```

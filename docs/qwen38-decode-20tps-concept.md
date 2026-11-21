@@ -5,7 +5,7 @@
 # MEASURED, 2026-09-02: this document's inputs were wrong
 
 Everything below this line predates the profile it asks for in "Step 0". That
-profile has now been run on this model (`tinytitan_overlap_measure`, 256-token warm
+profile has now been run on this model (`emone_overlap_measure`, 256-token warm
 request, 4-bit, 24 GiB M3) and it falsifies three of the inputs above. The
 analysis method was sound; the numbers fed into it were not.
 
@@ -45,7 +45,7 @@ near unified-memory bandwidth, so there is no dispatch-fusion win hiding there.
 
 ## What was tried, and closed
 
-A 15-arm sweep (`tinytitan_knob_sweep.py`, baseline drift 2.9%) plus two defect
+A 15-arm sweep (`emone_knob_sweep.py`, baseline drift 2.9%) plus two defect
 fixes. **Nothing improved throughput correctly.**
 
 | lever | result |
@@ -217,8 +217,8 @@ real figure was 0.59. Both were wrong by more than an order of magnitude.
 
 So the first work item is an instrumented token for *this* model: exposed
 expert I/O, GPU busy, control-plane gaps, cache hit rate at the shipped 96
-slots, and the hit-rate curve past 128. `benchmark/tinytitan_profile.py` and
-`tinytitan_slots_ab.py` already exist for this.
+slots, and the hit-rate curve past 128. `benchmark/emone_profile.py` and
+`emone_slots_ab.py` already exist for this.
 
 If that profile shows exposed I/O far below the ~100 ms this arithmetic
 predicts, the model is not I/O-bound in the way assumed here and this whole

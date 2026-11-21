@@ -2,7 +2,7 @@
 
 > **Implemented 2026-09-01.** `prepare_qwen38.py --reuse-ngram-table
 > <dir-or-file>` hardlinks an existing table and skips the 31 checkpoint
-> shards that carry nothing else; `TinyTitanRepack --share-ngram-table` links it
+> shards that carry nothing else; `EmoneRepack --share-ngram-table` links it
 > into the install rather than copying it. Linking the two copies that already
 > existed on this machine recovered **95 GiB** (138 -> 233 GiB free), verified
 > byte-identical with `cmp` beforehand.
@@ -62,7 +62,7 @@ a truncated table would otherwise link happily.
 
 Two independent changes; either is useful without the other.
 
-### 1. `TinyTitanRepack --share-ngram-table <install>`
+### 1. `EmoneRepack --share-ngram-table <install>`
 
 `RepackPlanner.passthroughRequirements` declares `ngram_table.bin`;
 `RemoteStreamingRepacker` preallocates each passthrough destination with
@@ -124,7 +124,7 @@ close enough to reuse.
 
 Qwen's FP8 release is not a shortcut worth taking. Its config excludes 943
 modules, leaving everything except the routed experts in bf16 -- so the only
-tensors it quantizes are the ones TinyTitan streams -- and its [128, 128] blocks do
+tensors it quantizes are the ones emone streams -- and its [128, 128] blocks do
 not map onto affine group-64. Building from it would store 8 bits per weight
 carrying E4M3's 3-bit mantissa: the full bandwidth cost of 8-bit on an
 I/O-bound decode, without the quality that is the only reason to pay it.

@@ -8,7 +8,7 @@ surgery (replace the section, keep everything else, back it up), and its refusal
 to describe nothing.
 
 They run against `tools/testdata/catalog-example.json` through
-`TINYTITAN_CATALOG_JSON`, so they need no model, no built server and no network.
+`EMONE_CATALOG_JSON`, so they need no model, no built server and no network.
 
 Run from this directory, like the other benchmark tests:
 
@@ -45,10 +45,10 @@ def run_route(
 ) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
     if catalog is None:
-        environment.pop("TINYTITAN_CATALOG_JSON", None)
+        environment.pop("EMONE_CATALOG_JSON", None)
     else:
-        environment["TINYTITAN_CATALOG_JSON"] = str(catalog)
-    environment.pop("TINYTITAN_MODELS_DIR", None)
+        environment["EMONE_CATALOG_JSON"] = str(catalog)
+    environment.pop("EMONE_MODELS_DIR", None)
     run = subprocess.run(
         ["bash", str(SCRIPT), *args], text=True, capture_output=True, check=False, env=environment
     )
@@ -103,7 +103,7 @@ class RouteBlockTests(unittest.TestCase):
     def test_the_three_switches_and_the_usage_contract_are_set(self) -> None:
         block = run_route("--models", "qwen38").stdout
         self.assertIn("      baseURL: http://127.0.0.1:8080/v1", block)
-        self.assertIn("        authorization: Bearer tinytitan-local", block)
+        self.assertIn("        authorization: Bearer emone-local", block)
         self.assertIn("      streamIdleTimeoutMs: 3600000", block)
         self.assertIn("            thinkingFormat: chat-template", block)
         self.assertIn("              enable_thinking: { $var: thinking.enabled }", block)
@@ -166,7 +166,7 @@ class SettingsSurgeryTests(unittest.TestCase):
 
         if yaml is not None:
             parsed = yaml.safe_load(text)
-            route = parsed["llm-pi-ai"]["providers"]["tinytitan"]
+            route = parsed["llm-pi-ai"]["providers"]["emone"]
             self.assertEqual(route["api"], "openai-completions")
             self.assertEqual(route["baseURL"], "http://127.0.0.1:8080/v1")
             self.assertEqual(route["reasoning"], "medium")
@@ -214,11 +214,11 @@ class InstalledLayoutTests(unittest.TestCase):
 
     A checkout builds into `.build/release` and models into `models/`; an install
     from the release tarball keeps both one level above the tools (`bin/`,
-    `models/`) and normally has `TINYTITAN_BIN_DIR`/`TINYTITAN_MODELS_DIR` set by
+    `models/`) and normally has `EMONE_BIN_DIR`/`EMONE_MODELS_DIR` set by
     the launcher it wrote. The installer's own advice after a model lands is to
     re-run `tools/dsh_local.sh ensure` from a shell, where neither variable is
     set: before 2026-09-25 that run died with "no server binary at
-    …/.build/release/TinyTitanServer", which a user reads as "no model".
+    …/.build/release/EmoneServer", which a user reads as "no model".
     """
 
     def setUp(self) -> None:
@@ -235,7 +235,7 @@ class InstalledLayoutTests(unittest.TestCase):
         """An engine that records the arguments it was called with."""
         catalog = self.root / "stub-catalog.json"
         catalog.write_text(catalog_body)
-        stub = self.root / "bin" / "TinyTitanServer"
+        stub = self.root / "bin" / "EmoneServer"
         stub.write_text(
             f'#!/bin/sh\nprintf "%s\\n" "$@" > "{self.root}/engine-args.txt"\ncat "{catalog}"\n'
         )
@@ -245,7 +245,7 @@ class InstalledLayoutTests(unittest.TestCase):
         return (self.root / "engine-args.txt").read_text().splitlines()
 
     def run_installed(self, *args: str) -> subprocess.CompletedProcess[str]:
-        # A deliberately bare environment: no TINYTITAN_* variables at all.
+        # A deliberately bare environment: no EMONE_* variables at all.
         environment = {"PATH": os.environ["PATH"], "HOME": str(self.root)}
         return subprocess.run(
             ["bash", str(self.root / "src" / "tools" / "dsh_route.sh"), *args],

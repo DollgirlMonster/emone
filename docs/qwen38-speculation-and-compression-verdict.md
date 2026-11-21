@@ -56,7 +56,7 @@ profile line is identical in both arms; the only extra profile line is the
 sidecar's own. So this is the verify path, not a configuration difference.
 
 The repo's own Track B3 gate requires **byte-identical greedy output and >=10%
-median gain** (`benchmark/tinytitan_mtp_b3_qualification.py`). This measurement
+median gain** (`benchmark/emone_mtp_b3_qualification.py`). This measurement
 fails both halves. I did not run the B3 harness itself; the A/B above is the
 evidence. Prior art agrees on the loss and explains it: the 2026-09-18
 measurement put a pair pass at 2.238x a scalar token for 1.869 emitted tokens
@@ -211,7 +211,7 @@ net loss, and under the one codec that would win by ~1% it cannot run there.
 
 ## Item 3 — the I/O path: split reads and separated pools cannot add bandwidth
 
-Code facts (`sources/TinyTitanKernelsC/expert_io.c`): each miss is one `pread` of
+Code facts (`sources/EmoneKernelsC/expert_io.c`): each miss is one `pread` of
 the whole 2,768,896 B expert; a pool of 4 workers with one fd each claims indices
 under a mutex; `submit_batch` is **single-batch-at-a-time and synchronous**, so a
 demand batch waits on `batch_idle` behind any in-flight speculative batch; and

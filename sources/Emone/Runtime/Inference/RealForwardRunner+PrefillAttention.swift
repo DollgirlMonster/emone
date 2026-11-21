@@ -1,0 +1,413 @@
+import Foundation
+import Metal
+
+/// Chunked-prefill attention encoding, split out of `RealForwardRunner+Prefill.swift`.
+///
+/// The Gated-DeltaNet branch and the full-attention branch of one chunk, each a
+/// single ordered pipeline over shared scratch. Pure code motion: the encoder
+/// bodies are unchanged, moved so the chunk executor and the KV/head stages each
+/// have their own file.
+
+extension RealForwardRunner {
+    /// Gated-DeltaNet (linear attention) branch of one chunked-prefill layer.
+    ///
+    /// lint:allow-long one layer's linear-attention pipeline is a single
+    /// ordered sequence -- in-projection, causal conv, QK norm, delta step,
+    /// gated norm, out-projection -- sharing scratch buffers at every step.
+    /// Splitting it would thread a dozen buffers through sub-functions to make
+    /// a line count smaller while making the data flow harder to follow.
+    func encodeLinearAttentionPrefill(
+        cb: inout MTLCommandBuffer, layer L: Int,
+        views: LayerPrefillQKVViews, scratch: PrefillChunkScratchBuffers,
+        tokenCount t: Int, hiddenSize D: Int,
+        snapshotGDNAfterFirstToken: Bool, useTwoRowProjection: Bool,
+        slot: Int = 0
+    ) throws {
+        // Gated-DeltaNet linear attention over the chunk: batched
+        // projections, causal conv (+ tail carry), delta-rule
+        // recurrence, gated norm, out_proj. No KV writes, no
+        // attention, no blit.
+        guard let gdn, let gdnState else {
+            throw ModelError.internalInconsistency(
+                detail:
+                    "linear-attention layer \(L) without GDN kernels (arch mask misconfiguration)")
+        }
+        // `LayerPrefillQKVViews` fills the linear_attn slots exactly
+        // when `layerIsLinear(L)`, so these are provably non-nil; the
+        // guard turns a future arch/view regression into a thrown
+        // error instead of a force-unwrap trap.
+        guard let linQKV = views.linQKV,
+            let linZ = views.linZ,
+            let linA = views.linA,
+            let linB = views.linB,
+            let linConv = views.linConv,
+            let linALog = views.linALog,
+            let linDtBias = views.linDtBias,
+            let linNorm = views.linNorm,
+            let linOut = views.linOut
+        else {
+            throw ModelError.internalInconsistency(
+                detail: "linear-attention layer \(L) is missing a required linear_attn tensor view")
+        }
+        let la = cfg.linearAttention
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .q,
+            weightBits: model.gdnProjectionWeightBits,
+            weights: linQKV,
+            x: scratch.normed,
+            y: scratch.q,
+            rows: la.qkvDim,
+            columns: D,
+            tokenCount: t,
+            xStrideElements: D,
+            yStrideElements: la.qkvDim,
+            useTwoRowProjection: useTwoRowProjection)
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .kv,
+            weightBits: model.gdnProjectionWeightBits,
+            weights: linZ,
+            x: scratch.normed,
+            y: scratch.gdnZ,
+            rows: la.valueDim,
+            columns: D,
+            tokenCount: t,
+            xStrideElements: D,
+            yStrideElements: la.valueDim,
+            useTwoRowProjection: useTwoRowProjection)
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .kv,
+            weightBits: model.gdnProjectionWeightBits,
+            weights: linA,
+            x: scratch.normed,
+            y: scratch.gdnA,
+            rows: la.numVHeads,
+            columns: D,
+            tokenCount: t,
+            xStrideElements: D,
+            yStrideElements: la.numVHeads,
+            useTwoRowProjection: useTwoRowProjection)
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .kv,
+            weightBits: model.gdnProjectionWeightBits,
+            weights: linB,
+            x: scratch.normed,
+            y: scratch.gdnB,
+            rows: la.numVHeads,
+            columns: D,
+            tokenCount: t,
+            xStrideElements: D,
+            yStrideElements: la.numVHeads,
+            useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_in_proj")
+        let convW = linConv
+        let tail = gdnState.convTailSlot(layer: L, slot: slot)
+        try gdn.encodeConvPrefill(
+            commandBuffer: cb,
+            tail: tail.buffer, tailOffset: tail.offset,
+            qkvRows: scratch.q,
+            convWeight: convW.buffer,
+            convWeightOffset: Int(convW.offset),
+            out: scratch.gdnConvOut,
+            rows: t)
+        if snapshotGDNAfterFirstToken {
+            try gdn.encodeConvTailCheckpoint(
+                commandBuffer: cb,
+                tail: tail.buffer, tailOffset: tail.offset,
+                qkvRows: scratch.q,
+                checkpoint: gdnState.speculativeConvTailBuffer(layer: L))
+        }
+        try gdn.encodeConvTailUpdate(
+            commandBuffer: cb,
+            tail: tail.buffer, tailOffset: tail.offset,
+            qkvRows: scratch.q,
+            rows: t)
+        try gdn.encodeQKNorm(
+            commandBuffer: cb,
+            convOut: scratch.gdnConvOut,
+            rows: t)
+        let aLog = linALog
+        let dtBias = linDtBias
+        let state = gdnState.stateSlot(layer: L, slot: slot)
+        try gdn.encodeDeltaStepPrefill(
+            commandBuffer: cb,
+            convOut: scratch.gdnConvOut,
+            aProj: scratch.gdnA,
+            bProj: scratch.gdnB,
+            aLog: aLog.buffer,
+            aLogOffset: Int(aLog.offset),
+            dtBias: dtBias.buffer,
+            dtBiasOffset: Int(dtBias.offset),
+            state: state.buffer, stateOffset: state.offset,
+            checkpointState: snapshotGDNAfterFirstToken
+                ? gdnState.speculativeStateBuffer(layer: L) : nil,
+            y: scratch.gdnY,
+            rows: t)
+        let gatedNormW = linNorm
+        try gdn.encodeGatedNorm(
+            commandBuffer: cb,
+            y: scratch.gdnY,
+            z: scratch.gdnZ,
+            weight: gatedNormW.buffer,
+            weightOffset: Int(gatedNormW.offset),
+            out: scratch.attentionOutput,
+            rows: t)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_scan")
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .o,
+            weightBits: model.gdnProjectionWeightBits,
+            weights: linOut,
+            x: scratch.attentionOutput,
+            y: scratch.h1,
+            rows: D,
+            columns: la.valueDim,
+            tokenCount: t,
+            xStrideElements: la.valueDim,
+            yStrideElements: D,
+            useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_out_proj")
+    }
+
+    /// Softmax-attention branch of one chunked-prefill layer.
+    ///
+    /// lint:allow-long same shape as the linear branch: QKV projection, RoPE,
+    /// KV-cache write and attention are one ordered pipeline over shared
+    /// scratch, and the intermediate buffers have no meaning outside it.
+    func encodeFullAttentionPrefill(
+        cb: inout MTLCommandBuffer, layer L: Int,
+        views: LayerPrefillQKVViews, scratch: PrefillChunkScratchBuffers,
+        tokenCount t: Int, hiddenSize D: Int, startPosition: Int,
+        isFull: Bool, headDim: Int, numKVHeads: Int,
+        qDim: Int, kvDim: Int, rmsEps eps: Float,
+        useTwoRowProjection: Bool,
+        keepMask: QSASelection? = nil,
+        slot: Int = 0
+    ) throws {
+        let qProjRows = cfg.attnOutputGate ? 2 * qDim : qDim
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .q,
+            weightBits: model.qoProjectionWeightBits,
+            weights: try views.require(views.q, "q"),
+            x: scratch.normed,
+            y: scratch.q,
+            rows: qProjRows,
+            columns: D,
+            tokenCount: t,
+            xStrideElements: D,
+            yStrideElements: qProjRows,
+            useTwoRowProjection: useTwoRowProjection)
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .kv,
+            weightBits: model.kvProjectionWeightBits,
+            weights: try views.require(views.k, "k"),
+            x: scratch.normed,
+            y: scratch.kStage,
+            rows: kvDim,
+            columns: D,
+            tokenCount: t,
+            xStrideElements: D,
+            yStrideElements: kvDim,
+            useTwoRowProjection: useTwoRowProjection)
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .kv,
+            weightBits: model.kvProjectionWeightBits,
+            weights: try views.require(views.v, "v"),
+            x: scratch.normed,
+            y: scratch.vStage,
+            rows: kvDim,
+            columns: D,
+            tokenCount: t,
+            xStrideElements: D,
+            yStrideElements: kvDim,
+            useTwoRowProjection: useTwoRowProjection)
+        if activationDumpActive(position: startPosition) {
+            dumpActivationDeferred(
+                "L\(L)_in", scratch.normed,
+                count: t * D, position: startPosition)
+            dumpActivationDeferred(
+                "L\(L)_qpacked", scratch.q,
+                count: t * qProjRows, position: startPosition)
+            dumpActivationDeferred(
+                "L\(L)_kraw", scratch.kStage,
+                count: t * kvDim, position: startPosition)
+            dumpActivationDeferred(
+                "L\(L)_vraw", scratch.vStage,
+                count: t * kvDim, position: startPosition)
+        }
+
+        try prefillSplitPoint(&cb, role: "prefill_split_attn_qkv_proj")
+        // The attention input Q: the packed q_proj output is split
+        // into per-head query/gate halves for gated architectures.
+        let attnQ: MTLBuffer
+        if cfg.attnOutputGate {
+            try requireElementwise().encodeSplitQGate(
+                commandBuffer: cb,
+                packed: scratch.q,
+                q: scratch.attnQ,
+                gate: scratch.attnGate,
+                heads: cfg.numHeads,
+                dim: headDim,
+                rows: t)
+            attnQ = scratch.attnQ
+        } else {
+            attnQ = scratch.q
+        }
+
+        if cfg.ropeNeoxSubdim {
+            let rotaryDim = UInt32(Double(headDim) * cfg.partialRotaryFactor)
+            try prefillQKVEpilogue.encodeNeoxSubdimNoVNorm(
+                commandBuffer: cb,
+                q: attnQ,
+                k: scratch.kStage,
+                qWeight: try views.require(views.qNorm, "qNorm").buffer,
+                qWeightOffset: Int(try views.require(views.qNorm, "qNorm").offset),
+                kWeight: try views.require(views.kNorm, "kNorm").buffer,
+                kWeightOffset: Int(try views.require(views.kNorm, "kNorm").offset),
+                startPosition: UInt32(startPosition),
+                queryCount: UInt32(t),
+                headDim: UInt32(headDim),
+                numQHeads: UInt32(cfg.numHeads),
+                numKVHeads: UInt32(numKVHeads),
+                qTokenStrideElements: UInt32(qDim),
+                kvTokenStrideElements: UInt32(kvDim),
+                theta: Float(cfg.fullRopeTheta),
+                rotaryDim: rotaryDim,
+                eps: eps)
+        } else {
+            let rotatedPairs =
+                isFull
+                ? UInt32(Double(cfg.fullHeadDim) * cfg.partialRotaryFactor / 2.0)
+                : UInt32(headDim / 2)
+            try prefillQKVEpilogue.encode(
+                commandBuffer: cb,
+                q: attnQ,
+                k: scratch.kStage,
+                v: scratch.vStage,
+                qWeight: try views.require(views.qNorm, "qNorm").buffer,
+                qWeightOffset: Int(try views.require(views.qNorm, "qNorm").offset),
+                kWeight: try views.require(views.kNorm, "kNorm").buffer,
+                kWeightOffset: Int(try views.require(views.kNorm, "kNorm").offset),
+                startPosition: UInt32(startPosition),
+                queryCount: UInt32(t),
+                headDim: UInt32(headDim),
+                numQHeads: UInt32(cfg.numHeads),
+                numKVHeads: UInt32(numKVHeads),
+                qTokenStrideElements: UInt32(qDim),
+                kvTokenStrideElements: UInt32(kvDim),
+                theta: isFull ? Float(cfg.fullRopeTheta) : Float(cfg.ropeTheta),
+                rotatedPairs: rotatedPairs,
+                eps: eps)
+        }
+
+        if let kv {
+            let bytes = t * kvDim * MemoryLayout<Float16>.stride
+            try copyPrefillKVToCache(
+                commandBuffer: cb,
+                kv: kv,
+                layer: L,
+                startPosition: startPosition,
+                tokenCount: t,
+                slot: slot,
+                keySource: scratch.kStage,
+                valueSource: scratch.vStage,
+                bytesPerToken: bytes / t)
+        }
+        try prefillSplitPoint(&cb, role: "prefill_split_attn_rope_kv")
+        let kvView = kv?.keyView(
+            layer: L, slot: slot,
+            validTokenCount: startPosition + t)
+        let params = PrefillAttentionParams(
+            startPosition: UInt32(startPosition),
+            queryCount: UInt32(t),
+            headDim: UInt32(headDim),
+            numQHeads: UInt32(cfg.numHeads),
+            numKVHeads: UInt32(numKVHeads),
+            kvValidCount: UInt32(startPosition + t),
+            slidingWindow: isFull ? UInt32(startPosition + t) : UInt32(cfg.slidingWindow),
+            kvTokenStrideElements: UInt32(kvDim),
+            qTokenStrideElements: UInt32(qDim),
+            oTokenStrideElements: UInt32(qDim),
+            scale: Float(cfg.attentionScale),
+            kvBits: UInt32(kvView?.precision.rawValue ?? 16),
+            kvTokenStrideBytes: UInt32(kvView?.stride ?? (kvDim * 2)),
+            kvValueBytes: UInt32(kvView?.valueBytes ?? (kvDim * 2)),
+            kvGroupSize: UInt32(
+                kvView?.groupSize
+                    ?? KVCacheManager.quantizationGroupSize))
+        if let kv {
+            let keyView = kv.keyView(
+                layer: L, slot: slot,
+                validTokenCount: startPosition + t)
+            let valueView = kv.valueView(
+                layer: L, slot: slot,
+                validTokenCount: startPosition + t)
+            let ringCapacity = kv.ringCapacity(layer: L)
+            let activeRingCapacity =
+                ringCapacity > 0 && startPosition + t > ringCapacity
+                ? UInt32(ringCapacity)
+                : 0
+            // Row tiles, each its own command buffer, so a deep chunk cannot
+            // hold the GPU long enough for macOS to kill it (see
+            // PrefillAttention.causalTileRows). Exact; a chunk of up to 4,096
+            // rows is still one dispatch.
+            cb = try prefillAttention.encodeCausalTiled(
+                commandBuffer: cb,
+                queue: ctx.queue,
+                q: attnQ,
+                k: keyView.buffer, kOffset: keyView.offset,
+                v: valueView.buffer, vOffset: valueView.offset,
+                out: scratch.attentionOutput,
+                params: params,
+                kvRingCapacity: activeRingCapacity,
+                keepMask: keepMask?.mask,
+                keepStride: keepMask?.maskStride ?? 0,
+                keepIndices: keepMask?.indices,
+                keepIndexStride: keepMask?.indexStride ?? 0,
+                keepCounts: keepMask?.counts,
+                path: keepMask == nil
+                    ? prefillAttentionPath
+                    // Only the tiled kernel
+                    // honours a selection.
+                    : .causalTiled,
+                // Every tile but the last runs in a buffer this layer never
+                // waits on directly; queue order completes them before the
+                // route readback, which drains them into the GPU timings.
+                onCommit: kernelGPUTimingsEnabled
+                    ? { [unowned self] in self.splitTimedBuffers.append(("prefill_attn_tiles", $0))
+                    }
+                    : nil)
+        } else {
+            throw PrefillError.chunkedUnsupported(
+                "chunked prefill attention requires a KV cache")
+        }
+        if cfg.attnOutputGate {
+            try requireElementwise().encodeSigmoidGateMul(
+                commandBuffer: cb,
+                out: scratch.attentionOutput,
+                gate: scratch.attnGate,
+                count: t * qDim)
+        }
+        try prefillSplitPoint(&cb, role: "prefill_split_attn_core")
+        try encodeAffineProjection(
+            commandBuffer: cb,
+            family: .o,
+            weightBits: model.qoProjectionWeightBits,
+            weights: try views.require(views.o, "o"),
+            x: scratch.attentionOutput,
+            y: scratch.h1,
+            rows: D,
+            columns: qDim,
+            tokenCount: t,
+            xStrideElements: qDim,
+            yStrideElements: D,
+            useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_attn_o_proj")
+    }
+}

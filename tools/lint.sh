@@ -361,7 +361,7 @@ PY
 # newer toolchain — or, worse, at a stale binary left behind by an older one,
 # where an `-x` guard passes and the wrong executable runs quietly. Both
 # happened: tools/install_models.sh refused to install on a fresh clone
-# (issue #8) while this checkout would have run a two-day-old TinyTitanRepack.
+# (issue #8) while this checkout would have run a two-day-old EmoneRepack.
 # `.build/release` is the stable spelling on both layouts.
 check_arch_path() {
   echo "== arch-path: no hardcoded SwiftPM triple in a build path =="

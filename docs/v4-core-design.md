@@ -1,4 +1,4 @@
-# TinyTitan v4.0 — core design
+# emone v4.0 — core design
 
 > Historical design record. For the implemented scheduler and measured current
 > decisions, see [v4.1 expert streaming](v4.1-expert-streaming-engine.md) and
@@ -89,7 +89,7 @@ then is there a basis for choosing a default budget.
 
 ## What the measurements say the limits are
 
-| resource | measured ceiling | what TinyTitan 3.8 achieves |
+| resource | measured ceiling | what emone 3.8 achieves |
 | --- | ---: | ---: |
 | memory bandwidth (compute path) | ~64 GB/s | ~65 GB/s during decode — **at the limit** |
 | **SSD, expert-sized reads** | **~3.2 GB/s** | **~0.62 GB/s — 5x headroom** |
@@ -168,7 +168,7 @@ than assumed. Running a saturating `pread` load during decode:
 GPU-busy rises **7.4%** under heavy I/O against **44.9%** under heavy compute, so
 I/O threads are roughly six times gentler on GPU clocks -- they block in the kernel
 instead of burning ALU. The 14.8% throughput drop in that test is the load
-generator consuming the entire 3.2 GB/s and starving TinyTitan's own fetches; it is
+generator consuming the entire 3.2 GB/s and starving emone's own fetches; it is
 contention from an external hog, not a cost the engine pays for using its own
 bandwidth. Budget the disk as a shared finite resource, but do not fear the threads.
 
@@ -235,7 +235,7 @@ a patch.
 
 Established in 3.8: moving the int4 GEMV to C99/NEON was **2.9x**, and hoisting a
 redundant per-group sum added another 16-20%. Swift's `SIMD8<Float>` does not lower
-to vector loads. So: Swift owns lifetime, actors, and orchestration; `TinyTitanKernelsC`
+to vector loads. So: Swift owns lifetime, actors, and orchestration; `EmoneKernelsC`
 owns anything with a per-weight inner loop. Metal owns the GPU.
 
 Not a blanket rewrite — Swift costs ~4.6 ms of a 47 ms token, and most of that is
@@ -317,7 +317,7 @@ while cached's 1.82 GB is 1.82 GB **plus** whatever the OS decided to hold. For 
 project whose purpose is leaving RAM free, the honest number is the one you can
 account for.
 
-20% for a footprint that is actually bounded is a good trade, and `TINYTITAN_BOUNDED_IO`
+20% for a footprint that is actually bounded is a good trade, and `EMONE_BOUNDED_IO`
 should become the default in v4.0.
 
 ## Separately: the default context costs 1.6x throughput
@@ -390,7 +390,7 @@ used `--max-context 8192`; this matrix uses the 262144 default, where the KV
 reservation is already large enough that adding slot memory pushes the machine into
 pressure. Under the real default, **a small slot cache is both faster and smaller.**
 
-So TinyTitan's shipped default of 64 slots is the wrong choice twice over: 16 slots is
+So emone's shipped default of 64 slots is the wrong choice twice over: 16 slots is
 ~35% faster *and* uses a quarter of the RAM. That is the single most valuable
 finding in this document and it is a one-line change.
 
@@ -544,7 +544,7 @@ One Qwen 3.6 attention block built in MIL -- RMSNorm, packed q+gate/k/v projecti
 (4096 -> 2048) -- 4-bit palettised, marginal cost taken as a slope over 1 and 3
 repetitions:
 
-| width | TinyTitan GPU (derived) | ANE (measured) | ratio |
+| width | emone GPU (derived) | ANE (measured) | ratio |
 | ---: | ---: | ---: | ---: |
 | 256 | ~28.9 ms/block | **1.50 ms** | 19.2x |
 | 1024 | ~138.8 ms/block | **8.99 ms** | 15.4x |
@@ -564,7 +564,7 @@ thousand tokens instead of one. The objection simply does not apply here.
 
 Attention is 29,687 ms of a 52,350 ms prefill, 57%. Even discounting the measured
 ratio to 10x, prefill for a 3532-token prompt goes from 52.4 s to ~25.6 s, a **2.0x**
-end-to-end improvement on the largest user-visible cost in TinyTitan.
+end-to-end improvement on the largest user-visible cost in emone.
 
 ## What is not solved
 

@@ -22,10 +22,10 @@ a generation is a second, separate opt-in, per watchdog.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TINYTITAN_WATCHDOGS` | `0` | `1` enables observation and logging |
-| `TINYTITAN_WATCHDOG_ACT` | empty | comma list of watchdogs allowed to intervene: `loop,stall,stub,pingpong` |
-| `TINYTITAN_WATCHDOG_STALL_SECONDS` | `90` | stall threshold |
-| `TINYTITAN_WATCHDOG_LOOP_REPEATS` | `6` | repeats before a loop is called |
+| `EMONE_WATCHDOGS` | `0` | `1` enables observation and logging |
+| `EMONE_WATCHDOG_ACT` | empty | comma list of watchdogs allowed to intervene: `loop,stall,stub,pingpong` |
+| `EMONE_WATCHDOG_STALL_SECONDS` | `90` | stall threshold |
+| `EMONE_WATCHDOG_LOOP_REPEATS` | `6` | repeats before a loop is called |
 
 The startup banner reports `watchdogs=off`, `watchdogs=observe` or
 `watchdogs=act(...)`, so what is running is visible without reading the
@@ -48,7 +48,7 @@ obvious intervention was tried and is unsafe: withholding the tools leaves
 the prompt still rendered with the tool template, because the trip requires
 three tool calls in the history, so the model goes on emitting tool calls
 into a decoder that now allows none of them and the request fails outright.
-That is worse than the loop. Naming `pingpong` in `TINYTITAN_WATCHDOG_ACT` is
+That is worse than the loop. Naming `pingpong` in `EMONE_WATCHDOG_ACT` is
 dropped at parse time rather than honoured into a worse failure. It reports,
 and the client, which owns the loop, decides.
 
@@ -123,7 +123,7 @@ without being a loop:
 
 The calibration script carries a Python port of the loop detector. The port
 and the Swift original are checked against a shared fixture
-(`tests/TinyTitanServer/Fixtures/watchdog-cases.json`) from both sides —
+(`tests/EmoneServer/Fixtures/watchdog-cases.json`) from both sides —
 `watchdog_calibrate.py --selftest` and a unit test — so the corpus numbers
 cannot quietly stop describing what ships.
 
@@ -160,7 +160,7 @@ programs, and real coding sessions are where the risk lives.
 
 ## Testing
 
-`tests/TinyTitanServer/WatchdogTests.swift` — 39 tests over synthetic streams,
+`tests/EmoneServer/WatchdogTests.swift` — 39 tests over synthetic streams,
 no model, fully deterministic. Roughly half are false-positive cases,
 because that is the half that costs a user an answer.
 

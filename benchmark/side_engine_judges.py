@@ -15,7 +15,7 @@ seconds per judgement, so the choice is a measurement rather than a belief.
 
 `cpu:<install>` drives the release bench (`cpu35batch`), which is the dense
 engine and therefore the 2B/4B/9B only. `server:<url>:<model>` posts the same
-system+user prompt to a running TinyTitan server, which is how a 35B MoE or a
+system+user prompt to a running Emone server, which is how a 35B MoE or a
 125B is reached. The jobs file is the one `side_engine_tasks.py --prepare`
 writes; scoring is that script's, imported rather than copied.
 """
@@ -32,7 +32,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BENCH = ROOT / ".build/release/TinyTitanBench"
+BENCH = ROOT / ".build/release/EmoneBench"
 
 
 def _load(name: str, path: str):

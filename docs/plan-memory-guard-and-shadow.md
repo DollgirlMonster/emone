@@ -72,7 +72,7 @@ state change refused because the store held an older protected value
 rule, they are outnumbered 3:1 by the repairs, and they are visible: every
 one is a `.disputed` address the model is shown. That is the intended
 behaviour — ask rather than guess — but it should be reported to the user in
-`tinytitan-memory list`, not left silent.
+`emone-memory list`, not left silent.
 
 ## Non-goals
 
@@ -107,7 +107,7 @@ only constrains model-derived writes.
 
 ## The two halves
 
-**1. Provenance marking** — `sources/TinyTitanServer/Core/ServerMemory.swift`
+**1. Provenance marking** — `sources/EmoneServer/Core/ServerMemory.swift`
 
 The consolidation prompt already asks for one flag per fact (`"global"`).
 Add a second: `"source": "user" | "assistant"`, meaning *where in the
@@ -120,7 +120,7 @@ The prompt must ask for the distinction plainly — the user's turns are
 marked `USER:` in the transcript the extraction already receives, so this is
 a labelling task, not an inference.
 
-**2. The precedence rule** — `sources/TinyTitanMemory/ContinuityStore.swift`
+**2. The precedence rule** — `sources/EmoneMemory/ContinuityStore.swift`
 
 `set(_:in:flaggingReversions:)` grows a sibling that takes the incoming
 author and the guard flag. Order of checks:
@@ -139,7 +139,7 @@ still marks disputed, the guard additionally refuses the supersession.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TINYTITAN_MEMORY_GUARD` | `0` | `1` enables the precedence rule |
+| `EMONE_MEMORY_GUARD` | `0` | `1` enables the precedence rule |
 
 Off by default. With it off, `ServerMemory` still asks for and stores the
 `source` flag — provenance is free to record and worth having in the journal
@@ -147,7 +147,7 @@ before the rule that uses it is trusted. The startup line gains `guard=on|off`.
 
 ## Tests
 
-**Unit — `tests/TinyTitanMemory/MemoryGuardTests.swift` (new)**
+**Unit — `tests/EmoneMemory/MemoryGuardTests.swift` (new)**
 
 Each case mirrors one the offline replay already measures, so the Swift
 implementation and the Python oracle cannot drift apart silently:
@@ -159,14 +159,14 @@ implementation and the Python oracle cannot drift apart silently:
 - with the guard off, every case behaves as today
 - an absent or garbage `source` degrades to `.model`
 
-**Unit — `tests/TinyTitanServer/Core/ConsolidationSourceTests.swift` (new)**
+**Unit — `tests/EmoneServer/Core/ConsolidationSourceTests.swift` (new)**
 
 - `"source": "user"` parses to `.user`; `"assistant"` to `.model`
 - a record with no `source` parses to `.model`
 - the flag survives a fenced block, a bare object, and a truncated array
   (the three shapes the parser already recovers)
 
-**Integration — extend `tests/TinyTitanServer/MemoryConsolidationTests.swift`**
+**Integration — extend `tests/EmoneServer/MemoryConsolidationTests.swift`**
 
 - a scripted backend emits a user fact then a contradicting model fact; the
   bootstrap of the next session contains the user's value and shows the
@@ -195,7 +195,7 @@ has not protected is not a reference worth checking against.
 
 ## Design decision that needs a call first
 
-TinyTitan deliberately removed its last external process when Valkey went. A
+emone deliberately removed its last external process when Valkey went. A
 small model means either:
 
 - **(a) subprocess** — spawn `llama-server`, talk HTTP on a loopback port.
@@ -203,7 +203,7 @@ small model means either:
   a port to own.
 - **(b) in-process** — link llama.cpp through a Swift package. No process,
   no port; a C++ dependency and a build cost.
-- **(c) TinyTitan's own runtime** — needs a conversion path for a 2B into the
+- **(c) emone's own runtime** — needs a conversion path for a 2B into the
   engine's format, and a second resident model in an engine written around
   one.
 
@@ -247,10 +247,10 @@ answer. Sampling at 0.7 is not reproducible — the same configuration gave
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TINYTITAN_SHADOW` | `0` | `1` starts the shadow |
-| `TINYTITAN_SHADOW_MODEL` | none | path to the GGUF; absent ⇒ shadow stays off with one log line |
-| `TINYTITAN_SHADOW_JOBS` | `ledger` | `ledger`, `check`, or both |
-| `TINYTITAN_SHADOW_THREADS` | `2` | CPU threads |
+| `EMONE_SHADOW` | `0` | `1` starts the shadow |
+| `EMONE_SHADOW_MODEL` | none | path to the GGUF; absent ⇒ shadow stays off with one log line |
+| `EMONE_SHADOW_JOBS` | `ledger` | `ledger`, `check`, or both |
+| `EMONE_SHADOW_THREADS` | `2` | CPU threads |
 
 Never on without an explicit model path. A missing or unloadable model
 disables the shadow and logs it; it never fails a completion, exactly as
@@ -258,7 +258,7 @@ memory never fails a completion today.
 
 ## Tests
 
-**Unit, no model — `tests/TinyTitanServer/ShadowAgentTests.swift` (new)**
+**Unit, no model — `tests/EmoneServer/ShadowAgentTests.swift` (new)**
 
 A `ShadowModel` protocol with a scripted double, so the plumbing is tested
 without a GGUF in CI:
@@ -300,7 +300,7 @@ hallucinations).
 1. Guard: provenance marking, precedence rule, unit tests, integration test.
 2. Guard gate: one install, book + coder, three runs.
 3. Shadow runtime decision (a/b/c), then the protocol and the scripted double.
-4. Job 1 behind `TINYTITAN_SHADOW=1`, with the store still guarded.
+4. Job 1 behind `EMONE_SHADOW=1`, with the store still guarded.
 5. Free-text precision measurement offline.
 6. Jobs 2 and 3 only if the gate passes.
 
@@ -314,7 +314,7 @@ described the rule correctly; the implementation applied it in one place.
 **A7 — every model tool write walked past the guard.** The guarded write
 existed only on `ContinuityStore` and had exactly one caller, consolidation.
 `memory_set` and `memory_delete` used the plain protocol methods, so with
-`TINYTITAN_MEMORY_GUARD=1` the model could overwrite or retire the person's fact
+`EMONE_MEMORY_GUARD=1` the model could overwrite or retire the person's fact
 by tool call in the very next session. The guarded write and delete are now
 on the `MemoryStore` protocol, which is what makes "every writer" true
 rather than aspirational; a store with no provenance says plainly that it
@@ -339,7 +339,7 @@ shared-workspace path took the unguarded write, and the degraded local store
 skipped the guard through a failed cast. Conventions and preferences are the
 most user-asserted things in the store.
 
-**A11 — `TINYTITAN_MEMORY_GUARD=off` switched the guard on**, because the parse
+**A11 — `EMONE_MEMORY_GUARD=off` switched the guard on**, because the parse
 was `!= "0"`.
 
 All five are fixed, with a test each. The step-0 gate is unchanged and still

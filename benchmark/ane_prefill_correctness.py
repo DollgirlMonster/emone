@@ -3,7 +3,7 @@
 
 The A/B matrix answers *how much faster*; this answers *is it the same model*.
 Both arms run the same long prompt greedily for `--max-new` tokens with one
-variable, `TINYTITAN_PREFILL_ANE`, and the responses are compared as text: how
+variable, `EMONE_PREFILL_ANE`, and the responses are compared as text: how
 many leading characters agree, and where the first divergence is.
 
 `--max-new 1` cannot answer this. A single greedy token usually agrees even when
@@ -13,7 +13,7 @@ makes a wrong mask visible.
 
 A model whose full-attention layers select keys with a QSA indexer gets a third
 arm for free: `causal`, which runs the ANE with the causal-only mask the fold
-exists to replace (`TINYTITAN_ANE_MASK=causal`). It is the negative control, and
+exists to replace (`EMONE_ANE_MASK=causal`). It is the negative control, and
 it is expected to diverge from the GPU arm while `on` does not — otherwise this
 check is not measuring what it claims to.
 
@@ -42,7 +42,7 @@ RESULTS = ab.RESULTS
 FALLBACK_MARKER = ab.FALLBACK_MARKER
 # The runtime prints this the first time it feeds the causal-only mask, so the
 # control arm cannot be mistaken for the shipped path.
-CAUSAL_MARKER = "TINYTITAN_ANE_MASK=causal"
+CAUSAL_MARKER = "EMONE_ANE_MASK=causal"
 
 ARMS = ("off", "on", "causal")
 
@@ -57,9 +57,9 @@ def run_arm(
     model: str, arm: str, characters: int, chunk: int, max_new: int, timeout: int = 3600
 ) -> dict:
     env = os.environ.copy()
-    env["TINYTITAN_PREFILL_ANE"] = "off" if arm == "off" else "on"
+    env["EMONE_PREFILL_ANE"] = "off" if arm == "off" else "on"
     if arm == "causal":
-        env["TINYTITAN_ANE_MASK"] = "causal"
+        env["EMONE_ANE_MASK"] = "causal"
     command = [
         str(CLI),
         "--model",

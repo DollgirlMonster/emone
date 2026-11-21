@@ -25,7 +25,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUNDLE="$ROOT/.build/out/Products/Debug/TinyTitanServerTests.xctest/Contents/MacOS/TinyTitanServerTests"
+BUNDLE="$ROOT/.build/out/Products/Debug/EmoneServerTests.xctest/Contents/MacOS/EmoneServerTests"
 TSAN_LIB="$(dirname "$BUNDLE")/../Frameworks/libclang_rt.tsan_osx_dynamic.dylib"
 SDK_ROOT="$(xcode-select -p)"
 HELPER="$SDK_ROOT/Toolchains/XcodeDefault.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper"

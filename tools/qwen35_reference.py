@@ -279,7 +279,7 @@ class Reference:
         # model that answers and one that does not, and it is the family
         # hazard this project already knows about: the gate is `silu` in the
         # Qwen3-Next/3.6 lineage and `sigmoid` in Qwen3.8-Flash-Next, whose
-        # reference this file was ported from. TinyTitan's own kernel carries the
+        # reference this file was ported from. Emone's own kernel carries the
         # same choice as a function constant (`FC_GDN_SIGMOID_GATE`), so the
         # engine has to select it per family too.
         #

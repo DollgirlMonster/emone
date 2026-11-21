@@ -1,6 +1,6 @@
 # Agent memory
 
-TinyTitan can give a model memory that outlives a conversation: durable facts it
+emone can give a model memory that outlives a conversation: durable facts it
 writes in one session and reads in another, scoped to the repository being
 worked on. It is off by default, it is not the KV cache, and the serving path
 does not depend on it.
@@ -15,7 +15,7 @@ irrelevant to any one question. It belongs in a store the model can query.
 ## Architecture
 
 ```
-TinyTitanServer ── MemoryBackend (decorator) ── inner backend (inference)
+EmoneServer ── MemoryBackend (decorator) ── inner backend (inference)
                      │
                      ├─ installs the instruction fragment + memory tools
                      ├─ executes memory_* calls the model makes
@@ -38,9 +38,9 @@ and the memory tool definitions, and on the way out it services the memory
 tool calls the model made and asks the inner backend to continue. With memory
 disabled the decorator is never constructed.
 
-**Why the engine runs these tools when it runs no others.** TinyTitan returns tool
+**Why the engine runs these tools when it runs no others.** emone returns tool
 calls to the client, which executes them. That is right for the client's own
-tools and useless for memory: no coding CLI knows about TinyTitan memory, so a
+tools and useless for memory: no coding CLI knows about emone memory, so a
 memory tool the client would have to run is a memory tool nothing runs. Memory
 tools are therefore the one kind the engine answers itself. Client tools still
 pass through untouched, and a turn that calls one ends the memory loop rather
@@ -52,7 +52,7 @@ than stranding its result.
 <namespace> / <user> / <workspace>
 ```
 
-- **namespace** separates deployments sharing one machine (`tinytitan` by default).
+- **namespace** separates deployments sharing one machine (`emone` by default).
 - **user** separates people sharing one server (the OS user by default).
 - **workspace** is the repository. The start scripts pass the directory they
   were launched from, and the identifier is the directory name plus a digest
@@ -61,9 +61,9 @@ than stranding its result.
 Every backend key carries the scope as a hash tag:
 
 ```
-tinytitan:mem:{tinytitan/ada/tinytitan-4f2a91c3}:r:decisions/sync    the record, JSON
-tinytitan:mem:{tinytitan/ada/tinytitan-4f2a91c3}:idx                 sorted set of keys
-tinytitan:mem:{tinytitan/ada/tinytitan-4f2a91c3}:sessions            last 50 sessions
+emone:mem:{emone/ada/emone-4f2a91c3}:r:decisions/sync    the record, JSON
+emone:mem:{emone/ada/emone-4f2a91c3}:idx                 sorted set of keys
+emone:mem:{emone/ada/emone-4f2a91c3}:sessions            last 50 sessions
 ```
 
 The index is what keeps this bounded. Listing, searching and bootstrap read
@@ -71,7 +71,7 @@ the index and then fetch a capped batch; nothing issues `KEYS` or `SCAN`, so
 one scope's cost never depends on what other scopes hold. A test asserts those
 commands are never sent.
 
-A single server can serve several checkouts: send `X-TinyTitan-Workspace` with a
+A single server can serve several checkouts: send `X-Emone-Workspace` with a
 request, or pin the server to one workspace by setting
 `allowsPerRequestWorkspace` false.
 
@@ -119,26 +119,26 @@ Environment variables, which is how the start scripts pass them:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TINYTITAN_MEMORY` | `0` | `1` enables memory |
-| `TINYTITAN_MEMORY_DIR` | `<TinyTitan>/memory` | Directory holding the project files (the binary alone falls back to `~/.tinytitan/memory`) |
-| `TINYTITAN_MEMORY_RETENTION_DAYS` | `30` | Delete a project file untouched this long; `0` keeps all |
-| `TINYTITAN_MEMORY_MAX_WORKSPACES` | `100` | Keep at most this many project files, oldest first out; `0` is no cap |
-| `TINYTITAN_MEMORY_FSYNC` | `0` | `1` forces every append to disk |
-| `TINYTITAN_MEMORY_CACHE_MIB` | none | Optional ceiling for the whole store, in MiB |
-| `TINYTITAN_MEMORY_NAMESPACE` | `tinytitan` | Deployment namespace |
-| `TINYTITAN_MEMORY_USER` | OS user | User component of the scope |
-| `TINYTITAN_MEMORY_WORKSPACE` | from `TINYTITAN_WORKSPACE_DIR` | Explicit workspace id |
-| `TINYTITAN_WORKSPACE_DIR` | launch directory | Directory the workspace id derives from |
-| `TINYTITAN_MEMORY_MAX_VALUE_BYTES` | `65536` | Largest single memory |
-| `TINYTITAN_MEMORY_BOOTSTRAP_LIMIT` | `60` | Bootstrap record cap |
-| `TINYTITAN_MEMORY_BOOTSTRAP_BYTES` | `16384` | Bootstrap byte cap |
-| `TINYTITAN_MEMORY_TOOL_ROUNDS` | `4` | Memory-tool rounds serviced per request |
-| `TINYTITAN_MEMORY_TOOLS` | `off` | The six `memory_*` functions: `off`, `minimal` (set, get, list) or `full`. Never affects the client's own tools. |
-| `TINYTITAN_MEMORY_CONSOLIDATION` | `1` | `0` disables the engine writing memory at session boundaries |
-| `TINYTITAN_MEMORY_CONSOLIDATION_IDLE_SECONDS` | `30` | Quiet time after a turn before a session is distilled |
-| `TINYTITAN_MEMORY_LOCAL_FALLBACK` | `1` | `0` disables memory instead of degrading |
-| `TINYTITAN_MEMORY_GUARD` | `1` | Stops a model-derived fact from silently superseding one the person asserted. `0` turns it off; see below for what it is worth. |
-| `TINYTITAN_SIDE_ENGINE` | `qwen3.5_4B_4Bit` under the models directory | The resident CPU model the judgements run on: a directory, an install name under `--models-directory`, or `0` to leave it out. The weights load on the first judgement, never at boot. |
+| `EMONE_MEMORY` | `0` | `1` enables memory |
+| `EMONE_MEMORY_DIR` | `<emone>/memory` | Directory holding the project files (the binary alone falls back to `~/.emone/memory`) |
+| `EMONE_MEMORY_RETENTION_DAYS` | `30` | Delete a project file untouched this long; `0` keeps all |
+| `EMONE_MEMORY_MAX_WORKSPACES` | `100` | Keep at most this many project files, oldest first out; `0` is no cap |
+| `EMONE_MEMORY_FSYNC` | `0` | `1` forces every append to disk |
+| `EMONE_MEMORY_CACHE_MIB` | none | Optional ceiling for the whole store, in MiB |
+| `EMONE_MEMORY_NAMESPACE` | `emone` | Deployment namespace |
+| `EMONE_MEMORY_USER` | OS user | User component of the scope |
+| `EMONE_MEMORY_WORKSPACE` | from `EMONE_WORKSPACE_DIR` | Explicit workspace id |
+| `EMONE_WORKSPACE_DIR` | launch directory | Directory the workspace id derives from |
+| `EMONE_MEMORY_MAX_VALUE_BYTES` | `65536` | Largest single memory |
+| `EMONE_MEMORY_BOOTSTRAP_LIMIT` | `60` | Bootstrap record cap |
+| `EMONE_MEMORY_BOOTSTRAP_BYTES` | `16384` | Bootstrap byte cap |
+| `EMONE_MEMORY_TOOL_ROUNDS` | `4` | Memory-tool rounds serviced per request |
+| `EMONE_MEMORY_TOOLS` | `off` | The six `memory_*` functions: `off`, `minimal` (set, get, list) or `full`. Never affects the client's own tools. |
+| `EMONE_MEMORY_CONSOLIDATION` | `1` | `0` disables the engine writing memory at session boundaries |
+| `EMONE_MEMORY_CONSOLIDATION_IDLE_SECONDS` | `30` | Quiet time after a turn before a session is distilled |
+| `EMONE_MEMORY_LOCAL_FALLBACK` | `1` | `0` disables memory instead of degrading |
+| `EMONE_MEMORY_GUARD` | `1` | Stops a model-derived fact from silently superseding one the person asserted. `0` turns it off; see below for what it is worth. |
+| `EMONE_SIDE_ENGINE` | `qwen3.5_4B_4Bit` under the models directory | The resident CPU model the judgements run on: a directory, an install name under `--models-directory`, or `0` to leave it out. The weights load on the first judgement, never at boot. |
 
 ### The side-engine
 
@@ -183,7 +183,7 @@ judgement never gates a turn.
 
 ### The guard
 
-With `TINYTITAN_MEMORY_GUARD=1`, a write the extraction attributed to the model
+With `EMONE_MEMORY_GUARD=1`, a write the extraction attributed to the model
 does not overwrite a live fact the person asserted. The person's value
 stays, the address is marked disputed, and both values are visible to the
 next session. The person always supersedes their own facts, model-over-model
@@ -296,7 +296,7 @@ and only confused. The bounds that remain are hygiene, not budgets: a fact is
 at most 64 KiB, an address keeps 32 versions, a session keeps 200 turns and a
 workspace 100 sessions in memory, and the file keeps everything.
 
-`TINYTITAN_MEMORY_CACHE_MIB` sets a ceiling for anyone who wants one. It covers
+`EMONE_MEMORY_CACHE_MIB` sets a ceiling for anyone who wants one. It covers
 every open workspace together, split three quarters to facts and one to the
 journal; at the cap facts refuse and the journal evicts its oldest sessions
 from memory, and the least recently used workspace is closed.
@@ -319,7 +319,7 @@ There is none. Memory is off until you ask for it, and turning it on needs no
 service:
 
 ```bash
-TINYTITAN_MEMORY=1 tools/server_launcher.sh --client server --model qwen36 8
+EMONE_MEMORY=1 tools/server_launcher.sh --client server --model qwen36 8
 ```
 
 The launcher exports the memory environment itself: the workspace is
@@ -328,21 +328,21 @@ ceiling follows the table above. To place the store elsewhere or name the
 workspace explicitly:
 
 ```bash
-TINYTITAN_MEMORY=1 TINYTITAN_MEMORY_DIR=/var/lib/tinytitan \
-  TINYTITAN_MEMORY_WORKSPACE=my-project tools/server_launcher.sh --client server --model ornith 8
+EMONE_MEMORY=1 EMONE_MEMORY_DIR=/var/lib/emone \
+  EMONE_MEMORY_WORKSPACE=my-project tools/server_launcher.sh --client server --model ornith 8
 ```
 
 State lives in one file per project,
-`<TinyTitan>/memory/<namespace>/<user>/<workspace>.ndjson`, created owner-readable
+`<emone>/memory/<namespace>/<user>/<workspace>.ndjson`, created owner-readable
 only inside an owner-only directory, with a `.lock` sidecar beside it. Sessions
 are records inside that file, not files of their own. Deleting a project's
 memory is deleting its file, and backing it up is copying it.
 
 The files do not pile up, and retention never removes a fact. A project file
-untouched for 30 days (`TINYTITAN_MEMORY_RETENTION_DAYS`) has its session log
+untouched for 30 days (`EMONE_MEMORY_RETENTION_DAYS`) has its session log
 expired — the transcript, which is the bulk of it — and keeps its facts, their
 history and its title, so a novel paused for six weeks comes back with its
-bible. At most 100 project files are kept (`TINYTITAN_MEMORY_MAX_WORKSPACES`),
+bible. At most 100 project files are kept (`EMONE_MEMORY_MAX_WORKSPACES`),
 oldest by last write going first; that cap is the only rule that deletes
 facts. The sweep runs at start and whenever a new project file is created; a
 project this server has open, and the person's shared file, are never touched.
@@ -361,17 +361,17 @@ spell it and the header is refused.
 ### Seeing and correcting memory
 
 ```bash
-swift run tinytitan-memory projects                 # every project, newest first
-swift run tinytitan-memory list photograph          # a project's facts (prefix is enough)
-swift run tinytitan-memory show photograph state/inn
-swift run tinytitan-memory delete photograph state/inn   # retired, kept in history
-swift run tinytitan-memory forget photograph --yes       # the whole project
-swift run tinytitan-memory list global              # the person's shared facts
+swift run emone-memory projects                 # every project, newest first
+swift run emone-memory list photograph          # a project's facts (prefix is enough)
+swift run emone-memory show photograph state/inn
+swift run emone-memory delete photograph state/inn   # retired, kept in history
+swift run emone-memory forget photograph --yes       # the whole project
+swift run emone-memory list global              # the person's shared facts
 ```
 
 Reads take no lock and work while a server is running. `delete` and `forget`
 need the workspace and refuse it while a server holds it — stop the server, or
-let the next consolidation supersede the fact. `--dir` or `TINYTITAN_MEMORY_DIR`
+let the next consolidation supersede the fact. `--dir` or `EMONE_MEMORY_DIR`
 selects the directory.
 
 A workspace named per request gets its own file too, so one project's memory
@@ -381,11 +381,11 @@ can never be written into another's.
 
 Every session is placed in a workspace, and tagged with it, in this order:
 
-1. The `X-TinyTitan-Workspace` header, when the client sent one.
+1. The `X-Emone-Workspace` header, when the client sent one.
 2. **The working directory the client declared in its system prompt.** Claude
    Code writes a `Working directory:` line and Codex a `<cwd>` element on every
    request, and where they are running is the project. So one server serves a
-   novel in `~/novels/photograph` and a codebase in `~/src/tinytitan` with two
+   novel in `~/novels/photograph` and a codebase in `~/src/emone` with two
    separate fact stores and no configuration at all: each conversation's memory
    lands in the project the client is standing in. Only absolute paths in
    *system* messages count, so a user pasting a transcript cannot move their
@@ -400,14 +400,14 @@ each project's sessions with their tags.
 The home directory, its parent and the filesystem root are refused as
 workspaces. A server launched from `~` and used for everything would collect a
 novel and a codebase into one fact store, and the bootstrap for the codebase
-would open with the plot of the novel. With `TINYTITAN_MEMORY=1` the start script
+would open with the plot of the novel. With `EMONE_MEMORY=1` the start script
 stops and says so; the server applies the same rule on its own and logs it.
-Launch from the project, or name the workspace with `TINYTITAN_MEMORY_WORKSPACE`.
+Launch from the project, or name the workspace with `EMONE_MEMORY_WORKSPACE`.
 
 To look inside one, including while a server is running:
 
 ```bash
-swift run ContinuityDemo inspect ~/.tinytitan/memory/tinytitan/$USER/<workspace>.ndjson
+swift run ContinuityDemo inspect ~/.emone/memory/emone/$USER/<workspace>.ndjson
 ```
 
 That read takes no lock. `jq` works on it as well; it is JSON lines.
@@ -422,7 +422,7 @@ carried faithfully for eight sessions. A harness that simply forced a 200-word
 summary at every boundary carried twice as much. The forcing is what works.
 
 So the engine forces it. When a session goes quiet for
-`TINYTITAN_MEMORY_CONSOLIDATION_IDLE_SECONDS` (thirty seconds by default), or when a
+`EMONE_MEMORY_CONSOLIDATION_IDLE_SECONDS` (thirty seconds by default), or when a
 new conversation starts in the same workspace before that — a rollover, the
 end-of-conversation signal the API never sends — the engine asks the model,
 in a separate tool-free request, what from that session must not be
@@ -436,9 +436,9 @@ later state supersedes the earlier one, where the summary baseline copied
 It costs one generation per session — a few thousand prompt tokens and a few
 hundred out, a minute or so on a 35B model — and it runs only in the pauses:
 never inline with a request, and on a rollover only after the new session's
-first reply has been returned. With memory on it is on; `TINYTITAN_MEMORY_CONSOLIDATION=0`
+first reply has been returned. With memory on it is on; `EMONE_MEMORY_CONSOLIDATION=0`
 turns it off. It needs no tools at all, which is the point: with
-`TINYTITAN_MEMORY_TOOLS=off` the model pays ~200 prompt tokens for the fragment
+`EMONE_MEMORY_TOOLS=off` the model pays ~200 prompt tokens for the fragment
 and bootstrap, reads what the engine wrote, and never has to decide to write.
 
 The extraction is shown what memory already holds — every key by name in the
@@ -459,7 +459,7 @@ The server log shows each one: `consolidated session=… turns=… facts=… key
 
 ### When the tool rounds run out
 
-A model that keeps calling memory tools past `TINYTITAN_MEMORY_TOOL_ROUNDS` used to
+A model that keeps calling memory tools past `EMONE_MEMORY_TOOL_ROUNDS` used to
 get its preamble returned as the answer — measured, a 31-token "I need to check
 the existing memories" where ten chapters should have been. Now its last calls
 are answered, it is told the rounds are used up, and it gets one more
@@ -472,7 +472,7 @@ Memory never fails a completion.
 
 - A journal file that cannot be opened: the session runs in memory only, and
   the prompt tells the model its writes will not persist. Set
-  `TINYTITAN_MEMORY_LOCAL_FALLBACK=0` to run with no memory instead.
+  `EMONE_MEMORY_LOCAL_FALLBACK=0` to run with no memory instead.
 - An operation that fails mid-session degrades the same way, once, and logs it.
 - A failed write is reported to the model as a tool error. It is never
   reported as success: a model that believes it saved a fact it did not is
@@ -484,7 +484,7 @@ Memory never fails a completion.
   within thirty seconds if writes never stop. Never inline with a request, and
   never on the same moment the expert streamer needs the disk. A process crash
   loses nothing; a power cut loses at most what arrived since the last idle
-  moment. `TINYTITAN_MEMORY_FSYNC=1` makes every write durable inline instead, at
+  moment. `EMONE_MEMORY_FSYNC=1` makes every write durable inline instead, at
   about 5 ms each.
 - The workspace journal is replayed at boot, not on the first request.
 - A workspace already held by another server means this one runs without
@@ -499,7 +499,7 @@ Memory never fails a completion.
   name another workspace.
 - Log lines carry operational detail only, never memory contents, which a
   test asserts.
-- Nothing in the memory path opens a socket. `TinyTitanMemory` and
+- Nothing in the memory path opens a socket. `EmoneMemory` and
   `ContinuityCore` have no networking dependency at all, so memory cannot
   reach off the machine and cannot be reached from it.
 - Values are capped, results are capped, and index scans are capped.
@@ -508,7 +508,7 @@ Memory never fails a completion.
 ## Testing
 
 ```bash
-swift test --filter TinyTitanMemoryTests     # store, config, service, durability
+swift test --filter EmoneMemoryTests     # store, config, service, durability
 swift test --filter ContinuityCoreTests  # the engine underneath it
 swift test --filter MemoryBackendTests   # the decorator in the request path
 ```
@@ -556,7 +556,7 @@ section; reversions flagged as disputed instead of overwritten; the
 extraction shown every key by name and values only for keys the session
 touches; consolidation after thirty seconds of quiet instead of two minutes;
 no RAM ceiling by default; thirty-day retention and a cap on project files;
-the store under `<TinyTitan>/memory`; and "memory tools" named as such
+the store under `<emone>/memory`; and "memory tools" named as such
 everywhere. Measured against v1 on the same benchmarks: see
 `docs/memory-database-v2-comparison-2026-09-07.md`.
 
@@ -566,7 +566,7 @@ list was v2's whole extra cost); a fact returned with its current value is
 not rewritten; a long session is distilled incrementally, new turns only;
 retention expires a project's session log and keeps its facts; the person's
 own facts live in a shared workspace shown to every project; and
-`tinytitan-memory` lists, shows, retires and forgets. Not yet measured against
+`emone-memory` lists, shows, retires and forgets. Not yet measured against
 v2 — benchmarks held.
 
 ## Say what is absent, not only what is present

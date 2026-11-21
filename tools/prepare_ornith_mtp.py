@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare Ornith 1.5's official native MTP layer for TinyTitan import.
+"""Prepare Ornith 1.5's official native MTP layer for Emone import.
 
 The official MLX releases omit MTP. This tool consumes only shard 16 from the
 pinned original checkpoint, verifies its index/config/tensor contract, applies
 Qwen3.5's zero-centered RMSNorm transform, and emits an MLX-affine snapshot.
-TinyTitanRepack then imports that snapshot into its bounded SSD expert layout.
+EmoneRepack then imports that snapshot into its bounded SSD expert layout.
 """
 
 from __future__ import annotations

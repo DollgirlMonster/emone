@@ -73,15 +73,15 @@ ROOT = Path(__file__).resolve().parents[1]
 # find a key the fragment did not name, and the fragment is exactly what the
 # cap has truncated. That arm would be a slower "auto".
 ARMS = ("control", "auto", "full")
-OUT = Path(os.environ.get("TINYTITAN_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-volume"))
-PORT = int(os.environ.get("TINYTITAN_PORT", "8096"))
+OUT = Path(os.environ.get("EMONE_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-volume"))
+PORT = int(os.environ.get("EMONE_PORT", "8096"))
 BASE = f"http://127.0.0.1:{PORT}/v1"
 # Which run of the arm this is; results are kept per run so repeats can be
 # compared and averaged. Repeats only mean something with sampling on:
 # at temperature 0 a repeat is the same output.
-RUN = os.environ.get("TINYTITAN_MEMVAL_RUN", "1")
-TEMPERATURE = os.environ.get("TINYTITAN_MEMVAL_TEMPERATURE")  # unset: the server's default
-SERVER_LOG = os.environ.get("TINYTITAN_MEMVAL_SERVER_LOG")
+RUN = os.environ.get("EMONE_MEMVAL_RUN", "1")
+TEMPERATURE = os.environ.get("EMONE_MEMVAL_TEMPERATURE")  # unset: the server's default
+SERVER_LOG = os.environ.get("EMONE_MEMVAL_SERVER_LOG")
 
 
 def sampling():
@@ -522,7 +522,7 @@ def assert_arm_is_real(arm: str, prompt_tokens: int):
     state = server_log_state()
     if state is None:
         print(
-            f"  (no TINYTITAN_MEMVAL_SERVER_LOG: arm '{arm}' is UNVERIFIED, and "
+            f"  (no EMONE_MEMVAL_SERVER_LOG: arm '{arm}' is UNVERIFIED, and "
             f"session 1 cost {prompt_tokens} prompt tokens)"
         )
         return
@@ -536,8 +536,8 @@ def assert_arm_is_real(arm: str, prompt_tokens: int):
         raise SystemExit(
             f"ABORT: arm '{arm}' wants {described(expected)} but the "
             f"server logged {described(seen)}. "
-            f"The server is not running what this arm claims. Check TINYTITAN_MEMORY / "
-            f"TINYTITAN_MEMORY_TOOLS and that the release binary is current."
+            f"The server is not running what this arm claims. Check EMONE_MEMORY / "
+            f"EMONE_MEMORY_TOOLS and that the release binary is current."
         )
     if state["cap"] and expected is not None:
         records, byte_cap = state["cap"]

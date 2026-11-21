@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ANE-vs-GPU prefill A/B across the installed models.
 
-One variable: `TINYTITAN_PREFILL_ANE`. Arms alternate `off, on, on, off` after a
+One variable: `EMONE_PREFILL_ANE`. Arms alternate `off, on, on, off` after a
 discarded warm-up per arm, so thermal drift and page-cache state land on both
 arms rather than on whichever ran second.
 
@@ -35,7 +35,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT / "models"
-CLI = ROOT / ".build/release/TinyTitanCLI"
+CLI = ROOT / ".build/release/EmoneCLI"
 RESULTS = ROOT / "benchmark/ane-prefill"
 
 PREFILL_CHUNK = 4096
@@ -92,7 +92,7 @@ def parse_footer(stderr: str) -> dict | None:
 
 def run_arm(model: str, ane: bool, characters: int, chunk: int, timeout: int = 3600) -> dict:
     env = os.environ.copy()
-    env["TINYTITAN_PREFILL_ANE"] = "on" if ane else "off"
+    env["EMONE_PREFILL_ANE"] = "on" if ane else "off"
     command = [
         str(CLI),
         "--model",

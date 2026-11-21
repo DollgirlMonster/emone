@@ -28,17 +28,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "benchmark"))
 
-PORT = os.environ.get("TINYTITAN_PORT", "8098")
-TEMPERATURE = float(os.environ.get("TINYTITAN_SMALL_TEMP", "0.7"))
-TOP_P = float(os.environ.get("TINYTITAN_SMALL_TOP_P", "0.95"))
-THINK = os.environ.get("TINYTITAN_SMALL_THINK") == "1"
+PORT = os.environ.get("EMONE_PORT", "8098")
+TEMPERATURE = float(os.environ.get("EMONE_SMALL_TEMP", "0.7"))
+TOP_P = float(os.environ.get("EMONE_SMALL_TOP_P", "0.95"))
+THINK = os.environ.get("EMONE_SMALL_THINK") == "1"
 
-os.environ.setdefault("TINYTITAN_PORT", PORT)
+os.environ.setdefault("EMONE_PORT", PORT)
 os.environ.setdefault(
-    "TINYTITAN_MEMVAL_RESULTS",
+    "EMONE_MEMVAL_RESULTS",
     str(
         ROOT
-        / f".build/benchmark-logs/memory-small-{os.environ.get('TINYTITAN_SMALL_LABEL', 'qwen2b')}"
+        / f".build/benchmark-logs/memory-small-{os.environ.get('EMONE_SMALL_LABEL', 'qwen2b')}"
     ),
 )
 
@@ -73,7 +73,7 @@ if __name__ == "__main__":
 
         arm = "control"
     patch(bench)
-    Path(os.environ["TINYTITAN_MEMVAL_RESULTS"]).mkdir(parents=True, exist_ok=True)
+    Path(os.environ["EMONE_MEMVAL_RESULTS"]).mkdir(parents=True, exist_ok=True)
     print(
         f"{which} / {arm} against port {PORT}, temp={TEMPERATURE} top_p={TOP_P} "
         f"thinking={'on' if THINK else 'off'}"

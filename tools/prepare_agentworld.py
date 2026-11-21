@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.13
 """Convert a Qwen3.5-MoE 35B-A3B release (Qwen-AgentWorld, Qwen3.6) from its
-bf16 checkpoint into the affine 4-bit or 8-bit snapshot TinyTitanRepack installs.
+bf16 checkpoint into the affine 4-bit or 8-bit snapshot EmoneRepack installs.
 
 AgentWorld's text model is the Qwen3.5-MoE 35B-A3B geometry this runtime
 already runs as the `qwen36` family (2048 hidden, 40 layers, 256 experts at
@@ -12,7 +12,7 @@ shard -- with this family's renames and slot policy, and without Qwen3.8's
 n-gram table, PLE constants and indexer.
 
 Disk footprint while running: two source shards (~7 GB) plus the output
-(about 19.5 GB at 4-bit, 37.8 GB at 8-bit). The install TinyTitanRepack writes
+(about 19.5 GB at 4-bit, 37.8 GB at 8-bit). The install EmoneRepack writes
 afterwards is a second copy of the output.
 
     python3.13 tools/prepare_agentworld.py --plan            # no download
@@ -57,7 +57,7 @@ except ImportError as exc:  # pragma: no cover - environment, not logic
         f"missing dependency: {exc}\n"
         f"  install them for the interpreter running this file: {sys.executable}\n"
         "    -m pip install safetensors numpy ml_dtypes\n"
-        "  (or point TINYTITAN_PYTHON at another Python 3.10+)"
+        "  (or point EMONE_PYTHON at another Python 3.10+)"
     )
 # Every Qwen3.5-MoE 35B-A3B release this converter builds. Pinned commits:
 # the install receipt records the source, and a moved `main` must not
@@ -426,7 +426,7 @@ def emit_fused(
 
 
 def write_config(config: dict, out: Path, tensor_names, width: int) -> dict:
-    """config.json with the `quantization` block TinyTitanRepack reads: a base
+    """config.json with the `quantization` block EmoneRepack reads: a base
     width plus every tensor whose width differs, keyed by stem."""
     overrides = {}
     for name in tensor_names:

@@ -26,10 +26,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-MODELS_DIR="${TINYTITAN_MODELS_DIR:-models}"
+MODELS_DIR="${EMONE_MODELS_DIR:-models}"
 # coremltools is only in the exporter's documented interpreter; the system
 # python does not have it.
-COREML_PYTHON="${TINYTITAN_COREML_PYTHON:-$HOME/.venvs/coreml-py311/bin/python}"
+COREML_PYTHON="${EMONE_COREML_PYTHON:-$HOME/.venvs/coreml-py311/bin/python}"
 CHUNK=4096
 MAX_HISTORY=12288
 FORCE=0
@@ -52,7 +52,7 @@ done
 
 [ -x "$COREML_PYTHON" ] || {
   echo "error: no coremltools interpreter at $COREML_PYTHON" >&2
-  echo "       set TINYTITAN_COREML_PYTHON, or install one:" >&2
+  echo "       set EMONE_COREML_PYTHON, or install one:" >&2
   echo "       python3 -m venv ~/.venvs/coreml-py311 && ~/.venvs/coreml-py311/bin/pip install coremltools" >&2
   exit 2
 }

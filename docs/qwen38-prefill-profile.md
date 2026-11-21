@@ -1,8 +1,8 @@
 # Qwen3.8-Flash-Next prefill, measured
 
 Long-prompt work is prefill-dominated on this model, and prefill had never been
-profiled. Measured on the 24 GiB M3, 4-bit, `TINYTITAN_KERNEL_STATS` +
-`TINYTITAN_RUNNER_STATS`.
+profiled. Measured on the 24 GiB M3, 4-bit, `EMONE_KERNEL_STATS` +
+`EMONE_RUNNER_STATS`.
 
 ## Prefill is the cost for coding-shaped prompts
 
@@ -116,7 +116,7 @@ the inner loop entirely.
 | **+ inner-loop hoist** | **2.21 s** | **4.7x** |
 
 **QSA prefill attention is 52% faster and the gap to a GDN layer has halved.**
-All three are default-on (`TINYTITAN_QSA_COMPACT` / `TINYTITAN_QSA_TILED` set to `0`
+All three are default-on (`EMONE_QSA_COMPACT` / `EMONE_QSA_TILED` set to `0`
 fall back for A/B on one build). Both goldens reproduce.
 
 **Prefill wall is the noisy metric, not this one.** In the last A/B the

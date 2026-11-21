@@ -1,6 +1,6 @@
 """Stage-by-stage parity for Qwen3.8-Flash-Next.
 
-Reads the activations a run dumped with `TINYTITAN_ACT_DUMP` and recomputes the
+Reads the activations a run dumped with `EMONE_ACT_DUMP` and recomputes the
 same stages in numpy from the installed weights, following the reference
 implementation (`Rocktalk-Holdings/mlx-qwen4exp`). Both sides use the same
 quantized weights, so any disagreement is in the forward pass.
