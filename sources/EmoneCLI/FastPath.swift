@@ -279,6 +279,33 @@ public enum FastPathCommand {
             position = n
             let point = try await runner.makeDecisionBranchPoint()
             let before = try await probeLogits(at: point)
+            // DIAG (local only): EMONE_FASTPATH_ROWS=8,16,... times a readout
+            // prefill of exactly R new corpus tokens at the held point per R,
+            // then restores; with EMONE_KERNEL_STATS it prints per-role GPU sums.
+            if let rowList = ProcessInfo.processInfo.environment["EMONE_FASTPATH_ROWS"] {
+                let kstats = ProcessInfo.processInfo.environment["EMONE_KERNEL_STATS"] != nil
+                for r in rowList.split(separator: ",").compactMap({ Int($0) }) {
+                    let row = ids[newBase..<(newBase + r)]
+                    var totals: [Double] = []
+                    for rep in 0...o.reps {
+                        runner.resetKernelGPUTimings()
+                        let started = now()
+                        _ = try await readout(row, from: n, offsets: [r - 1])
+                        let total = ms(now() - started)
+                        if kstats {
+                            for s in runner.kernelGPUTimingSummary() {
+                                say("kstat\t\(n)\t\(r)\t\(rep)\t\(s.role)\t\(String(format: "%.3f", s.millis))\t\(s.count)")
+                            }
+                            let occ = runner.kernelGPUOccupancy()
+                            say("kocc\t\(n)\t\(r)\t\(rep)\tbusy=\(String(format: "%.3f", occ.busyMillis))\tspan=\(String(format: "%.3f", occ.spanMillis))")
+                        }
+                        try await runner.restoreDecisionBranchPoint(point)
+                        say("rows\t\(n)\t\(r)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))")
+                        if rep > 0 { totals.append(total) }
+                    }
+                    say("ROWS\t\(n)\t\(r)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))")
+                }
+            } else {
             for m in o.ms {
                 for k in o.ks {
                     let q = question(k: k, pool: questionPool)
@@ -307,6 +334,7 @@ public enum FastPathCommand {
                         "SUMMARY\tmoe\t\(n)\t\(m)\t\(k)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
                     )
                 }
+            }
             }
             let after = try await probeLogits(at: point)
             let same = before == after
