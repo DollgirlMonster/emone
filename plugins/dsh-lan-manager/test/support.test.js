@@ -1,6 +1,6 @@
 /**
  * The gate that keeps dsh-lan-manager off harnesses it was not verified
- * against, and the pin it shares with the launcher and dsh-tinytitan.
+ * against, and the pin it shares with the launcher and dsh-emone.
  *
  * The gate is tested for the three things that make it safe to ship: it refuses,
  * it refuses *without throwing*, and it refuses without touching the context —
@@ -56,7 +56,7 @@ function applyAs(version, { ctx = {}, config = {} } = {}) {
 
 test("the launcher pins the same release the plugin supports", () => {
   const launcher = readFileSync(LAUNCHER, "utf8");
-  const pinned = /^DSH_VERSION="\$\{TINYTITAN_DSH_VERSION:-([^}]+)\}"/m.exec(launcher);
+  const pinned = /^DSH_VERSION="\$\{EMONE_DSH_VERSION:-([^}]+)\}"/m.exec(launcher);
   assert.ok(pinned, "tools/dsh_local.sh must pin DSH_VERSION to a default");
   assert.equal(pinned[1], SUPPORTED_DSH_VERSION);
 });

@@ -35,7 +35,7 @@ export const DEFAULT_BASE_PATH = "/dsh-lan";
  * fleet of freshly-installed Macs talking to each other with no setup, and it is
  * the first thing to change on a network you do not solely own.
  */
-export const DEFAULT_GROUP_KEY = "tinytitan-lan";
+export const DEFAULT_GROUP_KEY = "emone-lan";
 
 /** How often discovery runs, in seconds, before an operator changes it. */
 export const DEFAULT_DISCOVERY_SECONDS = 60;

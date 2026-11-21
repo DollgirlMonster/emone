@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed inputs for phases 2 and 3 of the divergence overview (TinyTitan-8d0).
+"""Fixed inputs for phases 2 and 3 of the divergence overview (Emone-8d0).
 
 Phase 2 (token flips): 24 three-turn conversations. Twelve open on a ~16K-char
 slice of the repository's documentation at HEAD (so follow-up turns are short

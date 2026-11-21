@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Convert Qwen/Qwen3.8-Flash-Next into an affine snapshot TinyTitanRepack imports.
+"""Convert Qwen/Qwen3.8-Flash-Next into an affine snapshot EmoneRepack imports.
 
 Why this exists: the installed 4-bit model came from a third-party MLX repack.
-TinyTitan does not need one. It needs an affine group-64 layout, and it can produce
+Emone does not need one. It needs an affine group-64 layout, and it can produce
 that from Qwen's own bf16 release, which is both better provenance and better
 numerics -- quantizing once from the original weights beats inheriting somebody
 else's quantization error.
@@ -18,7 +18,7 @@ checked, so `--plan` asserts all three against the checkpoint's own headers:
 
 1. Routed experts are *stacked and fused*: one `mlp.experts.gate_up_proj` of
    shape [512, 1280, 2560] per layer, where 1280 is gate and up concatenated,
-   plus one `mlp.experts.down_proj`. TinyTitanRepack wants three separately named
+   plus one `mlp.experts.down_proj`. EmoneRepack wants three separately named
    tensors matching `.mlp.switch_mlp.{gate,up,down}_proj.`, each of which may
    stay stacked over the 512 experts because the planner slices per expert.
 2. Norms carry `.weight` here and do not in the repack the runtime reads, so
@@ -63,7 +63,7 @@ except ImportError as exc:  # pragma: no cover - environment, not logic
         f"missing dependency: {exc}\n"
         f"  install them for the interpreter running this file: {sys.executable}\n"
         "    -m pip install safetensors numpy ml_dtypes\n"
-        "  (or point TINYTITAN_PYTHON at another Python 3.10+)"
+        "  (or point EMONE_PYTHON at another Python 3.10+)"
     )
 REPO = "Qwen/Qwen3.8-Flash-Next"
 # `HF_ENDPOINT` (the Hub's own variable) and `--endpoint` point every fetch at a
@@ -468,7 +468,7 @@ def checkpoint_shard_is_converted(names: list[str], index: dict[str, str], width
 
 
 def write_config(config: dict, out: Path, tensor_names, width: int) -> dict:
-    """Emit config.json with the `quantization` block TinyTitanRepack reads.
+    """Emit config.json with the `quantization` block EmoneRepack reads.
 
     The repacker resolves each tensor's width from `config.json -> quantization`:
     a base `bits`/`group_size`/`mode`, plus per-tensor overrides keyed by the
@@ -852,7 +852,7 @@ class NgramTable:
             if exc.errno != errno.EXDEV:
                 raise
             # A hardlink cannot cross filesystems -- staging on one volume and
-            # the install on another is a normal layout (`TINYTITAN_MODELS_DIR`
+            # the install on another is a normal layout (`EMONE_MODELS_DIR`
             # on an external disk). Reusing the table is still what the caller
             # asked for, so copy it: that is the 102 GB the flag exists to save,
             # but a copy is correct where a link is impossible.

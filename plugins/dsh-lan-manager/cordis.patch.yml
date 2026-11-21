@@ -7,7 +7,7 @@
 #
 # The **group key** is one string with two jobs: members carrying it are one
 # fleet, and it is the door key every request presents. It ships with a public
-# default (`tinytitan-lan`) so a fresh install joins the group with no setup —
+# default (`emone-lan`) so a fresh install joins the group with no setup —
 # which means it *groups* rather than *protects*. Change it on every Mac when the
 # network is not entirely yours:
 #

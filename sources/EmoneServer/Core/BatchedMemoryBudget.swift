@@ -1,0 +1,76 @@
+import Foundation
+import Emone
+
+/// The headroom rule for batched serving.
+///
+/// Batching bounds peak KV to one sequence per slot; four slots is four
+/// sequences' worth, and the wired routed-expert cache cannot be paged out to
+/// rescue an over-commit. Width is therefore capped by what the worst-case
+/// per-slot stores can actually hold beside the expert cache, not by the
+/// requested number alone.
+enum BatchedMemoryBudget {
+    /// Bytes the slots may occupy: half of physical memory, less the wired
+    /// expert cache. The other half is left for the weights, the allocator and
+    /// the rest of the machine. Never negative.
+    static func slotBudgetBytes(
+        physicalMemory: UInt64,
+        expertCacheBudgetBytes: Int
+    ) -> Int {
+        guard physicalMemory > 0 else { return Int.max }
+        return max(0, Int(physicalMemory / 2) - max(0, expertCacheBudgetBytes))
+    }
+
+    /// The expert cache to hold back from the KV headroom.
+    ///
+    /// A dense family has no routed experts, so the profile's expert-cache
+    /// budget is memory it will never allocate; subtracting it took 8 GiB off
+    /// the headroom of a dense install and clamped a width that fits.
+    static func expertCacheHeldBack(numExperts: Int, configured: Int) -> Int {
+        numExperts > 0 ? max(0, configured) : 0
+    }
+
+    /// The largest width whose worst-case stores fit the budget.
+    ///
+    /// Always at least one: the single-sequence path must stay available even
+    /// when the model is too large for the budget to hold a second slot.
+    static func effectiveSlots(
+        requested: Int,
+        perSlotBytes: Int,
+        budgetBytes: Int
+    ) -> Int {
+        guard requested > 1 else { return max(1, requested) }
+        guard perSlotBytes > 0 else {
+            // Unknown size cannot be budgeted; trust the request rather than
+            // silently pin it to one.
+            return requested
+        }
+        // A zero budget is a real constraint (the expert cache already claims
+        // the headroom), not an unknown: serve one sequence at a time.
+        guard budgetBytes > 0 else { return 1 }
+        return max(1, min(requested, budgetBytes / perSlotBytes))
+    }
+
+    /// Worst-case bytes one sequence occupies: KV at the full context, GDN
+    /// recurrent state, and the raw-completion scratch (two FP16 logits
+    /// buffers plus a token slot).
+    static func perSlotBytes(
+        config: ArchConfig,
+        maxContext: Int,
+        precision: KVCachePrecision,
+        fp16RingEnabled: Bool,
+        slidingWindow: Int,
+        maxPrefillChunkTokens: Int,
+        vocab: Int
+    ) -> Int {
+        let kv = KVCacheManager.worstCaseBytes(
+            config: config, maxContext: maxContext, precision: precision,
+            slots: 1, fp16RingEnabled: fp16RingEnabled,
+            slidingWindow: slidingWindow,
+            maxPrefillChunkTokens: maxPrefillChunkTokens)
+        let gdn = GDNStateManager.worstCaseBytes(config: config, slots: 1)
+        let scratch =
+            2 * vocab * MemoryLayout<Float16>.size
+            + MemoryLayout<UInt32>.size
+        return kv + gdn + scratch
+    }
+}

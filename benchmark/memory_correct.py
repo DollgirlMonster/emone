@@ -53,16 +53,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ARMS = ("control", "auto")
 OUT = Path(
-    os.environ.get("TINYTITAN_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-correct")
+    os.environ.get("EMONE_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-correct")
 )
-PORT = int(os.environ.get("TINYTITAN_PORT", "8096"))
+PORT = int(os.environ.get("EMONE_PORT", "8096"))
 BASE = f"http://127.0.0.1:{PORT}/v1"
 # Which run of the arm this is; results are kept per run so repeats can be
 # compared and averaged. Repeats only mean something with sampling on:
 # at temperature 0 a repeat is the same output.
-RUN = os.environ.get("TINYTITAN_MEMVAL_RUN", "1")
-TEMPERATURE = os.environ.get("TINYTITAN_MEMVAL_TEMPERATURE")  # unset: the server's default
-SERVER_LOG = os.environ.get("TINYTITAN_MEMVAL_SERVER_LOG")
+RUN = os.environ.get("EMONE_MEMVAL_RUN", "1")
+TEMPERATURE = os.environ.get("EMONE_MEMVAL_TEMPERATURE")  # unset: the server's default
+SERVER_LOG = os.environ.get("EMONE_MEMVAL_SERVER_LOG")
 
 SESSIONS = 8
 
@@ -301,7 +301,7 @@ def assert_arm_is_real(arm: str, prompt_tokens: int):
     So: when the server log is available the check is exact. Without one it
     falls back to a deliberately loose band, and says which it used.
     """
-    log = os.environ.get("TINYTITAN_MEMVAL_SERVER_LOG")
+    log = os.environ.get("EMONE_MEMVAL_SERVER_LOG")
     if log and Path(log).exists():
         enabled = "memory enabled=true" in Path(log).read_text(errors="replace")
         wants = arm != "control"
@@ -309,7 +309,7 @@ def assert_arm_is_real(arm: str, prompt_tokens: int):
             raise SystemExit(
                 f"ABORT: arm '{arm}' wants memory={'on' if wants else 'off'} and "
                 f"the server log says {'on' if enabled else 'off'}. Rebuild the "
-                f"release binary and check TINYTITAN_MEMORY."
+                f"release binary and check EMONE_MEMORY."
             )
         print(
             f"  arm '{arm}' verified against the server log (memory {'on' if enabled else 'off'})"
@@ -324,11 +324,11 @@ def assert_arm_is_real(arm: str, prompt_tokens: int):
         raise SystemExit(
             f"ABORT: arm '{arm}' saw {prompt_tokens} prompt tokens in session 1; "
             f"expected {floor}..{ceiling}, and no server log was available to "
-            f"check exactly. Set TINYTITAN_MEMVAL_SERVER_LOG."
+            f"check exactly. Set EMONE_MEMVAL_SERVER_LOG."
         )
     print(
         f"  arm '{arm}' plausible on prompt size ({prompt_tokens} tokens); "
-        f"set TINYTITAN_MEMVAL_SERVER_LOG for an exact check"
+        f"set EMONE_MEMVAL_SERVER_LOG for an exact check"
     )
 
 

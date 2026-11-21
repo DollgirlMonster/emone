@@ -7,7 +7,7 @@ nearly deterministic, a 32-token greedy comparison agrees even between the
 folded mask and the causal-only one that is known to be wrong. Agreeing text is
 therefore necessary, not sufficient.
 
-This compares the runtime's own activation dump (`TINYTITAN_ACT_DUMP`) between
+This compares the runtime's own activation dump (`EMONE_ACT_DUMP`) between
 arms. **`prefill_logits` is the sensitive column**, and what the per-layer
 ones actually measure was learned by measuring them:
 
@@ -66,10 +66,10 @@ def run_arm(
     model: str, arm: str, characters: int, chunk: int, dump_root: pathlib.Path, timeout: int = 3600
 ) -> dict:
     env = os.environ.copy()
-    env["TINYTITAN_PREFILL_ANE"] = "off" if arm == "off" else "on"
+    env["EMONE_PREFILL_ANE"] = "off" if arm == "off" else "on"
     if arm == "causal":
-        env["TINYTITAN_ANE_MASK"] = "causal"
-    env["TINYTITAN_ACT_DUMP"] = str(dump_root / arm)
+        env["EMONE_ANE_MASK"] = "causal"
+    env["EMONE_ACT_DUMP"] = str(dump_root / arm)
     command = [
         str(CLI),
         "--model",
@@ -92,7 +92,7 @@ def run_arm(
         result["error"] = " / ".join(tail[-3:])[:400] or f"exit {proc.returncode}"
         return result
     result["used_ane"] = ab.FALLBACK_MARKER not in proc.stderr
-    result["causal_warning"] = "TINYTITAN_ANE_MASK=causal" in proc.stderr
+    result["causal_warning"] = "EMONE_ANE_MASK=causal" in proc.stderr
     footer = ab.parse_footer(proc.stderr)
     if footer is not None:
         result["prefill_seconds"] = footer["prefill_seconds"]

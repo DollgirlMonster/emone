@@ -32,7 +32,7 @@ session; with the instrument fixed, `pigeon` is a consistent memory loss.
   and so the answer comes from retention rather than from work re-derived in the
   same reply.
 - **Ceiling.** 6,000 completion tokens (5,200 for `pong`, whose stages emit a
-  file of code), overridable with `TINYTITAN_MEMVAL_MAX_TOKENS`.
+  file of code), overridable with `EMONE_MEMVAL_MAX_TOKENS`.
 - **Scoring.** *Foundation* — keys that never change, a no-regression check.
   *Carryable* — keys that change at least once, the signal, as carried/total.
   *Stale* — an answer that is an older value of a key, given after it changed;
@@ -210,10 +210,10 @@ above is reproducible rather than hand-derived.
 ## Reproduce
 
 ```bash
-TINYTITAN_MEMVAL_MODEL=qwen36 TINYTITAN_MEMVAL_QUANT=4 TINYTITAN_MEMVAL_RUNS=1 \
+EMONE_MEMVAL_MODEL=qwen36 EMONE_MEMVAL_QUANT=4 EMONE_MEMVAL_RUNS=1 \
   benchmark/memval_master.sh
-TINYTITAN_MEMVAL_MODEL=qwen36 TINYTITAN_MEMVAL_QUANT=4 \
-TINYTITAN_MEMVAL_RUNS=2 TINYTITAN_MEMVAL_FIRST_RUN=2 \
+EMONE_MEMVAL_MODEL=qwen36 EMONE_MEMVAL_QUANT=4 \
+EMONE_MEMVAL_RUNS=2 EMONE_MEMVAL_FIRST_RUN=2 \
   benchmark/memval_master.sh pigeon contract photograph
 python3 benchmark/memory_master.py stats
 ```

@@ -167,12 +167,12 @@ final class Attention {
     private let splitStateLock: NSLock
     /// Simdgroup-per-key pass 1 (attention_decode_partial_simd), used when a
     /// sparse selection is in play. Built per (head_dim, heads, chunks) on
-    /// first use. TINYTITAN_ATTN_SIMD_PARTIAL=0 keeps the serial kernel.
+    /// first use. EMONE_ATTN_SIMD_PARTIAL=0 keeps the serial kernel.
     private var simdPartialCache: [String: MTLComputePipelineState] = [:]
     /// Test hook: forces the simd (true) or serial (false) pass 1.
     var simdPartialOverride: Bool?
     private static let simdPartialDefault =
-        ProcessInfo.processInfo.environment["TINYTITAN_ATTN_SIMD_PARTIAL"] != "0"
+        ProcessInfo.processInfo.environment["EMONE_ATTN_SIMD_PARTIAL"] != "0"
     private var simdPartialEnabled: Bool { simdPartialOverride ?? Self.simdPartialDefault }
     private func simdPartialPipeline(
         headDim: UInt32, numQHeads: UInt32,
@@ -204,7 +204,7 @@ final class Attention {
         return max(1, min(defaultChunks, min(maxChunks, eff)))
     }
 
-    /// `TINYTITAN_ATTN_DECODE_LONG=1`: dense full attention past
+    /// `EMONE_ATTN_DECODE_LONG=1`: dense full attention past
     /// `longDecodeMinKeys` takes the simdgroup pass 1 and one chunk per
     /// `longDecodeChunkKeys` keys (up to `maxChunks`) instead of a fixed 16.
     /// The serial pass 1 costs ~10 us per key per threadgroup, so at a fixed 16
@@ -213,7 +213,7 @@ final class Attention {
     /// until a surprisal A/B clears it: the simd kernel sums keys in another
     /// order.
     static let longDecodeEnabled =
-        ProcessInfo.processInfo.environment["TINYTITAN_ATTN_DECODE_LONG"] == "1"
+        ProcessInfo.processInfo.environment["EMONE_ATTN_DECODE_LONG"] == "1"
     /// Set from `ModelProfile.decodeLong` by the runner, which has already
     /// applied the environment; nil (tests, other callers) reads it here.
     var longDecodeOverride: Bool?

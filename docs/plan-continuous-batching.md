@@ -124,7 +124,7 @@ matcher, and its watchdog counters. `B` of these are grouped per step.
 | 1 | slot-aware KV (**done**); GDN storage + encoder offsets (with Phase 2) | `Runtime/KVCache/*` | KV unit tests + golden |
 | 2 | per-row full/linear attention, GEMM rows, GDN slot offsets | `Runtime/Inference/RealForwardRunner+*`, `Kernels/Attention/*`, `Kernels/GDN/*` | kernel parity tests (B=1 vs today; B>1 vs B sequential) |
 | 3 | per-row head/sampler/decoders | `Runtime/Generation/*` | sampler parity + structured-output tests |
-| 4 | width, admission, slot scheduling, streaming multiplex | `TinyTitanServer/Core/ServerInference.swift`, `HTTPServer*.swift`, `ServerArguments.swift` | server concurrency tests, no 429 below width+queue |
+| 4 | width, admission, slot scheduling, streaming multiplex | `EmoneServer/Core/ServerInference.swift`, `HTTPServer*.swift`, `ServerArguments.swift` | server concurrency tests, no 429 below width+queue |
 | 5 | memory-budget admission | `ServerInference.swift`, startup banner | budget unit tests |
 | 6 | end-to-end exactness: B concurrent == B sequential | server tests + Open Responses suite | suite; golden |
 

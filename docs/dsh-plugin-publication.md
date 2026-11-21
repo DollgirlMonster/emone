@@ -1,7 +1,7 @@
 # Publishing a DeepSeek Harness plugin
 
-> **Decision, 2026-09-25: `dsh-tinytitan` is not published to npm and does not
-> need to be.** The installer (`tools/install_tinytitan.sh`) downloads this
+> **Decision, 2026-09-25: `dsh-emone` is not published to npm and does not
+> need to be.** The installer (`tools/install_emone.sh`) downloads this
 > project's source archive for the release tag, which carries `plugins/`, and
 > `tools/dsh_local.sh ensure` installs the bundle from there with a `file:` add.
 > Everything therefore arrives from the web with no registry account on either
@@ -11,7 +11,7 @@
 > remains possible for anyone who wants it, `npm pack --dry-run` is verified
 > clean (13 files, 27.3 kB), but it is not on the path and nothing waits on it.
 
-Research for `plugins/dsh-tinytitan/`, done 2026-09-14 against the installed
+Research for `plugins/dsh-emone/`, done 2026-09-14 against the installed
 `@deepseek-ai/dsh` **0.1.5-rc.2**, the upstream repository
 [`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)
 at `master`, the npm registry, and the community catalogue
@@ -70,7 +70,7 @@ The listing that storefronts and users actually read is
 - At most **3 entries per PR**.
 - Requirements: the repo declares `dsh.bundle` (root, or a
   `packages/`/`plugins/`/`apps/` subpackage — this repository's
-  `plugins/dsh-tinytitan/` qualifies); real working code; the repo is **at least
+  `plugins/dsh-emone/` qualifies); real working code; the repo is **at least
   1 day old**; the **`dsh-plugin` GitHub topic** is set; the description states
   what the plugin does with no marketing language and is checked against the
   code.
@@ -105,13 +105,13 @@ bundle, and `create-dshx` scaffolds a plugin project.
 | Lives in a subpackage the catalogue's CI looks at (`plugins/`) | **yes** |
 | Real, working code | **yes** — 66 `node --test` cases, 65 pass, 1 skipped (a shell byte-equality check that needs a built server) |
 | Repository ≥ 1 day old | **yes** (created 2026-08-02) |
-| `repository` field pointing at the listed repo | **yes**, with `directory: plugins/dsh-tinytitan` |
+| `repository` field pointing at the listed repo | **yes**, with `directory: plugins/dsh-emone` |
 | `dsh-plugin` npm keyword | **yes** (added 2026-09-14, with `deepseek`) |
 | `dsh-plugin` **GitHub topic on the repo** | **yes** — set 2026-09-14 (it was the only topic the repository had) |
 | Submitted to the catalogue | **yes** — [PR #5396](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/5396), one file, opened 2026-09-18 after #5094 was closed with no comment |
 | Description, accurate, no superlatives | not written yet — §4 has a draft |
 | Licence | **MIT, deliberately** — see the plugin README; the repository is Apache-2.0 and this package is an independent work that talks to the server over its HTTP API |
-| npm name `dsh-tinytitan` | **unclaimed** (registry returns 404) |
+| npm name `dsh-emone` | **unclaimed** (registry returns 404) |
 | `screenshots.json` | absent (optional) |
 
 ## 4. The submission, ready to copy
@@ -120,12 +120,12 @@ bundle, and `create-dshx` scaffolds a plugin project.
 repository:
 
 ```yaml
-url: https://github.com/Pummelchen/TinyTitan/tree/main/plugins/dsh-tinytitan
-name: Pummelchen/TinyTitan#dsh-tinytitan
+url: https://github.com/Pummelchen/TinyTitan/tree/main/plugins/dsh-emone
+name: Pummelchen/TinyTitan#dsh-emone
 category: model
 description:
-  en: 'Keeps a local TinyTitan model server reachable from the harness: refreshes the llm-pi-ai route from the installed models and mounts a compaction backend that does not think.'
-  zh: '把本机 TinyTitan 模型服务接入 Harness：按已安装模型刷新 llm-pi-ai 路由，并挂载一个不做思考的压缩后端。'
+  en: 'Keeps a local emone model server reachable from the harness: refreshes the llm-pi-ai route from the installed models and mounts a compaction backend that does not think.'
+  zh: '把本机 emone 模型服务接入 Harness：按已安装模型刷新 llm-pi-ai 路由，并挂载一个不做思考的压缩后端。'
 ```
 
 The description is quoted because it contains `: ` — unquoted, YAML reads that as
@@ -138,7 +138,7 @@ generated preset.
 ## 5. Steps, in order
 
 1. **Publish to npm** (optional for listing, useful for storefront download
-   counts): `npm publish` from `plugins/dsh-tinytitan`. The package is plain ESM
+   counts): `npm publish` from `plugins/dsh-emone`. The package is plain ESM
    with no build step, so what is published is what was tested. Needs an npm
    account with 2FA; the name is unclaimed. The `repository` field is already
    correct. **Not done — it is the operator's account.**
@@ -149,13 +149,13 @@ generated preset.
    that PR was closed 2026-09-15 with no comment, and the fork behind it is gone.
    Re-submitted 2026-09-18 as
    [PR #5396](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/5396),
-   from `Pummelchen/awesome-dsh-plugin` on branch `add-tinytitan-plugin`.
+   from `Pummelchen/awesome-dsh-plugin` on branch `add-emone-plugin`.
    **Merged 2026-09-19 by `fkysly`** (merge commit `4d136c1`), so the catalogue
-   half is done: `dsh-tinytitan` is listed. The fork is now inert — delete it,
+   half is done: `dsh-emone` is listed. The fork is now inert — delete it,
    but the `gh` token here lacks the `delete_repo` scope, so run
    `gh auth refresh -h github.com -s delete_repo` first or remove it in the web
    UI. Nothing depends on it.
-4. **Optionally add `screenshots.json`** to `plugins/dsh-tinytitan/` (1–8 images
+4. **Optionally add `screenshots.json`** to `plugins/dsh-emone/` (1–8 images
    already in this repository) so the storefront shows the plugin rather than
    scraping the README.
 5. Keep the entry's `url` correct if the package ever moves; the npm↔repo link
@@ -177,7 +177,7 @@ own tooling:
 - `node --test scripts/added-dates.test.mjs` — 3 passed.
 - `SKIP_PUBLISH_CHECKS=1 node scripts/build-site.mjs` with the READMEs
   regenerated the way `pr-check.yml` does it — **3,633 rows × 2 locales**, with
-  detail pages at `docs/p/Pummelchen/TinyTitan--plugins-dsh-tinytitan/` and
+  detail pages at `docs/p/Pummelchen/TinyTitan--plugins-dsh-emone/` and
   sitemap entries in both locales.
 
 One trap worth recording: `build-site.mjs` parses the **generated READMEs**, not
@@ -205,4 +205,4 @@ fewer than `readEntries()` is that, not a dropped entry.
 - `dsh --help`, `dsh plugin --profile web` (installed `@deepseek-ai/dsh` 0.1.5-rc.2)
 - <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md>
 - <https://www.npmjs.com/package/dsh-plugin-catalog> · <https://www.npmjs.com/package/dsh-plugin-shop> · <https://www.npmjs.com/package/@dsh-enhanced/hello> · <https://www.npmjs.com/package/create-dshx>
-- npm registry metadata for `dsh-tinytitan` (404 = unclaimed)
+- npm registry metadata for `dsh-emone` (404 = unclaimed)

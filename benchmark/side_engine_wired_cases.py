@@ -16,7 +16,7 @@ narrower question, and it is the only one that reaches the engine:
   source for it in the memory path yet.
 
     python3.13 benchmark/side_engine_wired_cases.py --prepare jobs.jsonl
-    .build/release/TinyTitanBench cpu35batch <install> jobs.jsonl done.jsonl
+    .build/release/EmoneBench cpu35batch <install> jobs.jsonl done.jsonl
     python3.13 benchmark/side_engine_wired_cases.py --score done.jsonl
 
 The cases are authored here and marked so, because the point is the shape of

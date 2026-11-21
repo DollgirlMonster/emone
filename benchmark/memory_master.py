@@ -1,11 +1,11 @@
 #!/usr/bin/env python3.13
 """Drive the ten master prompts through the memory arms.
 
-One scenario per process (`TINYTITAN_MASTER_SCENARIO`), one arm per invocation,
+One scenario per process (`EMONE_MASTER_SCENARIO`), one arm per invocation,
 mirroring `memory_book.py`'s contract with `memval_run.sh`:
 
-    TINYTITAN_MASTER_SCENARIO=ledger python3 benchmark/memory_master.py auto
-    TINYTITAN_MASTER_SCENARIO=ledger python3 benchmark/memory_master.py report
+    EMONE_MASTER_SCENARIO=ledger python3 benchmark/memory_master.py auto
+    EMONE_MASTER_SCENARIO=ledger python3 benchmark/memory_master.py report
 
 **Scoring is the point of this module.** `master_scenarios.py` derives the
 foundation set (keys that never change) and the carryable set (keys that change
@@ -44,21 +44,21 @@ def _load(name: str, path: str):
 
 scenarios = _load("master_scenarios", "benchmark/master_scenarios.py")
 
-PORT = int(os.environ.get("TINYTITAN_PORT", "8096"))
+PORT = int(os.environ.get("EMONE_PORT", "8096"))
 BASE = f"http://127.0.0.1:{PORT}/v1"
-OUT = Path(os.environ.get("TINYTITAN_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-master"))
-RUN = os.environ.get("TINYTITAN_MEMVAL_RUN", "1")
-SERVER_LOG = os.environ.get("TINYTITAN_MEMVAL_SERVER_LOG")
-NAME = os.environ.get("TINYTITAN_MASTER_SCENARIO", "photograph")
+OUT = Path(os.environ.get("EMONE_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-master"))
+RUN = os.environ.get("EMONE_MEMVAL_RUN", "1")
+SERVER_LOG = os.environ.get("EMONE_MEMVAL_SERVER_LOG")
+NAME = os.environ.get("EMONE_MASTER_SCENARIO", "photograph")
 SPEC = scenarios.SCENARIOS[NAME]
 ARMS = ("summary", "auto")
-TEMPERATURE = os.environ.get("TINYTITAN_MEMVAL_TEMPERATURE")
+TEMPERATURE = os.environ.get("EMONE_MEMVAL_TEMPERATURE")
 # Pong's stages emit a whole file of code; the others emit sections. The ceiling
 # is room for the work *and* the quiz: at 2,500 a session that deliberated about
 # formatting was cut off before the JSON block, which scored as a full set of
 # misses and journalled a truncated session into memory. Compliant sessions never
 # approached the old cap, so raising it changes nothing for them.
-MAX_TOKENS = int(os.environ.get("TINYTITAN_MEMVAL_MAX_TOKENS", 5_200 if NAME == "pong" else 6_000))
+MAX_TOKENS = int(os.environ.get("EMONE_MEMVAL_MAX_TOKENS", 5_200 if NAME == "pong" else 6_000))
 
 SUMMARY_PROMPT = (
     "Summarize, in at most 200 words, everything a worker of the next session "
@@ -143,7 +143,7 @@ def assert_arm_is_real(arm: str, prompt_tokens: int) -> None:
     if arm == "auto" and prompt_tokens < 200:
         raise SystemExit(
             f"ABORT: arm 'auto' saw {prompt_tokens} prompt tokens in session 1; the "
-            "memory fragment is missing. Check TINYTITAN_MEMORY on the server."
+            "memory fragment is missing. Check EMONE_MEMORY on the server."
         )
 
 

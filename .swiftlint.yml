@@ -1,4 +1,4 @@
-# SwiftLint configuration for TinyTitan.
+# SwiftLint configuration for Emone.
 #
 # The standard this project holds itself to: every Swift target builds in Swift 6
 # language mode with complete strict concurrency and warnings-as-errors (enforced

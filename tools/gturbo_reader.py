@@ -6,7 +6,7 @@ Loading them from the install rather than re-fetching the checkpoint keeps
 quantization out of the comparison, so a mismatch is a bug in the forward
 pass and not in the repack.
 
-Layout, from `TinyTitanFormat/GTurboResidentIndexV1.swift`:
+Layout, from `EmoneFormat/GTurboResidentIndexV1.swift`:
   header   24 B  = indexSize, residentSize, entryCount (all u64 LE)
   entries  72 B each, then a UTF-8 string table, then the payload
   entry    = nameOffset u32, nameLen u16, dtype u8, reserved u8,

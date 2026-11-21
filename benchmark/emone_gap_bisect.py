@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Bisect the unmeasured wall: length sweep (fixed vs per-token overhead) and
+an rdadvise-off comparison, using authoritative server footers.
+"""
+
+import http.client
+import json
+import os
+import subprocess
+import time
+import sys
+
+from emone_profile import (
+    DEFAULT_MODEL_PATH,
+    benchmark_log_path,
+    server_command,
+    server_environment,
+    resolve_api_model,
+)
+
+BASE = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+BIN = os.path.join(BASE, ".build", "release", "EmoneServer")
+MODEL = str(DEFAULT_MODEL_PATH)
+PORT = 8112
+PROMPT = "Write a detailed essay about the history of computing."
+
+
+def run(max_tokens, tag, extra_env=None):
+    env = server_environment()
+    env["EMONE_RUNNER_STATS"] = "1"
+    env["EMONE_KERNEL_STATS"] = "1"
+    if extra_env:
+        env.update(extra_env)
+    log_path = benchmark_log_path(f"emone_gap_{tag}.log")
+    log = open(log_path, "w")
+    proc = subprocess.Popen(
+        server_command(BIN, PORT, model=MODEL), env=env, stdout=log, stderr=subprocess.STDOUT
+    )
+    start = time.time()
+    while time.time() - start < 120:
+        if proc.poll() is not None:
+            print(f"{tag}: server exited early", file=sys.stderr)
+            sys.exit(1)
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=1)
+            conn.request("GET", "/health")
+            if "ok" in conn.getresponse().read().decode():
+                conn.close()
+                break
+            conn.close()
+        except OSError:
+            pass
+        time.sleep(0.05)
+    payload = json.dumps(
+        {
+            "model": resolve_api_model(PORT),
+            "messages": [{"role": "user", "content": PROMPT}],
+            "temperature": 0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "presence_penalty": 0.0,
+            "max_completion_tokens": max_tokens,
+            "stream": True,
+        }
+    ).encode()
+    # one warm request then the measured one
+    for _i in range(2):
+        conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=3600)
+        conn.request(
+            "POST",
+            "/v1/chat/completions",
+            body=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        while resp.read(8192):
+            pass
+        conn.close()
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    time.sleep(0.3)
+    out = {"gen": [], "runner": [], "gpu": []}
+    with open(log_path) as f:
+        for line in f:
+            if "Emone generation" in line and "decode_tok_s=" in line:
+                out["gen"].append(line.strip())
+            if "Emone runner" in line and "cb1_ms=" in line:
+                out["runner"].append(line.strip())
+            if "Emone kernel role=" in line:
+                out["gpu"].append(line.strip())
+            if "Emone kernel total_gpu_ms=" in line:
+                out["gpu"].append(line.strip())
+    print(f"--- {tag} (max_tokens={max_tokens}) ---")
+    for line in out["gen"]:
+        print(line)
+    for line in out["runner"]:
+        print(line)
+    for line in out["gpu"]:
+        print(line)
+
+
+run(128, "len128")
+run(1024, "len1024")

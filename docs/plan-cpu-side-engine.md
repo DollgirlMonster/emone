@@ -1,6 +1,6 @@
 # Plan: a CPU side-engine
 
-TinyTitan is the runtime. The memory work needs a second, much smaller model —
+emone is the runtime. The memory work needs a second, much smaller model —
 to extract facts from a session, to check a reply against what the store
 holds, to notice a contradiction — and that model must not take the GPU,
 which is where the answer the person is waiting for is being produced.
@@ -11,7 +11,7 @@ project's own converter produced, on the cores the main engine leaves idle.
 ## The premise, and the part of it that is wrong
 
 The premise is that the CPU is free. Measured on this machine while a 35B
-generates, TinyTitanServer uses **0.20 of one core out of eight**. That is true,
+generates, EmoneServer uses **0.20 of one core out of eight**. That is true,
 and it is about *cores*.
 
 Decode is not bound by cores. It is bound by memory, on both sides. The GPU
@@ -20,7 +20,7 @@ ceiling, and a 2B at 8-bit reads about 1.9 GB for every token it produces —
 the tied output head included, which is read in full each time. The two
 engines compete for one memory system.
 
-Measured with `TinyTitanBench cpu` while a 35B was generating:
+Measured with `EmoneBench cpu` while a 35B was generating:
 
 | threads | GB/s | implied 2B tok/s at 8-bit |
 | --- | --- | --- |
@@ -70,9 +70,9 @@ what "the CPU is idle, so it is free" would have produced.
 
 ## What exists
 
-- `sources/TinyTitanKernelsC/int8_affine_gemv.c` — the NEON decode primitive,
+- `sources/EmoneKernelsC/int8_affine_gemv.c` — the NEON decode primitive,
   four accumulators, group sums hoisted.
-- `sources/TinyTitan/Kernels/CPU/Int8AffineGEMV.swift` — the Swift wrapper, with
+- `sources/Emone/Kernels/CPU/Int8AffineGEMV.swift` — the Swift wrapper, with
   row-split threading whose result is bit-identical to single-threaded, and
   a performance-core-count default.
 - `.build/qwen35-2b-affine-8bit` (1.9 GB) and `-4bit` (1.3 GB, K/V promoted
@@ -84,7 +84,7 @@ what "the CPU is idle, so it is free" would have produced.
 
 The engine runs, and it agrees with the oracle.
 
-`TinyTitanBench cpu35 <snapshot>` loads a snapshot and answers the same three
+`EmoneBench cpu35 <snapshot>` loads a snapshot and answers the same three
 continuations the numpy reference checks itself with, at both widths. Against
 the reference's own logits over the full 248,320-token vocabulary:
 
@@ -123,7 +123,7 @@ for pages read sequentially and never written.
 
 ## End to end
 
-`TinyTitanBench cpu35gen <snapshot> "<prompt>" [n]` takes text and returns text,
+`EmoneBench cpu35gen <snapshot> "<prompt>" [n]` takes text and returns text,
 through the engine's own tokenizer loaded straight out of the snapshot:
 
 ```
@@ -186,7 +186,7 @@ only happens when those blocks are actively destroying the signal.
 
 The cause: the GDN output gate is **SiLU** in the Qwen3-Next / 3.6 lineage
 and **sigmoid** in Qwen3.8-Flash-Next, whose reference this file was ported
-from. TinyTitan's own kernel already carries the distinction as a function
+from. emone's own kernel already carries the distinction as a function
 constant, `FC_GDN_SIGMOID_GATE`, with a comment naming Qwen3.8 as the
 sigmoid one. So the engine must select it per family as well — this is the
 first constant to check when the Swift side disagrees.

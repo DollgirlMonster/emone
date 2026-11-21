@@ -17,10 +17,10 @@ GB/s SSD. Model: qwen3.8-flash-next_125B_A6B, 4-bit unless stated.
 
 | candidate | result |
 |---|---|
-| fused hyper-connection read (5 -> 2 dispatches) and write (2 -> 1), bit-exact | GPU time unchanged (entry_attn 3.83 -> 3.90 ms/token); decode 4.97/5.03 vs 5.04/4.83. Launch cost was never the cost: each read moves 3.3 MB of int4 gate weights. Kept behind TINYTITAN_HC_FUSED=1. |
+| fused hyper-connection read (5 -> 2 dispatches) and write (2 -> 1), bit-exact | GPU time unchanged (entry_attn 3.83 -> 3.90 ms/token); decode 4.97/5.03 vs 5.04/4.83. Launch cost was never the cost: each read moves 3.3 MB of int4 gate weights. Kept behind EMONE_HC_FUSED=1. |
 | GDN in_proj GEMV layouts (unroll 4, split-K 4, pure 16-byte read) | 64 / 59 / 65 GB/s against the production 59; the old qkv bandwidth kernel tops at 74, MoE phase 2 at 88. The practical ceiling is ~75-88 GB/s, not 100, and the GEMVs are within 10-15% of it. |
 | MoE phase 1 layouts (two rows per simdgroup; 4x unroll) | 33.6 vs 32.6 GB/s in the unspecialized bench; 0.447 vs 0.445 ms/layer in situ. The specialized routed path already runs the whole 27.7 MB blob set at 62 GB/s. |
-| GPU-side QSA key selection (removes a runSync per full-attention layer) | verified 0 mask mismatches at 3.7k context; throughput a wash (the sync was not the cost). Opt-in: TINYTITAN_QSA_GPU_SELECT=1. |
+| GPU-side QSA key selection (removes a runSync per full-attention layer) | verified 0 mask mismatches at 3.7k context; throughput a wash (the sync was not the cost). Opt-in: EMONE_QSA_GPU_SELECT=1. |
 
 ## What bounds decode now
 

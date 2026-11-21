@@ -9,7 +9,7 @@ appended to $RESULTS as it goes, so progress is visible while it works.
 
 The run behind the wiki's `Capital-of-Paris-Smartness` page:
 
-    .build/release/TinyTitanServer --models-dir models \
+    .build/release/EmoneServer --models-dir models \
         --model qwen3.5-2b_4-Bit --port 8091 --reasoning off
 
     PORT=8091 MAXTOK=128 REPEATS=3 \

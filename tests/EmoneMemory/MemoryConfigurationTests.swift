@@ -1,0 +1,243 @@
+import Foundation
+import Testing
+
+@testable import EmoneMemory
+
+@Suite struct MemoryConfigurationTests {
+    /// No ceiling by default. Measured, the whole store for a hundred-chapter
+    /// novel was about 100 KB; a bound sized for the machine could never bind
+    /// and only confused. The env var still sets one for anyone who wants it.
+    @Test func thereIsNoCeilingUnlessAsked() {
+        let plain = MemoryConfiguration.fromEnvironment(["EMONE_MEMORY": "1"])
+        #expect(plain.storage.maximumMemoryBytes == nil)
+        #expect(plain.storage.budget.factBytes == 0)
+        #expect(plain.storage.budget.logBytes == 0)
+        #expect(plain.summary.contains("cap=none"))
+
+        let capped = MemoryConfiguration.fromEnvironment([
+            "EMONE_MEMORY": "1",
+            "EMONE_MEMORY_CACHE_MIB": "256",
+        ])
+        #expect(capped.storage.maximumMemoryBytes == 256 << 20)
+        #expect(capped.summary.contains("cap=256MiB"))
+
+        // Zero and junk are "no cap", not "a cap of nothing".
+        let zero = MemoryConfiguration.fromEnvironment([
+            "EMONE_MEMORY": "1",
+            "EMONE_MEMORY_CACHE_MIB": "0",
+        ])
+        #expect(zero.storage.maximumMemoryBytes == nil)
+    }
+
+    @Test func toolSurfaceIsChosenByName() {
+        func surface(_ value: String) -> MemoryToolSurface {
+            MemoryConfiguration.fromEnvironment([
+                "EMONE_MEMORY": "1",
+                "EMONE_MEMORY_TOOLS": value,
+            ]).toolSurface
+        }
+        #expect(MemoryConfiguration().toolSurface == .off)
+        #expect(surface("off") == .off)
+        #expect(surface("minimal") == .minimal)
+        #expect(surface("full") == .full)
+        // The old boolean spelling still works.
+        #expect(surface("1") == .full)
+        #expect(surface("0") == .off)
+        // Minimal is the write plus the targeted read; discovery comes from
+        // the bootstrap, which already lists what exists.
+        // List is in minimal: without it a model with an empty bootstrap
+        // guesses keys, and measured, the guessing ate every tool round.
+        #expect(MemoryToolSurface.minimal.toolNames == ["memory_set", "memory_get", "memory_list"])
+        #expect(MemoryToolSurface.full.toolNames == MemoryTools.names)
+        #expect(MemoryTools.definitions(surface: .minimal).count == 3)
+        #expect(MemoryTools.definitions(surface: .off).isEmpty)
+    }
+
+    @Test func memoryIsOffUnlessAskedFor() {
+        // Nothing about serving changes for someone who has not enabled it.
+        #expect(!MemoryConfiguration.fromEnvironment([:]).isEnabled)
+        #expect(!MemoryConfiguration.fromEnvironment(["EMONE_MEMORY_DIR": "/tmp/x"]).isEnabled)
+        #expect(MemoryConfiguration.fromEnvironment(["EMONE_MEMORY": "1"]).isEnabled)
+        #expect(MemoryConfiguration.fromEnvironment(["EMONE_MEMORY": "on"]).isEnabled)
+    }
+
+    @Test func storageLandsOneFilePerWorkspace() throws {
+        var storage = ContinuityStorageConfiguration(
+            directory: URL(fileURLWithPath: "/tmp/emone-memory"))
+        let scope = try MemoryScope(namespace: "tinytitan", user: "ada", workspace: "repo-1234abcd")
+        #expect(
+            storage.journalURL(for: scope).path
+                == "/tmp/emone-memory/tinytitan/ada/repo-1234abcd.ndjson")
+        // Two workspaces never share a file, which is what makes deleting one
+        // project's memory a file removal rather than an edit.
+        let other = try MemoryScope(namespace: "tinytitan", user: "ada", workspace: "repo-5678ef00")
+        #expect(storage.journalURL(for: scope) != storage.journalURL(for: other))
+        storage.directory = URL(fileURLWithPath: "/var/lib/emone")
+        #expect(storage.journalURL(for: scope).path.hasPrefix("/var/lib/emone/"))
+    }
+
+    @Test func environmentOverridesEveryDocumentedKnob() {
+        let configuration = MemoryConfiguration.fromEnvironment([
+            "EMONE_MEMORY": "1",
+            "EMONE_MEMORY_DIR": "/tmp/emone-memory-test",
+            "EMONE_MEMORY_FSYNC": "1",
+            "EMONE_MEMORY_CACHE_MIB": "128",
+            "EMONE_MEMORY_NAMESPACE": "team",
+            "EMONE_MEMORY_USER": "ada",
+            "EMONE_MEMORY_WORKSPACE": "explicit-workspace",
+            "EMONE_MEMORY_MAX_VALUE_BYTES": "2048",
+            "EMONE_MEMORY_BOOTSTRAP_LIMIT": "5",
+            "EMONE_MEMORY_TOOL_ROUNDS": "2",
+            "EMONE_MEMORY_TOOLS": "minimal",
+            "EMONE_MEMORY_CONSOLIDATION": "1",
+        ])
+        #expect(configuration.storage.directory.path == "/tmp/emone-memory-test")
+        #expect(configuration.storage.synchronizesEveryWrite)
+        #expect(configuration.storage.maximumMemoryBytes == 128 << 20)
+        #expect(configuration.namespace == "team")
+        #expect(configuration.user == "ada")
+        #expect(configuration.workspace == "explicit-workspace")
+        #expect(configuration.limits.maximumValueBytes == 2048)
+        #expect(configuration.limits.bootstrapRecords == 5)
+        #expect(configuration.maximumToolRounds == 2)
+        #expect(configuration.toolSurface == .minimal)
+        #expect(configuration.sessionConsolidation)
+    }
+
+    /// A server launched from the home directory and used for everything
+    /// would put a novel and a codebase in one fact store. It has to refuse
+    /// visibly rather than mix quietly.
+    @Test func theHomeDirectoryIsNotAWorkspace() {
+        let base = ["EMONE_MEMORY": "1", "HOME": "/Users/ada"]
+        for (directory, label) in [
+            ("/Users/ada", "home"),
+            ("/Users/ada/", "home with slash"),
+            ("/Users", "parent of home"),
+            ("/", "root"),
+        ] {
+            let configuration = MemoryConfiguration.fromEnvironment(
+                base.merging(["EMONE_WORKSPACE_DIR": directory]) { $1 })
+            #expect(!configuration.isEnabled, "\(label) should be refused")
+            #expect(configuration.disabledReason?.contains("not a project") == true, "\(label)")
+            #expect(
+                configuration.disabledReason?.contains("EMONE_MEMORY_WORKSPACE") == true,
+                "the refusal names the fix")
+        }
+
+        // A project directory is fine, and so is the home directory once the
+        // workspace is named explicitly: naming it is the person saying
+        // they mean it.
+        let project = MemoryConfiguration.fromEnvironment(
+            base.merging(["EMONE_WORKSPACE_DIR": "/Users/ada/src/novel"]) { $1 })
+        #expect(project.isEnabled)
+        #expect(project.disabledReason == nil)
+        let named = MemoryConfiguration.fromEnvironment(
+            base.merging([
+                "EMONE_WORKSPACE_DIR": "/Users/ada",
+                "EMONE_MEMORY_WORKSPACE": "novel",
+            ]) { $1 })
+        #expect(named.isEnabled)
+        #expect(named.workspace == "novel")
+
+        // Off stays off, with no reason to report: nothing was refused.
+        let off = MemoryConfiguration.fromEnvironment(
+            ["HOME": "/Users/ada", "EMONE_WORKSPACE_DIR": "/Users/ada"])
+        #expect(!off.isEnabled)
+        #expect(off.disabledReason == nil)
+    }
+
+    @Test func workspaceComesFromTheLaunchDirectoryWhenNotNamed() {
+        let configuration = MemoryConfiguration.fromEnvironment([
+            "EMONE_MEMORY": "1",
+            "EMONE_WORKSPACE_DIR": "/Users/ada/src/emone",
+        ])
+        #expect(configuration.workspace.hasPrefix("emone-"))
+        #expect(configuration.scope() != nil)
+    }
+
+    @Test func twoCheckoutsOfOneRepositoryGetDifferentWorkspaces() {
+        // Same directory name, different paths: sharing memory between them
+        // would be the cross-project leak the scoping exists to prevent.
+        let first = MemoryConfiguration.workspaceIdentifier(forPath: "/Users/ada/a/emone")
+        let second = MemoryConfiguration.workspaceIdentifier(forPath: "/Users/ada/b/emone")
+        #expect(first != second)
+        #expect(first.hasPrefix("emone-") && second.hasPrefix("emone-"))
+        // Stable across processes: a restart must land on the same memory.
+        #expect(
+            first == MemoryConfiguration.workspaceIdentifier(forPath: "/Users/ada/a/emone/"))
+    }
+
+    @Test func perRequestWorkspaceCanBeRefused() throws {
+        var configuration = MemoryConfiguration()
+        configuration.workspace = "pinned"
+        configuration.allowsPerRequestWorkspace = false
+        #expect(configuration.scope(workspaceOverride: "other")?.workspace == "pinned")
+
+        configuration.allowsPerRequestWorkspace = true
+        #expect(configuration.scope(workspaceOverride: "other")?.workspace == "other")
+        // An unusable override yields no scope at all rather than silently
+        // falling back to a shared one.
+        #expect(configuration.scope(workspaceOverride: "../escape") == nil)
+    }
+
+    @Test func summaryNamesTheSettings() {
+        var configuration = MemoryConfiguration()
+        configuration.isEnabled = true
+        configuration.storage.maximumMemoryBytes = 512 << 20
+        let summary = configuration.summary
+        #expect(summary.contains("memory enabled=true"))
+        #expect(summary.contains("store=in-process"))
+        #expect(summary.contains("cap=512MiB"))
+        // There is no host and no port to report any more.
+        #expect(!summary.contains("6379"))
+    }
+
+    /// The byte budget the machine is sized for has to become a real bound,
+    /// or it is decoration. It is now counted, not derived from a worst case.
+    @Test func theCacheBudgetIsSplitBetweenTheTwoStores() {
+        var configuration = MemoryConfiguration()
+        configuration.storage.maximumMemoryBytes = 256 << 20
+        let split = configuration.storage.budget
+        #expect(split.factBytes == 192 << 20)
+        #expect(split.logBytes == 64 << 20)
+        #expect(split.factBytes + split.logBytes == 256 << 20)
+
+        // Facts take three quarters at every size: they are the half that
+        // must be resident. The journal is on disk regardless.
+        configuration.storage.maximumMemoryBytes = 1 << 30
+        #expect(configuration.storage.budget.factBytes == 768 << 20)
+
+        // A budget too small to split still leaves both stores usable rather
+        // than yielding a zero that refuses every write.
+        configuration.storage.maximumMemoryBytes = 1024
+        let tiny = configuration.storage.budget
+        #expect(tiny.factBytes >= 1 << 20)
+        #expect(tiny.logBytes >= 1 << 20)
+    }
+
+    /// The guard is on by default now that it has been measured, and the
+    /// parse still has to be explicit in both directions: an operator who
+    /// writes `off` must get off, which a `!= "0"` test would not have given
+    /// them.
+    @Test func theGuardIsOffUnlessExplicitlyAskedFor() {
+        for value in ["0", "off", "false", "no", ""] {
+            let configuration = MemoryConfiguration.fromEnvironment([
+                "EMONE_MEMORY_GUARD": value
+            ])
+            #expect(
+                configuration.guardsUserFacts == false,
+                Comment(rawValue: "EMONE_MEMORY_GUARD=\(value) must not enable it"))
+        }
+        for value in ["1", "on", "true", "TRUE"] {
+            let configuration = MemoryConfiguration.fromEnvironment([
+                "EMONE_MEMORY_GUARD": value
+            ])
+            #expect(
+                configuration.guardsUserFacts,
+                Comment(rawValue: "EMONE_MEMORY_GUARD=\(value) must enable it"))
+        }
+        // On by default: measured on three runs, and it closes the one
+        // scenario where memory lost.
+        #expect(MemoryConfiguration.fromEnvironment([:]).guardsUserFacts)
+    }
+}

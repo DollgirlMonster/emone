@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify, clean-build, package, and optionally publish an TinyTitan release.
+# Verify, clean-build, package, and optionally publish an Emone release.
 # with a checksum, and publishes a GitHub Release from an existing tag.
 #
 #   tools/release.sh v4.0                  # dry run: verify, build, package, stop
@@ -23,8 +23,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO="${TINYTITAN_RELEASE_REPO:-Pummelchen/TinyTitan}"
-PRODUCTS=(TinyTitanServer TinyTitanCLI TinyTitanRepack TinyTitanBench)
+REPO="${EMONE_RELEASE_REPO:-Pummelchen/TinyTitan}"
+PRODUCTS=(EmoneServer EmoneCLI EmoneRepack EmoneBench)
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { printf '\n== %s\n' "$*"; }
@@ -43,9 +43,9 @@ while [ $# -gt 0 ]; do
 done
 
 VERSION="${TAG#v}"
-STAGE_ROOT="$ROOT/.build/releases/tinytitan-release-$VERSION"
-STAGE="$STAGE_ROOT/tinytitan-$VERSION-macos-arm64"
-ARCHIVE="$STAGE_ROOT/tinytitan-$VERSION-macos-arm64.tar.gz"
+STAGE_ROOT="$ROOT/.build/releases/emone-release-$VERSION"
+STAGE="$STAGE_ROOT/emone-$VERSION-macos-arm64"
+ARCHIVE="$STAGE_ROOT/emone-$VERSION-macos-arm64.tar.gz"
 SCRATCH="$STAGE_ROOT/build"
 
 cd "$ROOT" || die "cannot cd to $ROOT"
@@ -57,8 +57,8 @@ step "preconditions"
 # in .build (golden-baseline.sh exits 2 without it), so a missing release build
 # used to surface as per-target "golden baseline mismatch" lines. Demand it
 # first, where the message can say what to actually run.
-[ -x "$ROOT/.build/release/TinyTitanCLI" ] \
-  || die "no release build at .build/release/TinyTitanCLI; run: swift build -c release (the golden gate drives that binary)"
+[ -x "$ROOT/.build/release/EmoneCLI" ] \
+  || die "no release build at .build/release/EmoneCLI; run: swift build -c release (the golden gate drives that binary)"
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || die "tag $TAG does not exist locally"
 [ "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)" ] \
   || die "HEAD is not $TAG; check out the tagged commit before releasing"
@@ -67,9 +67,9 @@ git ls-remote --tags origin 2>/dev/null | grep -q "refs/tags/$TAG$" \
 gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
   && die "a Release for $TAG already exists on $REPO"
 # A skipped baseline needs its reason before anything expensive starts, so a
-# forgotten TINYTITAN_RELEASE_SKIP_GOLDENS_REASON fails here and not an hour later.
-if [ -n "${TINYTITAN_RELEASE_SKIP_GOLDENS:-}" ] && [ -z "${TINYTITAN_RELEASE_SKIP_GOLDENS_REASON:-}" ]; then
-  die "TINYTITAN_RELEASE_SKIP_GOLDENS=${TINYTITAN_RELEASE_SKIP_GOLDENS} without TINYTITAN_RELEASE_SKIP_GOLDENS_REASON; a skipped baseline must record why"
+# forgotten EMONE_RELEASE_SKIP_GOLDENS_REASON fails here and not an hour later.
+if [ -n "${EMONE_RELEASE_SKIP_GOLDENS:-}" ] && [ -z "${EMONE_RELEASE_SKIP_GOLDENS_REASON:-}" ]; then
+  die "EMONE_RELEASE_SKIP_GOLDENS=${EMONE_RELEASE_SKIP_GOLDENS} without EMONE_RELEASE_SKIP_GOLDENS_REASON; a skipped baseline must record why"
 fi
 echo "  tag $TAG at $(git rev-parse --short HEAD), tree clean, no existing Release"
 
@@ -80,9 +80,9 @@ echo "  tag $TAG at $(git rev-parse --short HEAD), tree clean, no existing Relea
 # Preparing a release is bumping that one literal -- docs/release-process.md
 # step 1 -- and committing it with the tag.
 SERVER_VERSION="$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' \
-  "$ROOT/sources/TinyTitanServer/Core/ServerVersion.swift")"
+  "$ROOT/sources/EmoneServer/Core/ServerVersion.swift")"
 [ -n "$SERVER_VERSION" ] \
-  || die "could not read ServerVersion.current from sources/TinyTitanServer/Core/ServerVersion.swift"
+  || die "could not read ServerVersion.current from sources/EmoneServer/Core/ServerVersion.swift"
 [ "$SERVER_VERSION" = "$VERSION" ] \
   || die "tag $TAG is version $VERSION but ServerVersion.current is $SERVER_VERSION; bump that literal (docs/release-process.md step 1) and commit it before tagging"
 
@@ -116,15 +116,15 @@ grep -q 'Test run with .* passed' "$STAGE_ROOT.testlog" 2>/dev/null \
 # it beside the skip, and must be repeated in the release notes -- --publish
 # refuses when it is not:
 #
-#   TINYTITAN_RELEASE_SKIP_GOLDENS=qwen38-8 \
-#   TINYTITAN_RELEASE_SKIP_GOLDENS_REASON="install is Dropbox online-only; 134 GB
+#   EMONE_RELEASE_SKIP_GOLDENS=qwen38-8 \
+#   EMONE_RELEASE_SKIP_GOLDENS_REASON="install is Dropbox online-only; 134 GB
 #     needed, 123 GB free" tools/release.sh v5.3
 GOLDENS_CHECKED=0
 GOLDEN_SKIPPED=""
 GOLDEN_ABSENT=""
 GOLDEN_DECLARED=""
-SKIP_GOLDENS="${TINYTITAN_RELEASE_SKIP_GOLDENS:-}"
-SKIP_GOLDENS_REASON="${TINYTITAN_RELEASE_SKIP_GOLDENS_REASON:-}"
+SKIP_GOLDENS="${EMONE_RELEASE_SKIP_GOLDENS:-}"
+SKIP_GOLDENS_REASON="${EMONE_RELEASE_SKIP_GOLDENS_REASON:-}"
 
 # Installs that are deliberately NOT golden targets. The coverage guard below
 # errors on any installed model missing from check_golden, so this list is how
@@ -253,13 +253,13 @@ swift build -c release --scratch-path "$SCRATCH" 2>&1 | tee "$STAGE_ROOT.buildlo
 grep -qE '^[^ ]+\.(swift|metal|c|h|m|mm):[0-9]+:[0-9]+: warning:' "$STAGE_ROOT.buildlog" \
   && die "release build emitted compiler warnings"
 BIN="$SCRATCH/release"
-[ -x "$BIN/TinyTitanServer" ] || die "build produced no TinyTitanServer"
+[ -x "$BIN/EmoneServer" ] || die "build produced no EmoneServer"
 # Resolve the products directory physically before anything globs it. SwiftPM's
 # `$SCRATCH/release` is a symlink to `out/Products/Release`, and `find` does NOT
 # follow a symlink given as its own starting point — so `find "$BIN" -name
 # '*.bundle'` matched nothing while `cp "$BIN/$product"` worked through the same
 # link. 5.6 shipped without its Metal shader library that way, and the release
-# binaries died with "unable to find bundle named TinyTitan_TinyTitan".
+# binaries died with "unable to find bundle named Emone_Emone".
 BIN="$(cd "$BIN" && pwd -P)"
 
 # --- stage ------------------------------------------------------------------
@@ -274,24 +274,24 @@ done
 # shipping an archive that dies on the first model load. Test bundles are
 # excluded: they hold fixtures the tests read, and 5.5's archive carried the six
 # that the executables of the day needed.
-[ -d "$BIN/TinyTitan_TinyTitan.bundle" ] \
-  || die "no TinyTitan_TinyTitan.bundle in $BIN: the Metal shader library would not ship"
+[ -d "$BIN/Emone_Emone.bundle" ] \
+  || die "no Emone_Emone.bundle in $BIN: the Metal shader library would not ship"
 find "$BIN" -maxdepth 1 -name '*.bundle' ! -name '*Tests.bundle' -exec cp -R {} "$STAGE/" \;
 # LICENSE and NOTICE are what Apache-2.0 requires to travel with a binary
 # distribution; THIRD_PARTY_NOTICES.md carries the upstream attributions.
 cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/"
 
 cat > "$STAGE/README-binaries.txt" <<TXT
-TinyTitan $VERSION — prebuilt binaries (macOS, Apple Silicon / arm64)
+Emone $VERSION — prebuilt binaries (macOS, Apple Silicon / arm64)
 
 Built from tag $TAG with: swift build -c release
 Requires macOS 26+. Apple Silicon only; there is no x86_64 build.
 
 Contents
-  TinyTitanServer          OpenAI-compatible local server (binds 127.0.0.1 only)
-  TinyTitanCLI             one-shot prompt CLI
-  TinyTitanRepack          model installer / repacker
-  TinyTitanBench           benchmark driver
+  EmoneServer          OpenAI-compatible local server (binds 127.0.0.1 only)
+  EmoneCLI             one-shot prompt CLI
+  EmoneRepack          model installer / repacker
+  EmoneBench           benchmark driver
   *.bundle             Metal shader library and other runtime resources — keep
                        these next to the executables or the runtime cannot
                        load its kernels
@@ -303,9 +303,9 @@ These binaries are NOT code-signed or notarized. macOS Gatekeeper will refuse
 them on first run. Either build from source, or clear the quarantine attribute
 yourself after verifying the checksum published with this archive:
 
-  xattr -dr com.apple.quarantine /path/to/tinytitan-$VERSION-macos-arm64
+  xattr -dr com.apple.quarantine /path/to/emone-$VERSION-macos-arm64
 
-No model weights are included. TinyTitanRepack defaults to Ornith 1.5 8-bit (about
+No model weights are included. EmoneRepack defaults to Ornith 1.5 8-bit (about
 36.9 GB); 4-bit remains available explicitly. The runtime defaults to standard
 answers with thinking off, as described in the README and Wiki.
 TXT
@@ -315,8 +315,8 @@ step "package"
 # Assert on the *archive*, not the staging directory: a bundle that failed to
 # stage is invisible until someone runs the binary somewhere else, which is how
 # 5.6's first upload shipped without the Metal shader library.
-tar tzf "$ARCHIVE" | grep -q '^[^/]*/TinyTitan_TinyTitan\.bundle/' \
-  || die "the archive carries no TinyTitan_TinyTitan.bundle: the runtime could not load its kernels"
+tar tzf "$ARCHIVE" | grep -q '^[^/]*/Emone_Emone\.bundle/' \
+  || die "the archive carries no Emone_Emone.bundle: the runtime could not load its kernels"
 shasum -a 256 "$ARCHIVE" | sed "s|$STAGE_ROOT/||" > "$ARCHIVE.sha256"
 SHA="$(awk '{print $1}' "$ARCHIVE.sha256")"
 BYTES="$(wc -c < "$ARCHIVE" | tr -d ' ')"
@@ -371,9 +371,9 @@ if [ -n "$NOTES" ]; then
   #
   # The character budget is the part that actually keeps notes short -- the
   # compactor can only reformat, so a draft that says too much still says too
-  # much. Raise it deliberately with TINYTITAN_RELEASE_NOTES_MAX_CHARS.
+  # much. Raise it deliberately with EMONE_RELEASE_NOTES_MAX_CHARS.
   COMPACT_NOTES="$STAGE_ROOT/notes-compact.md"
-  NOTES_MAX_CHARS="${TINYTITAN_RELEASE_NOTES_MAX_CHARS:-12000}"
+  NOTES_MAX_CHARS="${EMONE_RELEASE_NOTES_MAX_CHARS:-12000}"
   REQUIRE_ARGS=()
   for required in $GOLDEN_SKIPPED $GOLDEN_ABSENT "$SHA" "$BYTES"; do
     REQUIRE_ARGS+=(--require "$required")
@@ -382,7 +382,7 @@ if [ -n "$NOTES" ]; then
     --out "$COMPACT_NOTES" \
     --max-chars "$NOTES_MAX_CHARS" \
     "${REQUIRE_ARGS[@]+"${REQUIRE_ARGS[@]}"}" \
-    || die "the notes did not survive compaction, or are over the ${NOTES_MAX_CHARS}-character budget (raise it with TINYTITAN_RELEASE_NOTES_MAX_CHARS)"
+    || die "the notes did not survive compaction, or are over the ${NOTES_MAX_CHARS}-character budget (raise it with EMONE_RELEASE_NOTES_MAX_CHARS)"
 fi
 
 # --- publish ----------------------------------------------------------------
@@ -403,7 +403,7 @@ fi
 step "publish"
 gh release create "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" \
   --repo "$REPO" \
-  --title "TinyTitan $VERSION" \
+  --title "Emone $VERSION" \
   --notes-file "$COMPACT_NOTES" \
   --latest || die "gh release create failed"
 gh release view "$TAG" --repo "$REPO" --json url,assets \

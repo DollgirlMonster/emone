@@ -25,7 +25,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "tools/server_launcher.sh"
-SERVER = ROOT / ".build/release/TinyTitanServer"
+SERVER = ROOT / ".build/release/EmoneServer"
 # The dense 2B is the one install both engines serve, so it is the model the CPU
 # test can name without guessing what the catalog holds.
 DENSE_DIR = ROOT / "models/qwen3.5_2B_4Bit"
@@ -53,12 +53,12 @@ def run_launcher(
     *args: str, env: dict | None = None, stdin: str = "", interactive: bool = False
 ) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
-    environment["TINYTITAN_LAUNCHER_DRY_RUN"] = "1"
+    environment["EMONE_LAUNCHER_DRY_RUN"] = "1"
     if interactive:
-        environment["TINYTITAN_LAUNCHER_ASSUME_TTY"] = "1"
+        environment["EMONE_LAUNCHER_ASSUME_TTY"] = "1"
     else:
-        environment.pop("TINYTITAN_LAUNCHER_ASSUME_TTY", None)
-    environment.pop("TINYTITAN_PORT", None)
+        environment.pop("EMONE_LAUNCHER_ASSUME_TTY", None)
+    environment.pop("EMONE_PORT", None)
     if env:
         environment.update(env)
     return subprocess.run(
@@ -75,8 +75,8 @@ def run_launcher(
 def run_launcher_pty(*args: str, env: dict | None = None) -> tuple[int, str]:
     """Run with stderr on a terminal, which is the only way warn_red colours."""
     environment = dict(os.environ)
-    environment["TINYTITAN_LAUNCHER_DRY_RUN"] = "1"
-    environment["TINYTITAN_LAUNCHER_ASSUME_TTY"] = "1"
+    environment["EMONE_LAUNCHER_DRY_RUN"] = "1"
+    environment["EMONE_LAUNCHER_ASSUME_TTY"] = "1"
     environment["TERM"] = "xterm-256color"
     environment.pop("NO_COLOR", None)
     if env:

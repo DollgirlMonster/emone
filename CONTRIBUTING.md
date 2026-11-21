@@ -1,6 +1,6 @@
 # Contributing
 
-TinyTitan welcomes focused fixes, documentation improvements, and
+emone welcomes focused fixes, documentation improvements, and
 benchmark reports from Apple Silicon Macs.
 
 ## Before opening a change

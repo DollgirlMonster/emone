@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Does a prefill switch change what the model understands? A paired surprisal
-# A/B for prefill numerics, such as TINYTITAN_PREFILL_MPP_WIDE.
+# A/B for prefill numerics, such as EMONE_PREFILL_MPP_WIDE.
 #
 #   tools/prefill_surprisal_ab.sh --model <dir>
-#   tools/prefill_surprisal_ab.sh --model <dir> --b-env "TINYTITAN_PREFILL_MPP_WIDE=1" --score 512
+#   tools/prefill_surprisal_ab.sh --model <dir> --b-env "EMONE_PREFILL_MPP_WIDE=1" --score 512
 #
-# The same text runs twice through `TinyTitanCLI --score`: all but the last
+# The same text runs twice through `EmoneCLI --score`: all but the last
 # N tokens are prefilled (the path the switch changes), then those N are
 # teacher-forced through decode (which it does not change) and each one's
 # negative log-likelihood is recorded. Both arms read identical tokens, so the
@@ -29,7 +29,7 @@ CHUNK=8192
 A_CHUNK=""
 B_CHUNK=""
 A_ENV=""
-B_ENV="TINYTITAN_PREFILL_MPP_WIDE=1"
+B_ENV="EMONE_PREFILL_MPP_WIDE=1"
 OUT=""
 
 usage() {
@@ -50,7 +50,7 @@ Options:
   --b-chunk <n>        --prefill-chunk for arm B only (default --chunk), to
                        judge a whole launch configuration against a reference
   --a-env "<K=V ...>"  environment for arm A (default: none, the baseline)
-  --b-env "<K=V ...>"  environment for arm B (default TINYTITAN_PREFILL_MPP_WIDE=1)
+  --b-env "<K=V ...>"  environment for arm B (default EMONE_PREFILL_MPP_WIDE=1)
   --out <dir>          results directory (default benchmark/surprisal/<stamp>)
 USAGE
 }
@@ -95,13 +95,13 @@ esac
 
 [ "$(uname -s)" = "Darwin" ] || die "needs macOS on Apple Silicon"
 [ -f "$MODEL/verified-install.json" ] || die "$MODEL is not a completed install"
-busy="$(pgrep -fl 'TinyTitanServer|TinyTitanCLI|TinyTitanPackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm' || true)"
+busy="$(pgrep -fl 'EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm' || true)"
 [ -z "$busy" ] || die "another model or test process is running; stop it first:
 $busy"
 
 cd "$ROOT"
-CLI="$(swift build -c release --show-bin-path)/TinyTitanCLI"
-[ -x "$CLI" ] || die "no release TinyTitanCLI at $CLI; run swift build -c release first"
+CLI="$(swift build -c release --show-bin-path)/EmoneCLI"
+[ -x "$CLI" ] || die "no release EmoneCLI at $CLI; run swift build -c release first"
 
 [ -n "$OUT" ] || OUT="$ROOT/benchmark/surprisal/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"

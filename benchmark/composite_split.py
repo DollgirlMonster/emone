@@ -24,7 +24,7 @@ ungrounded to grounded, and a fact that was already the person's must not be
 damaged.
 
     python3.13 benchmark/composite_split.py --prepare jobs.jsonl
-    .build/.../TinyTitanBench cpu35batch <snapshot> jobs.jsonl done.jsonl
+    .build/.../EmoneBench cpu35batch <snapshot> jobs.jsonl done.jsonl
     python3.13 benchmark/composite_split.py --score done.jsonl
 
 **Answer, measured twice: no.** Over the 47 facts that claimed the person's

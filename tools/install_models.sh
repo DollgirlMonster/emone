@@ -7,29 +7,29 @@
 #   tools/install_models.sh --all-8bit      # every 8-bit model
 #
 # Most models install straight from a pinned Hugging Face release through
-# TinyTitanRepack, which streams and verifies in one pass. Qwen3.8-Flash-Next is
+# EmoneRepack, which streams and verifies in one pass. Qwen3.8-Flash-Next is
 # the exception and is documented below, because the difference matters when
 # choosing what to trust.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Same override as the launcher: a checkout builds into `.build/release`, an
-# install from the release tarball keeps its binaries in `~/.tinytitan/bin`.
-BIN="${TINYTITAN_BIN_DIR:-$ROOT/.build/release}/TinyTitanRepack"
-MODELS="${TINYTITAN_MODELS_DIR:-$ROOT/models}"
+# install from the release tarball keeps its binaries in `~/.emone/bin`.
+BIN="${EMONE_BIN_DIR:-$ROOT/.build/release}/EmoneRepack"
+MODELS="${EMONE_MODELS_DIR:-$ROOT/models}"
 # Where a download and its conversion are staged, and where the converted
 # snapshot is kept until the install exists. It must be absolute and independent
 # of the caller's working directory: every staging path below used to be a bare
 # `.build/...`, so a factory-new install launched from the user's home staged
 # tens to hundreds of GB in `~/.build` — outside the install root, and outside
 # the two directories the installer says removing uninstalls everything. Found
-# and fixed 2026-09-24; `TINYTITAN_WORK_DIR` moves it to another volume.
-WORK="${TINYTITAN_WORK_DIR:-$ROOT/.build}"
+# and fixed 2026-09-24; `EMONE_WORK_DIR` moves it to another volume.
+WORK="${EMONE_WORK_DIR:-$ROOT/.build}"
 
 # The install menu's list of models, labels and sizes comes from the shared
 # catalogue so this file and the installer cannot disagree about what exists.
-# shellcheck source=tools/tinytitan_models.sh
-source "$ROOT/tools/tinytitan_models.sh"
+# shellcheck source=tools/emone_models.sh
+source "$ROOT/tools/emone_models.sh"
 
 # The converters need a Python with numpy/ml_dtypes/safetensors at 3.10 or
 # newer. Resolved by capability rather than by name: `python3` is 3.9 on a
@@ -57,7 +57,7 @@ free_gb() {
 # The catalogue's installed size for a row, in GB. May be fractional.
 choice_gb() {
   local want="$1" row key _label _bits gb
-  for row in "${TINYTITAN_MODEL_CHOICES[@]+"${TINYTITAN_MODEL_CHOICES[@]}"}"; do
+  for row in "${EMONE_MODEL_CHOICES[@]+"${EMONE_MODEL_CHOICES[@]}"}"; do
     IFS='|' read -r key _label _bits gb _ <<<"$row"
     [[ "$key" == "$want" ]] && { printf '%s' "$gb"; return 0; }
   done
@@ -321,11 +321,11 @@ Commands
 
 Where things go
 
-  Models install to $TINYTITAN_MODELS_DIR (the installer sets
-  ~/.tinytitan/models; a checkout uses <repo>/models), one directory per row
+  Models install to $EMONE_MODELS_DIR (the installer sets
+  ~/.emone/models; a checkout uses <repo>/models), one directory per row
   with its verified-install.json receipt. A download and its conversion are
-  staged under $TINYTITAN_WORK_DIR (default <tools>/../.build) — for an
-  installed copy that is ~/.tinytitan/src/.build.
+  staged under $EMONE_WORK_DIR (default <tools>/../.build) — for an
+  installed copy that is ~/.emone/src/.build.
 
   Staging is kept only while it can save a download: the converted snapshot is
   what makes the *other* width of the same model free, so it lives until that
@@ -335,7 +335,7 @@ Where things go
 
   A download is refused before it starts when the staging volume or the models
   volume cannot hold it, naming both numbers and both ways out (free space, or
-  TINYTITAN_WORK_DIR on another volume). TINYTITAN_SKIP_DISK_CHECK=1 starts
+  EMONE_WORK_DIR on another volume). EMONE_SKIP_DISK_CHECK=1 starts
   anyway. A resumed conversion does not need the room again.
 
 Coverage
@@ -351,7 +351,7 @@ Coverage
 Sources
 
   Every install is built from the model's own bf16 release, quantized here
-  (group-64 affine) by the tools in tools/ and imported by TinyTitanRepack.
+  (group-64 affine) by the tools in tools/ and imported by EmoneRepack.
   Third-party quantizations are deliberately not used: their group sizes,
   widths and norm conventions are theirs, and here the router, the
   shared-expert gate, the DeltaNet gating projections and every norm stay
@@ -363,7 +363,7 @@ Sources
                       one fetch; one width alone already converts both and
                       keeps the other snapshot for a later run.
   convert_qwen35      tools/prepare_qwen35.py --size {2b,4b,9b,27b}, then
-                      TinyTitanRepack --input-snapshot. One fetch yields both
+                      EmoneRepack --input-snapshot. One fetch yields both
                       widths. These are the dense models, and the only ones
                       the CPU engine runs; the 9B is the vision-language
                       build, converted text-only like the others. The 27B
@@ -407,13 +407,13 @@ status() {
   echo "tools/install_models.sh --help          sources, disk sizes and env vars"
 }
 
-# Does `TinyTitanRepack --model <key>` stream this one itself?
+# Does `EmoneRepack --model <key>` stream this one itself?
 #
 # These are the checkpoints the repacker fetches from Hugging Face and packages
 # in one pass, with no converter involved — which means no Python. The keys are
 # the same strings as this script's own, and the list is exactly what
-# `TinyTitanRepack --help` accepts.
-tinytitan_repack_streams() {
+# `EmoneRepack --help` accepts.
+emone_repack_streams() {
   case "$1" in
     qwen36|qwen36-8bit|qwen36-mtp|ornith15|ornith15-8bit|qwen38flash|qwen38flash-mtp) return 0 ;;
     *) return 1 ;;
@@ -424,17 +424,17 @@ tinytitan_repack_streams() {
 # converters' 3.10 floor, and there is no Homebrew to install a newer one. Some
 # of these models do not need a converter at all, so say which command works
 # instead of leaving the person at "no usable Python interpreter found".
-tinytitan_no_python_fallback() {
+emone_no_python_fallback() {
   local want="$1" row name dir
   for row in "${CATALOGUE[@]+"${CATALOGUE[@]}"}"; do
     IFS='|' read -r name dir _ <<<"$row"
     [[ "$name" == "$want" ]] || continue
     echo >&2
-    if tinytitan_repack_streams "$want"; then
+    if emone_repack_streams "$want"; then
       echo "  This one does not need Python: the repacker streams it itself." >&2
-      echo "      swift run -c release TinyTitanRepack --model $want --output models/$dir" >&2
+      echo "      swift run -c release EmoneRepack --model $want --output models/$dir" >&2
       echo "  or, with the release build already made," >&2
-      echo "      .build/release/TinyTitanRepack --model $want --output models/$dir" >&2
+      echo "      .build/release/EmoneRepack --model $want --output models/$dir" >&2
     else
       echo "  This one is quantized here from its bf16 release by a Python" >&2
       echo "  converter, so it does need Python 3.10+. The repacker can stream" >&2
@@ -450,7 +450,7 @@ install_one() {
   # Every conversion path runs a Python converter, so resolve the interpreter
   # once, here, rather than emitting a raw "command not found" per call.
   local python
-  python="$(tinytitan_resolve_python)" || { tinytitan_no_python_fallback "$want"; return 1; }
+  python="$(emone_resolve_python)" || { emone_no_python_fallback "$want"; return 1; }
   for row in "${CATALOGUE[@]+"${CATALOGUE[@]}"}"; do
     # Six fields on the MoE rows, four elsewhere; the trailing two are only
     # read by the convert_qwen35moe branch, not here.
@@ -480,7 +480,7 @@ install_one() {
     # snapshot that is already on disk is not fetched again, so it is not
     # counted twice. An unreadable df is not a limit: require_gb says nothing
     # then, which is the same rule the runtime's own guard follows.
-    if [[ "${TINYTITAN_SKIP_DISK_CHECK:-0}" != "1" ]]; then
+    if [[ "${EMONE_SKIP_DISK_CHECK:-0}" != "1" ]]; then
       local size_gb="" snap_exists=0 install_exists=0 probe work_ok=1 models_ok=1
       size_gb="$(choice_gb "$name")"
       if [[ -n "$size_gb" ]]; then
@@ -497,8 +497,8 @@ install_one() {
         if (( ! work_ok || ! models_ok )); then
           echo "  Not starting $name: there is not enough room to finish it." >&2
           echo "  Free space, or stage on another volume:" >&2
-          echo "      TINYTITAN_WORK_DIR=/Volumes/scratch/tt $0 $name" >&2
-          echo "  (TINYTITAN_SKIP_DISK_CHECK=1 starts anyway, at your own risk.)" >&2
+          echo "      EMONE_WORK_DIR=/Volumes/scratch/tt $0 $name" >&2
+          echo "  (EMONE_SKIP_DISK_CHECK=1 starts anyway, at your own risk.)" >&2
           return 1
         fi
       fi
@@ -506,7 +506,7 @@ install_one() {
 
     case "$source" in
       repack)
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
+        [[ -x "$BIN" ]] || { echo "build EmoneRepack first: swift build -c release" >&2; return 1; }
         echo "installing $name -> models/$dir"
         # --resume is refused when there is nothing to resume; pass it only
         # when a previous attempt left its state behind.
@@ -519,7 +519,7 @@ install_one() {
       convert)
         # Qwen's own bf16 release, quantized one shard at a time by
         # tools/prepare_qwen38.py (a 360 GB fetch per width), then repacked.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
+        [[ -x "$BIN" ]] || { echo "build EmoneRepack first: swift build -c release" >&2; return 1; }
         # A mirror: HF_ENDPOINT is the Hub's own variable, and the converter
         # fetches the checkpoint and its small JSON files from it when set.
         local endpoint_arg=""
@@ -534,7 +534,7 @@ install_one() {
         fi
         # `--share-ngram-table` hardlinks the 102 GB table from the staging
         # snapshot into the install, which only works on one filesystem. With
-        # TINYTITAN_MODELS_DIR on another volume, leave the flag off so the
+        # EMONE_MODELS_DIR on another volume, leave the flag off so the
         # repack copies it and its own disk-space check is the one that applies.
         local share_arg=""
         mkdir -p "$MODELS" || return 1
@@ -554,7 +554,7 @@ install_one() {
       convert_qwen38_mtp)
         # The draft head's 31 tensors, range-fetched from Qwen's original by
         # tools/prepare_qwen38_mtp.py, then imported as a draft-head sidecar.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
+        [[ -x "$BIN" ]] || { echo "build EmoneRepack first: swift build -c release" >&2; return 1; }
         if [[ ! -f "$WORK/qwen38-mtp-affine/model.safetensors.index.json" ]]; then
           echo "converting $name -> $WORK/qwen38-mtp-affine"
           "$python" tools/prepare_qwen38_mtp.py --bits "$width" \
@@ -567,7 +567,7 @@ install_one() {
       convert_qwen36_mtp)
         # Qwen3.6's draft head: 19 tensors of the `mtp.*` namespace in two
         # shards of Qwen's original, converted as a qwen3_5_mtp sidecar.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
+        [[ -x "$BIN" ]] || { echo "build EmoneRepack first: swift build -c release" >&2; return 1; }
         if [[ ! -f "$WORK/qwen36-mtp-affine/model.safetensors.index.json" ]]; then
           echo "converting $name -> $WORK/qwen36-mtp-affine"
           "$python" tools/prepare_agentworld.py --model qwen36 --draft-head --bits "$width" \
@@ -584,7 +584,7 @@ install_one() {
         # from that one download, to `$WORK/<preset>-affine-{4,8}bit`, so
         # neither width may be thrown away: the snapshot is kept until both
         # installs exist, and the other width then costs no fetch at all.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
+        [[ -x "$BIN" ]] || { echo "build EmoneRepack first: swift build -c release" >&2; return 1; }
         local preset="${preset_field:-${name%-8bit}}" model_id
         case "$preset" in
           agentworld) model_id="qwen-agentworld" ;;
@@ -616,7 +616,7 @@ install_one() {
         # Ornith's draft head lives in shard 16 of its original checkpoint;
         # tools/prepare_ornith_mtp.py verifies that shard against its pinned
         # revision and converts it.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
+        [[ -x "$BIN" ]] || { echo "build EmoneRepack first: swift build -c release" >&2; return 1; }
         local src="$WORK/ornith-mtp-src" rev=e4dfb35a93d4b6822a811a7676f3488514abe7e2
         local base="https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B/resolve/$rev"
         mkdir -p "$src"
@@ -665,7 +665,7 @@ install_one() {
           qwen38-27b) size_key=27b; model_id="qwen3.8-27b" ;;
           *) echo "unknown Qwen 3.5 size: $preset" >&2; return 2 ;;
         esac
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
+        [[ -x "$BIN" ]] || { echo "build EmoneRepack first: swift build -c release" >&2; return 1; }
         # The 9B checkpoint is the vision-language build; the converter drops
         # the model.visual.* tower and writes the text model, so the install
         # is text-only like every other model here.
@@ -760,26 +760,26 @@ install_both() {
 # The one question an install has to ask.
 #
 # The model is the only real choice a person makes — everything else about
-# setting TinyTitan up is automatic — so it is shown as a list with the disk each
+# setting Emone up is automatic — so it is shown as a list with the disk each
 # one costs and what it is for, with the verified default first. Enter takes the
-# default. The entries and their sizes come from `TINYTITAN_MODEL_CHOICES` in
-# tools/tinytitan_models.sh, so the installer cannot offer a model that does not
+# default. The entries and their sizes come from `EMONE_MODEL_CHOICES` in
+# tools/emone_models.sh, so the installer cannot offer a model that does not
 # exist or quote a size no one re-measured.
 choose_model() {
-  local count=${#TINYTITAN_MODEL_CHOICES[@]}
+  local count=${#EMONE_MODEL_CHOICES[@]}
   local index key label bits gb note reply default_label
   if (( count == 0 )); then
-    echo "no models are listed in TINYTITAN_MODEL_CHOICES" >&2
+    echo "no models are listed in EMONE_MODEL_CHOICES" >&2
     return 2
   fi
-  IFS='|' read -r _ default_label _ _ _ <<<"${TINYTITAN_MODEL_CHOICES[0]}"
+  IFS='|' read -r _ default_label _ _ _ <<<"${EMONE_MODEL_CHOICES[0]}"
 
   echo
   echo "Which model? This is the only choice; the rest is automatic."
   echo
   printf '  %-4s %-32s %-6s %-10s %s\n' "#" "model" "bits" "on disk" "what it is for"
   for (( index = 0; index < count; index++ )); do
-    IFS='|' read -r key label bits gb note <<<"${TINYTITAN_MODEL_CHOICES[$index]}"
+    IFS='|' read -r key label bits gb note <<<"${EMONE_MODEL_CHOICES[$index]}"
     printf '  %2d)  %-32s %-6s %7s GB  %s\n' \
       "$((index + 1))" "$label" "${bits}-bit" "$gb" "$note"
   done
@@ -798,7 +798,7 @@ choose_model() {
     echo "not a choice: $reply" >&2
     return 2
   fi
-  key="${TINYTITAN_MODEL_CHOICES[$((reply - 1))]%%|*}"
+  key="${EMONE_MODEL_CHOICES[$((reply - 1))]%%|*}"
   echo
   install_one "$key"
 }

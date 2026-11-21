@@ -3,7 +3,7 @@
 Usage:  python3 tools/qwen38_sequence_parity.py <model-dir> <dump-dir>
 
 The dump directory holds one `posN` subdirectory per position, written by a
-run with `TINYTITAN_ACT_DUMP` and `TINYTITAN_ACT_DUMP_POSITIONS`.
+run with `EMONE_ACT_DUMP` and `EMONE_ACT_DUMP_POSITIONS`.
 """
 
 import sys

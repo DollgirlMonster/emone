@@ -1,7 +1,7 @@
-diff --git a/sources/TinyTitan/Kernels/Attention/Attention.swift b/sources/TinyTitan/Kernels/Attention/Attention.swift
+diff --git a/sources/Emone/Kernels/Attention/Attention.swift b/sources/Emone/Kernels/Attention/Attention.swift
 index f5a674c1..0b3ecffe 100644
---- a/sources/TinyTitan/Kernels/Attention/Attention.swift
-+++ b/sources/TinyTitan/Kernels/Attention/Attention.swift
+--- a/sources/Emone/Kernels/Attention/Attention.swift
++++ b/sources/Emone/Kernels/Attention/Attention.swift
 @@ -7,6 +7,9 @@ struct AttentionSplitGeometry: Sendable, Equatable {
      let chunkLength: Int
      let partialThreadgroups: Int
@@ -45,16 +45,16 @@ index f5a674c1..0b3ecffe 100644
              throw MetalError.bufferAllocationFailed("attention split-KV scratch")
 @@ -174,16 +183,28 @@ final class Attention {
      private static let simdPartialDefault =
-         ProcessInfo.processInfo.environment["TINYTITAN_ATTN_SIMD_PARTIAL"] != "0"
+         ProcessInfo.processInfo.environment["EMONE_ATTN_SIMD_PARTIAL"] != "0"
      private var simdPartialEnabled: Bool { simdPartialOverride ?? Self.simdPartialDefault }
-+    /// Under `TINYTITAN_ATTN_DECODE_LONG`, the long dense path runs
++    /// Under `EMONE_ATTN_DECODE_LONG`, the long dense path runs
 +    /// `attention_decode_partial_simd_gqa` (one threadgroup per KV head and
 +    /// chunk, K/V read once for its query heads) unless
-+    /// `TINYTITAN_ATTN_DECODE_GQA=0`. Byte-identical to the per-head simd
++    /// `EMONE_ATTN_DECODE_GQA=0`. Byte-identical to the per-head simd
 +    /// kernel by construction; `AttentionDecodeGQATests` holds it to that.
 +    var gqaPartialOverride: Bool?
 +    private static let gqaPartialDefault =
-+        ProcessInfo.processInfo.environment["TINYTITAN_ATTN_DECODE_GQA"] != "0"
++        ProcessInfo.processInfo.environment["EMONE_ATTN_DECODE_GQA"] != "0"
 +    private var gqaPartialEnabled: Bool { gqaPartialOverride ?? Self.gqaPartialDefault }
 +    /// Largest query-head group the GQA kernel's registers hold (`kAttnGQAMaxG`).
 +    static let gqaMaxGroup = 8
@@ -78,7 +78,7 @@ index f5a674c1..0b3ecffe 100644
 @@ -214,6 +235,9 @@ final class Attention {
      /// order.
      static let longDecodeEnabled =
-         ProcessInfo.processInfo.environment["TINYTITAN_ATTN_DECODE_LONG"] == "1"
+         ProcessInfo.processInfo.environment["EMONE_ATTN_DECODE_LONG"] == "1"
 +    /// Test hook: forces the long-context dense path on or off.
 +    var longDecodeOverride: Bool?
 +    private var longDecodeOn: Bool { longDecodeOverride ?? Self.longDecodeEnabled }
@@ -188,10 +188,10 @@ index f5a674c1..0b3ecffe 100644
              threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
          p1.endEncoding()
  
-diff --git a/sources/TinyTitan/Metal/Attention/attention.metal b/sources/TinyTitan/Metal/Attention/attention.metal
+diff --git a/sources/Emone/Metal/Attention/attention.metal b/sources/Emone/Metal/Attention/attention.metal
 index 5637d758..27e6b54e 100644
---- a/sources/TinyTitan/Metal/Attention/attention.metal
-+++ b/sources/TinyTitan/Metal/Attention/attention.metal
+--- a/sources/Emone/Metal/Attention/attention.metal
++++ b/sources/Emone/Metal/Attention/attention.metal
 @@ -608,3 +608,186 @@ void attention_decode_partial_simd(
      }
      if (lane == 0) { m_out[base] = m_g; d_out[base] = d_g; }
@@ -379,21 +379,21 @@ index 5637d758..27e6b54e 100644
 +        threadgroup_barrier(mem_flags::mem_threadgroup);
 +    }
 +}
-diff --git a/tests/TinyTitan/Kernels/Attention/AttentionDecodeGQATests.swift b/tests/TinyTitan/Kernels/Attention/AttentionDecodeGQATests.swift
+diff --git a/tests/Emone/Kernels/Attention/AttentionDecodeGQATests.swift b/tests/Emone/Kernels/Attention/AttentionDecodeGQATests.swift
 new file mode 100644
 index 00000000..262766be
 --- /dev/null
-+++ b/tests/TinyTitan/Kernels/Attention/AttentionDecodeGQATests.swift
++++ b/tests/Emone/Kernels/Attention/AttentionDecodeGQATests.swift
 @@ -0,0 +1,121 @@
 +import Metal
 +import Testing
-+import TinyTitanValidationSupport
++import EmoneValidationSupport
 +
-+@testable import TinyTitan
++@testable import Emone
 +
 +/// attention_decode_partial_simd_gqa (one threadgroup per KV head and chunk)
 +/// against attention_decode_partial_simd (one per Q head and chunk) on the
-+/// long-context dense path, `TINYTITAN_ATTN_DECODE_LONG`. Per head the two run
++/// long-context dense path, `EMONE_ATTN_DECODE_LONG`. Per head the two run
 +/// the same expressions in the same order, so the outputs must be
 +/// byte-identical, not merely close. Qwen 3.6 35B-A3B's full-attention
 +/// geometry: 16 Q heads, 2 KV heads (8 per group), head_dim 256.
