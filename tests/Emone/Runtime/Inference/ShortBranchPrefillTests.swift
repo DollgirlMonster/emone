@@ -66,8 +66,9 @@ import Testing
         #expect(ShortBranchRouting.groupedMinRows(heldContext: 1024) == 37)
         #expect(ShortBranchRouting.groupedMinRows(heldContext: 16384) == 61)
         #expect(ShortBranchRouting.groupedMinRows(heldContext: 65536) == 61)
-        // Interpolated in log2(N): 4096 is halfway from 1024 to 16384.
-        #expect(ShortBranchRouting.groupedMinRows(heldContext: 4096) == 49)
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 4096) == 37)
+        // Interpolated in log2(N): 8192 is halfway from 4096 to 16384.
+        #expect(ShortBranchRouting.groupedMinRows(heldContext: 8192) == 49)
     }
 
     @Test func theThresholdNeverFallsAsTheContextGrows() {

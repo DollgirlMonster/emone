@@ -96,15 +96,16 @@ public struct ShortBranchPrefillReport: Sendable, Equatable {
 ///
 /// The per-row stage costs ~5.5-6.5 ms a row on ~40-55 ms fixed; the grouped
 /// one ~2.4-3.8 ms a row on ~160 ms fixed, so it wins only past a crossover,
-/// which moves up with the held context. Crossovers, interpolated linearly
-/// between the measured row counts where the faster stage flips (M1 Max,
-/// Qwen 3.6 35B-A3B 4-bit, `fastpath` exact-row sweep, median of 5,
-/// 2026-11-21): N = 1024, per-row 224.2 / grouped 235.1 ms at 32 rows and
-/// 321.8 / 296.4 at 48 -> 37 rows; N = 16384, 348.2 / 364.6 at 48 and
-/// 438.2 / 434.0 at 64 -> 61 rows. In between the threshold is interpolated in
-/// log2(N), which is not measured.
+/// which moves up with the held context. Measured on the M1 Max, Qwen 3.6
+/// 35B-A3B 4-bit, `fastpath` exact-row sweep, 2026-11-21 (per-process median
+/// of 5, median of 3 interleaved rounds; per-row / grouped ms):
+/// - N = 1024: 32 rows 216.5 / 230.3, 40 rows 275.3 / 268.3 -> 37 rows.
+/// - N = 4096: 32 rows 217.1 / 237.8, 40 rows 278.1 / 273.2, 48 rows
+///   317.6 / 290.6 -> 37 rows, the same as 1k.
+/// - N = 16384: 56 rows 384.4 / 392.6, 64 rows 429.5 / 428.8 -> 61 rows.
+/// Between 4k and 16k the threshold is interpolated in log2(N), not measured.
 public enum ShortBranchRouting {
-    static let nearContext = 1024
+    static let nearContext = 4096
     static let nearRows = 37
     static let farContext = 16384
     static let farRows = 61
