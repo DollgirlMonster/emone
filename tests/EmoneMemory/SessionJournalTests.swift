@@ -6,7 +6,7 @@ import Testing
 /// The journal's contract, and the content filter that makes it affordable.
 @Suite struct SessionJournalTests {
     private func scope(_ workspace: String = "repo-a") throws -> MemoryScope {
-        try MemoryScope(namespace: "emone", user: "local", workspace: workspace)
+        try MemoryScope(namespace: "tinytitan", user: "local", workspace: workspace)
     }
 
     private func turn(

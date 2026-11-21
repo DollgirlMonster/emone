@@ -461,7 +461,7 @@ emone_export_memory_environment() {
     fi
   fi
   export EMONE_WORKSPACE_DIR="${EMONE_WORKSPACE_DIR:-$workspace_dir}"
-  export EMONE_MEMORY_NAMESPACE="${EMONE_MEMORY_NAMESPACE:-emone}"
+  export EMONE_MEMORY_NAMESPACE="${EMONE_MEMORY_NAMESPACE:-tinytitan}"
   local emone_root
   emone_root="${BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
   export EMONE_MEMORY_DIR="${EMONE_MEMORY_DIR:-$emone_root/memory}"

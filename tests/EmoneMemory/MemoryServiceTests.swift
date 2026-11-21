@@ -58,7 +58,7 @@ import Testing
 
     @Test func sessionCarriesScopeAndBoundedBootstrap() async throws {
         let store = InMemoryStore()
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         try await store.set(
             MemoryRecord(
                 key: try MemoryKey(validating: "decisions/sync"),
@@ -90,8 +90,8 @@ import Testing
             ],
             in: context)
 
-        let repoA = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
-        let repoB = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-b")
+        let repoA = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
+        let repoB = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-b")
         #expect(try await store.get(try MemoryKey(validating: "decisions/db"), in: repoA) != nil)
         #expect(try await store.get(try MemoryKey(validating: "decisions/db"), in: repoB) == nil)
     }

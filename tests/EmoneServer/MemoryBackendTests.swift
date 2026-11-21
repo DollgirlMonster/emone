@@ -276,7 +276,7 @@ import EmoneMemory
 
     @Test func bootstrapNeverCarriesTheWholeStore() async throws {
         let store = InMemoryStore(limits: MemoryLimits(bootstrapRecords: 3, bootstrapBytes: 400))
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         for index in 0..<50 {
             try await store.set(
                 MemoryRecord(
@@ -336,7 +336,7 @@ import EmoneMemory
         #expect(completion.toolCalls.isEmpty)
         #expect(events.toolCalls.isEmpty)
 
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         let stored = try await store.get(try MemoryKey(validating: "decisions/sync"), in: scope)
         #expect(stored?.value.contains("FooManager") == true)
         #expect(stored?.sourceSession?.isEmpty == false)
@@ -456,8 +456,8 @@ import EmoneMemory
         _ = try await backend.generate(request("one").withWorkspace("repo-a"), onEvent: { _ in })
         _ = try await backend.generate(request("two").withWorkspace("repo-b"), onEvent: { _ in })
 
-        let a = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
-        let b = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-b")
+        let a = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
+        let b = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-b")
         #expect(try await store.get(try MemoryKey(validating: "facts/a"), in: a)?.value == "from-a")
         #expect(try await store.get(try MemoryKey(validating: "facts/a"), in: b)?.value == "from-b")
     }
@@ -494,7 +494,7 @@ import EmoneMemory
         _ = try await backend.generate(opening, onEvent: { _ in })
 
         // Memory changes underneath the conversation between turns.
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         for index in 0..<5 {
             try await store.set(
                 MemoryRecord(
@@ -543,7 +543,7 @@ import EmoneMemory
         let prompt = "Why does this fail?\n```\n\(dump)\n```"
         _ = try await backend.generate(request(prompt), onEvent: { _ in })
 
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         let turns = await journal.turns(session: "", limit: 10, in: scope)
         let recorded =
             turns.isEmpty
@@ -592,7 +592,7 @@ import EmoneMemory
         #expect(sink.all.contains(.reasoning("found it.")))
         let replayed = try #require(inner.requests.last).messages
         #expect(!replayed.contains { ($0.content ?? "").contains("check memory") })
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         let turn = try #require(await journal.allTurns(in: scope).first)
         #expect(turn.reply == "The race is in the sync layer.")
     }
@@ -606,7 +606,7 @@ import EmoneMemory
         configuration.isEnabled = true
         configuration.workspace = "repo-a"
         configuration.user = "local"
-        let scope = try MemoryScope(namespace: "emone", user: "local", workspace: "repo-a")
+        let scope = try MemoryScope(namespace: "tinytitan", user: "local", workspace: "repo-a")
         for index in 0..<20 {
             await journal.record(
                 JournalTurn(

@@ -124,7 +124,7 @@ import EmoneMemory
         configuration.toolSurface = .full
         configuration.workspace = "launch-dir"
         configuration.user = "local"
-        configuration.namespace = "emone"
+        configuration.namespace = "tinytitan"
         configuration.storage.directory = directory
         let service = MemoryService(configuration: configuration)
 
@@ -183,7 +183,7 @@ import EmoneMemory
         configuration.isEnabled = true
         configuration.workspace = "launch-dir"
         configuration.user = "local"
-        configuration.namespace = "emone"
+        configuration.namespace = "tinytitan"
         configuration.storage.directory = directory
         let service = MemoryService(configuration: configuration)
         let home = FileManager.default.homeDirectoryForCurrentUser.path
