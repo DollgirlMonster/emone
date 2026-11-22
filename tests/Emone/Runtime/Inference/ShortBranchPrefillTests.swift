@@ -129,3 +129,18 @@ import Testing
         #expect(ShortBranchGroupedMoE.workCapacity(pairs: 64, numExperts: 256, edge: 16) == 69)
     }
 }
+
+@Suite struct ShortBranchRouteStatsTests {
+    @Test func countsDistinctExpertsTheLargestAndTheWorkItems() {
+        // Expert 3 takes 33 rows (two 32-row items), 5 and 9 one each.
+        let ids = [UInt32](repeating: 3, count: 33) + [5, 9]
+        let stats = ShortBranchRouteStats(ids: ids, numExperts: 16, edge: 32)
+        #expect(stats == ShortBranchRouteStats(distinct: 3, maxRows: 33, items: 4))
+    }
+
+    @Test func clampsAnOutOfRangeIdAsTheKernelsDo() {
+        let stats = ShortBranchRouteStats(ids: [99, 15], numExperts: 16, edge: 32)
+        #expect(stats.distinct == 1)
+        #expect(stats.maxRows == 2)
+    }
+}
