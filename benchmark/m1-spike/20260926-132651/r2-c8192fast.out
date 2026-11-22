@@ -1,0 +1,5 @@
+0240)  add to the residual entry and the mixer's input respectively.
+
+**Correctness trap:** `inv_freq` is float32 and `_shift_right_ignore_eos`
+must ignore EOS. Getting either wrong yields plausible-but-wrong output.
+

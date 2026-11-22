@@ -673,13 +673,23 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
             derivedSlots = RuntimeConfiguration.allowedExpertCacheSlots.first ?? 8
         }
         let loadSlots = requestedExpertCacheSlots ?? slotOverride ?? derivedSlots
-        let model = try Model.load(
-            directoryURL: modelDirectory,
-            device: context.device,
-            expecting: expectedArch,
-            streamingMode: .pread(slotCount: loadSlots),
-            expertCachePolicy: loadRuntime.modelExpertCachePolicy,
-            integrityPolicy: .resolved(directoryURL: modelDirectory))
+        func loadModel() throws -> Model {
+            try Model.load(
+                directoryURL: modelDirectory,
+                device: context.device,
+                expecting: expectedArch,
+                streamingMode: .pread(slotCount: loadSlots),
+                expertCachePolicy: loadRuntime.modelExpertCachePolicy,
+                integrityPolicy: .resolved(directoryURL: modelDirectory))
+        }
+        // A dense install streams no experts, so another runner over it -- the
+        // System One adapter laid over the side model (Emone-lmw.11) -- can
+        // share these weights rather than load its own.
+        let sharedWeights =
+            modelFamily == .qwen35Dense
+            ? try ModelWeightsRegistry.shared.weights(directory: modelDirectory, load: loadModel)
+            : nil
+        let model = try sharedWeights?.model ?? loadModel()
         let runtime = try RuntimeConfiguration(
             expertCacheSlots: loadSlots,
             expertCachePolicy: loadRuntime.expertCachePolicy,
@@ -772,7 +782,8 @@ public actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, Pr
                 context: context,
                 maxContext: maxContext,
                 slots: effectiveSlots,
-                runtimeConfiguration: runtime)
+                runtimeConfiguration: runtime,
+                sharedWeights: sharedWeights)
         }
         let scratches = try (0..<effectiveSlots).map { _ in
             try RawCompletionScratch(

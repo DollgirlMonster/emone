@@ -1,0 +1,51 @@
+commit      c0669c71 on main
+chip        Apple M1 Max
+memory      64 GiB
+gpu cores   32
+macOS       27.0 (26A428)
+swift       6.4
+model       /Volumes/Chai/TinyTitan/models/qwen3.6_35B_A3B_4Bit
+model disk  Protocol=PCI-Express  Device Location=External  Solid State=Yes  
+arms        base c8192 c16384 c32768
+rounds      2, prompt 56000 chars, max-new 64, cooldown 20s
+golden      not checked (model is not under models/)
+
+arm          prefill s          prefill tok/s  decode tok/s  occ %     dec hit %   rss GiB    swap MB   output
+base         26.44 27.96        640.4 605.5    29.807 27.007 78 83     - -         19.0 19.0  +0 +0     reference
+c8192        21.58 21.24        784.6 797.1    29.695 30.102 88 89     - -         19.0 19.0  +0 +0     same as base
+c16384       20.34 20.32        832.4 833.2    30.303 26.844 90 90     - -         19.0 19.0  +0 +0     same as base
+c32768       19.98 22.75        847.4 744.2    30.028 27.243 90 91     - -         18.7 18.7  +0 +0     same as base
+
+Values are per round, in round order; read the spread before the mean.
+  c8192        prefill -21.3% vs base
+  c16384       prefill -25.3% vs base
+  c32768       prefill -21.5% vs base
+
+How to read it:
+  occ % on base well under 90 -> prefill is waiting on the SSD here, unlike the M3;
+     s256 and a >4096 chunk are the levers to build on.
+  c2048 much slower than base -> prefill cost tracks the chunk count.
+  s256 faster with swap +0 -> run with --expert-cache-slots 256 (or --ram-budget) now.
+  nobound faster -> the page-cache trade pays on this machine (TINYTITAN_BOUNDED_IO=0).
+  c2048 may legitimately differ in output (different chunking); the others should not.
+Spike 2:
+  coalesce MUST read "same as base"; if it does not, that is a bug, not a trade.
+  qqmm/hcfused/qsagpu may differ; a faster arm that differs needs a quality check
+     (benchmark/quant_perplexity_ab.py) before it becomes a default.
+  split is a diagnostic: read its prefill_split_* roles in r*-split.log, not its time.
+Spike 3:
+  mppwide/all may differ from base (different summation order); faster AND
+     close is the bar, then benchmark/quant_perplexity_ab.py before a default.
+  gqa MUST read "same as base": it keeps the per-head arithmetic exactly.
+  Read GPU work (Gcycles) first; prefill seconds move with the clock.
+Spike 4:
+  c8192/c16384 read the routed experts 2x/4x fewer times than base on a ~16K
+     prompt; the win is in prefill seconds and the "expert fetch + tiles"
+     phase (r*-*.log), not in Gcycles. They may differ in output (chunking).
+  pergqa MUST read "same as base" and should be slower: the old kernel.
+
+Prefill phases per round (s): chunks / route readback + GPU / expert fetch + tiles
+  base          5 / 14.4 / 11.8  5 / 15.5 / 12.2
+  c8192         3 / 13.7 / 7.7  3 / 13.4 / 7.7
+  c16384        2 / 13.5 / 6.7  2 / 13.5 / 6.6
+  c32768        1 / 13.6 / 6.2  1 / 15.7 / 6.9

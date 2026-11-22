@@ -22,6 +22,12 @@ final class DequantInt4GEMV {
     private let twoRowPipeline: MTLComputePipelineState
     private let specializedPipelines: [Shape: MTLComputePipelineState]
     private let specializedTwoRowPipelines: [Shape: MTLComputePipelineState]
+    /// `encodeRows` over many inputs in one dispatch, generic and specialized
+    /// on the same shapes as `pipeline`, so each input's arithmetic is compiled
+    /// exactly as the per-input dispatch's is.
+    private let manyXPipeline: MTLComputePipelineState
+    private let specializedManyXPipelines: [Shape: MTLComputePipelineState]
+    static let manyXBlock = 4
 
     /// `additionalShapes` compiles extra constant-folded variants for
     /// Qwen 3.6's decode shapes. Measured: an unspecialized
@@ -38,13 +44,26 @@ final class DequantInt4GEMV {
             "dequant_int4_gemv2_simd",
             constants: [],
             maxTotalThreadsPerThreadgroup: 512)
+        self.manyXPipeline = try context.pipeline(
+            "dequant_int4_gemv_simd_many_x",
+            constants: [],
+            maxTotalThreadsPerThreadgroup: 512)
 
         let shapes =
             Self.realDecodeShapes
             + additionalShapes.map { Shape(m: UInt32($0.m), n: UInt32($0.n)) }
         var specializedPipelines: [Shape: MTLComputePipelineState] = [:]
         var specializedTwoRowPipelines: [Shape: MTLComputePipelineState] = [:]
+        var specializedManyXPipelines: [Shape: MTLComputePipelineState] = [:]
         for shape in shapes {
+            specializedManyXPipelines[shape] = try context.pipeline(
+                "dequant_int4_gemv_simd_many_x",
+                constants: [
+                    MetalFunctionConstant(index: 20, value: .uint32(shape.m)),
+                    MetalFunctionConstant(index: 21, value: .uint32(shape.n)),
+                    MetalFunctionConstant(index: 22, value: .bool(true)),
+                ],
+                maxTotalThreadsPerThreadgroup: 512)
             specializedPipelines[shape] = try context.pipeline(
                 "dequant_int4_gemv_simd",
                 constants: [
@@ -64,6 +83,7 @@ final class DequantInt4GEMV {
         }
         self.specializedPipelines = specializedPipelines
         self.specializedTwoRowPipelines = specializedTwoRowPipelines
+        self.specializedManyXPipelines = specializedManyXPipelines
     }
 
     func encode(
@@ -109,6 +129,36 @@ final class DequantInt4GEMV {
             "dequant_int4_gemv_simd needs a 2-aligned weightsOffset, got \(weightsOffset)")
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
+        }
+        let half = MemoryLayout<Float16>.stride
+        // The body reads x as half4, so each input row must stay 8-byte aligned.
+        if rows.count > 1, rows.xRowStride % 8 == 0, rows.xOffset % 8 == 0,
+            rows.yRowStride % half == 0
+        {
+            encoder.setComputePipelineState(
+                specializedManyXPipelines[Shape(m: m, n: n)] ?? manyXPipeline)
+            encoder.setBuffer(weights, offset: weightsOffset, index: 0)
+            encoder.setBuffer(scales, offset: scalesOffset, index: 1)
+            encoder.setBuffer(biases, offset: biasesOffset, index: 2)
+            encoder.setBuffer(x, offset: rows.xOffset, index: 3)
+            encoder.setBuffer(y, offset: rows.yOffset, index: 4)
+            var params = (
+                m, n, UInt32(rows.count), UInt32(rows.xRowStride / half),
+                UInt32(rows.yRowStride / half)
+            )
+            encoder.setBytes(&params.0, length: 4, index: 5)
+            encoder.setBytes(&params.1, length: 4, index: 6)
+            encoder.setBytes(&params.2, length: 4, index: 7)
+            encoder.setBytes(&params.3, length: 4, index: 8)
+            encoder.setBytes(&params.4, length: 4, index: 9)
+            encoder.dispatchThreadgroups(
+                MTLSize(
+                    width: (Int(m) + Self.rowsPerThreadgroup - 1) / Self.rowsPerThreadgroup,
+                    height: (rows.count + Self.manyXBlock - 1) / Self.manyXBlock, depth: 1),
+                threadsPerThreadgroup: MTLSize(
+                    width: 32 * Self.rowsPerThreadgroup, height: 1, depth: 1))
+            encoder.endEncoding()
+            return
         }
         encoder.setComputePipelineState(
             specializedPipelines[Shape(m: m, n: n)] ?? pipeline)

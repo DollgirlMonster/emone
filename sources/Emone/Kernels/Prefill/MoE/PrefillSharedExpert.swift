@@ -56,7 +56,9 @@ final class PrefillSharedExpert {
         gate: SharedExpertInt8Proj, up: SharedExpertInt8Proj, down: SharedExpertInt8Proj,
         scratchGate: MTLBuffer, scratchUp: MTLBuffer, scratchAct: MTLBuffer,
         queryCount: Int, d: Int, intermediate: Int,
-        xStrideElements: Int, yStrideElements: Int
+        xStrideElements: Int, yStrideElements: Int,
+        afterGateUp: ((MTLCommandBuffer) throws -> Void)? = nil,
+        afterDown: ((MTLCommandBuffer) throws -> Void)? = nil
     ) throws -> Bool {
         let halfBytes = MemoryLayout<Float16>.stride
         let chunkBytes = queryCount * intermediate * halfBytes
@@ -98,6 +100,9 @@ final class PrefillSharedExpert {
         guard try project(gate, x, xOffset, scratchGate, 0, rows: intermediate, columns: d),
             try project(up, x, xOffset, scratchUp, 0, rows: intermediate, columns: d)
         else { return false }
+        // A runtime-LoRA delta lands on the gate and up rows before the
+        // activation reads them, and on y after the down projection.
+        try afterGateUp?(cb)
         guard let encoder = cb.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }
@@ -114,7 +119,11 @@ final class PrefillSharedExpert {
             MTLSize(width: queryCount * intermediate, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
         encoder.endEncoding()
-        return try project(down, scratchAct, 0, y, yOffset, rows: d, columns: intermediate)
+        guard try project(down, scratchAct, 0, y, yOffset, rows: d, columns: intermediate) else {
+            return false
+        }
+        try afterDown?(cb)
+        return true
     }
 
     func encodeBlock(

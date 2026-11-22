@@ -1,0 +1,1136 @@
+Machine model: MacBookPro18,2
+OS version: 26A428
+Boot arguments: 
+Boot time: Tue Sep 15 13:57:02 2026
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:17 2026 -0400) (2004.82ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 450 MHz
+GPU HW active residency:   4.34% (389 MHz: 3.7% 486 MHz:   0% 648 MHz:   0% 778 MHz: .60% 972 MHz: .05% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  84% P2 :   0% P3 :   0% P4 :  15% P5 : .52% P6 :   0%)
+GPU idle residency:  95.66%
+GPU Power: 52 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:19 2026 -0400) (2004.98ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 399 MHz
+GPU HW active residency:   5.12% (389 MHz: 5.0% 486 MHz:   0% 648 MHz:   0% 778 MHz: .13% 972 MHz:   0% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  97% P2 :   0% P3 :   0% P4 : 2.6% P5 : .18% P6 :   0%)
+GPU idle residency:  94.88%
+GPU Power: 58 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:21 2026 -0400) (2006.20ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 447 MHz
+GPU HW active residency:   4.32% (389 MHz: 3.7% 486 MHz:   0% 648 MHz: .04% 778 MHz: .48% 972 MHz: .10% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  85% P2 :   0% P3 : .92% P4 :  11% P5 : 3.1% P6 :   0%)
+GPU idle residency:  95.68%
+GPU Power: 39 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:23 2026 -0400) (2005.34ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 398 MHz
+GPU HW active residency:   4.84% (389 MHz: 4.7% 486 MHz:   0% 648 MHz:   0% 778 MHz: .12% 972 MHz:   0% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  97% P2 :   0% P3 :   0% P4 : 2.4% P5 : .16% P6 :   0%)
+GPU idle residency:  95.16%
+GPU Power: 38 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:25 2026 -0400) (2006.41ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 415 MHz
+GPU HW active residency:   5.70% (389 MHz: 5.3% 486 MHz:   0% 648 MHz: .13% 778 MHz: .29% 972 MHz:   0% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  92% P2 :   0% P3 : 2.6% P4 : 5.2% P5 :   0% P6 :   0%)
+GPU idle residency:  94.30%
+GPU Power: 44 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:27 2026 -0400) (2004.86ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 389 MHz
+GPU HW active residency:   4.93% (389 MHz: 4.9% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:   0%)
+GPU SW requested state: (P1 : 100% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 :   0%)
+GPU idle residency:  95.07%
+GPU Power: 45 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:29 2026 -0400) (2004.96ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1286 MHz
+GPU HW active residency:  94.14% (389 MHz: .83% 486 MHz:   0% 648 MHz:   0% 778 MHz: .22% 972 MHz: .19% 1296 MHz:  93%)
+GPU SW requested state: (P1 : .86% P2 :   0% P3 :   0% P4 : .44% P5 :   0% P6 :  99%)
+GPU idle residency:   5.86%
+GPU Power: 35823 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:31 2026 -0400) (2004.98ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency:  98.60% (389 MHz: .04% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  99%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.40%
+GPU Power: 37823 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:33 2026 -0400) (2004.82ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1197 MHz
+GPU HW active residency:  98.47% (389 MHz: .05% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:  30% 1296 MHz:  68%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.53%
+GPU Power: 32928 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:35 2026 -0400) (2003.71ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1245 MHz
+GPU HW active residency:  82.19% (389 MHz: 1.8% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: 7.7% 1296 MHz:  73%)
+GPU SW requested state: (P1 : 2.1% P2 :   0% P3 :   0% P4 : .51% P5 :   0% P6 :  97%)
+GPU idle residency:  17.81%
+GPU Power: 21169 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:37 2026 -0400) (2004.77ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 18669 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:39 2026 -0400) (2004.81ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.27% (389 MHz: .14% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  97%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.73%
+GPU Power: 35871 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:41 2026 -0400) (2003.69ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.85% (389 MHz: .11% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.15%
+GPU Power: 37021 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:43 2026 -0400) (2004.72ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.02% (389 MHz: .10% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.98%
+GPU Power: 37171 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:45 2026 -0400) (2004.81ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1279 MHz
+GPU HW active residency:  80.74% (389 MHz: 1.3% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: .19% 1296 MHz:  79%)
+GPU SW requested state: (P1 : 1.5% P2 :   0% P3 :   0% P4 : .52% P5 :   0% P6 :  98%)
+GPU idle residency:  19.26%
+GPU Power: 25941 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:47 2026 -0400) (2002.97ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 17406 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:49 2026 -0400) (2004.76ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.34% (389 MHz: .07% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.66%
+GPU Power: 29465 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:51 2026 -0400) (2004.84ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.25% (389 MHz: .10% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.75%
+GPU Power: 37210 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:53 2026 -0400) (2004.73ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.07% (389 MHz: .12% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.93%
+GPU Power: 37309 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:55 2026 -0400) (2004.84ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1294 MHz
+GPU HW active residency:  87.16% (389 MHz: .21% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  87%)
+GPU SW requested state: (P1 : .18% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:  12.84%
+GPU Power: 32382 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:57 2026 -0400) (2004.77ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1286 MHz
+GPU HW active residency:  93.67% (389 MHz: .85% 486 MHz:   0% 648 MHz:   0% 778 MHz: .22% 972 MHz: .19% 1296 MHz:  92%)
+GPU SW requested state: (P1 : .91% P2 :   0% P3 :   0% P4 : .44% P5 :   0% P6 :  99%)
+GPU idle residency:   6.33%
+GPU Power: 20162 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:45:59 2026 -0400) (2004.81ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency:  98.78% (389 MHz: .04% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  99%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.22%
+GPU Power: 21561 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:01 2026 -0400) (2004.79ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.29% (389 MHz: .07% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.71%
+GPU Power: 38033 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:03 2026 -0400) (2004.84ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.39% (389 MHz: .06% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.61%
+GPU Power: 38432 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:05 2026 -0400) (2004.85ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.12% (389 MHz: .10% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.88%
+GPU Power: 38166 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:07 2026 -0400) (2004.89ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1282 MHz
+GPU HW active residency:  82.95% (389 MHz: 1.1% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: .19% 1296 MHz:  81%)
+GPU SW requested state: (P1 : 1.3% P2 :   0% P3 :   0% P4 : .50% P5 :   0% P6 :  98%)
+GPU idle residency:  17.05%
+GPU Power: 21627 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:09 2026 -0400) (2004.83ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 20140 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:11 2026 -0400) (2004.76ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1294 MHz
+GPU HW active residency:  97.09% (389 MHz: .17% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  97%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.91%
+GPU Power: 36831 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:13 2026 -0400) (2004.77ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.64% (389 MHz: .14% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.36%
+GPU Power: 37031 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:15 2026 -0400) (2004.81ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.21% (389 MHz: .10% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.79%
+GPU Power: 37102 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:17 2026 -0400) (2004.74ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1285 MHz
+GPU HW active residency:  80.84% (389 MHz: .81% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: .19% 1296 MHz:  80%)
+GPU SW requested state: (P1 : .90% P2 :   0% P3 :   0% P4 : .43% P5 : .08% P6 :  99%)
+GPU idle residency:  19.16%
+GPU Power: 25957 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:19 2026 -0400) (2004.79ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 17699 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:21 2026 -0400) (2004.80ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.16% (389 MHz: .09% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.84%
+GPU Power: 32241 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:23 2026 -0400) (2004.76ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.93% (389 MHz: .11% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.07%
+GPU Power: 38203 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:25 2026 -0400) (2004.77ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.36% (389 MHz: .06% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.64%
+GPU Power: 38776 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:27 2026 -0400) (2004.71ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1283 MHz
+GPU HW active residency:  80.49% (389 MHz: .98% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: .19% 1296 MHz:  79%)
+GPU SW requested state: (P1 : 1.1% P2 :   0% P3 :   0% P4 : .52% P5 :   0% P6 :  98%)
+GPU idle residency:  19.51%
+GPU Power: 28856 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:29 2026 -0400) (2004.75ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 20644 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:31 2026 -0400) (2004.73ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.65% (389 MHz: .07% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  99%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.35%
+GPU Power: 23902 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:33 2026 -0400) (2004.88ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.15% (389 MHz: .11% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.85%
+GPU Power: 38136 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:35 2026 -0400) (2004.65ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.07% (389 MHz: .12% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.93%
+GPU Power: 37340 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:37 2026 -0400) (2004.75ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.39% (389 MHz: .07% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.61%
+GPU Power: 37679 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:39 2026 -0400) (2004.83ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1278 MHz
+GPU HW active residency:  81.45% (389 MHz: 1.4% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: .19% 1296 MHz:  80%)
+GPU SW requested state: (P1 : 1.7% P2 :   0% P3 :   0% P4 : .51% P5 :   0% P6 :  98%)
+GPU idle residency:  18.55%
+GPU Power: 21044 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:41 2026 -0400) (2004.80ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 20522 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:43 2026 -0400) (2004.61ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.11% (389 MHz: .11% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.89%
+GPU Power: 37362 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:45 2026 -0400) (2004.59ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.45% (389 MHz: .08% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.55%
+GPU Power: 37471 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:47 2026 -0400) (2004.73ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency:  98.60% (389 MHz: .05% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  99%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.40%
+GPU Power: 37793 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:49 2026 -0400) (2004.82ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1281 MHz
+GPU HW active residency:  79.99% (389 MHz: 1.1% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: .19% 1296 MHz:  78%)
+GPU SW requested state: (P1 : 1.3% P2 :   0% P3 :   0% P4 : .52% P5 :   0% P6 :  98%)
+GPU idle residency:  20.01%
+GPU Power: 25660 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:51 2026 -0400) (2004.77ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 18019 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:53 2026 -0400) (2004.79ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.45% (389 MHz: .14% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  97%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.55%
+GPU Power: 31741 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:55 2026 -0400) (2004.69ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.95% (389 MHz: .11% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.05%
+GPU Power: 38117 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:57 2026 -0400) (2004.72ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.01% (389 MHz: .11% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.99%
+GPU Power: 38576 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:46:59 2026 -0400) (2004.82ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1278 MHz
+GPU HW active residency:  80.06% (389 MHz: 1.4% 486 MHz:   0% 648 MHz:   0% 778 MHz: .03% 972 MHz: .67% 1296 MHz:  78%)
+GPU SW requested state: (P1 : 1.6% P2 :   0% P3 :   0% P4 : .05% P5 :   0% P6 :  98%)
+GPU idle residency:  19.94%
+GPU Power: 29135 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:01 2026 -0400) (2004.89ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1294 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz: .20% 972 MHz: .19% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 : .38% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 21983 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:03 2026 -0400) (2004.74ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency:  98.62% (389 MHz: .03% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  99%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.38%
+GPU Power: 23766 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:05 2026 -0400) (2006.18ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.83% (389 MHz: .16% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.17%
+GPU Power: 37025 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:07 2026 -0400) (2004.59ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.82% (389 MHz: .10% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.18%
+GPU Power: 37333 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:09 2026 -0400) (2004.71ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.36% (389 MHz: .10% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.64%
+GPU Power: 37161 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:11 2026 -0400) (2004.72ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1275 MHz
+GPU HW active residency:  80.80% (389 MHz: 1.7% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: .19% 1296 MHz:  79%)
+GPU SW requested state: (P1 : 2.0% P2 :   0% P3 :   0% P4 : .52% P5 :   0% P6 :  97%)
+GPU idle residency:  19.20%
+GPU Power: 23068 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:13 2026 -0400) (2004.75ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 18761 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:15 2026 -0400) (2004.80ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.72% (389 MHz: .13% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.28%
+GPU Power: 38345 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:17 2026 -0400) (2004.75ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.82% (389 MHz: .09% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  99%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.18%
+GPU Power: 36826 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:19 2026 -0400) (2004.66ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1292 MHz
+GPU HW active residency:  98.66% (389 MHz: .10% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz: 1.0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.34%
+GPU Power: 37258 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:21 2026 -0400) (2004.78ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1271 MHz
+GPU HW active residency:  81.36% (389 MHz: .10% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz: 6.1% 1296 MHz:  75%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:  18.64%
+GPU Power: 27627 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:23 2026 -0400) (2005.73ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1281 MHz
+GPU HW active residency:  98.29% (389 MHz: 1.4% 486 MHz:   0% 648 MHz:   0% 778 MHz: .22% 972 MHz: .19% 1296 MHz:  96%)
+GPU SW requested state: (P1 : 1.4% P2 :   0% P3 :   0% P4 : .42% P5 :   0% P6 :  98%)
+GPU idle residency:   1.71%
+GPU Power: 21464 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:25 2026 -0400) (2004.87ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency:  98.48% (389 MHz: .04% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.52%
+GPU Power: 22855 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:27 2026 -0400) (2005.62ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  97.68% (389 MHz: .12% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.32%
+GPU Power: 38338 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:29 2026 -0400) (2004.70ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1295 MHz
+GPU HW active residency:  98.23% (389 MHz: .12% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  98%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   1.77%
+GPU Power: 38806 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:31 2026 -0400) (2004.73ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1294 MHz
+GPU HW active residency:  97.52% (389 MHz: .18% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:  97%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   2.48%
+GPU Power: 38280 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:33 2026 -0400) (2004.67ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1228 MHz
+GPU HW active residency:  84.54% (389 MHz: 6.1% 486 MHz:   0% 648 MHz:   0% 778 MHz: .23% 972 MHz: .19% 1296 MHz:  78%)
+GPU SW requested state: (P1 : 7.2% P2 :   0% P3 :   0% P4 : .49% P5 :   0% P6 :  92%)
+GPU idle residency:  15.46%
+GPU Power: 22138 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:35 2026 -0400) (2004.71ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1296 MHz
+GPU HW active residency: 100.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz: 100%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 : 100%)
+GPU idle residency:   0.00%
+GPU Power: 17738 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:37 2026 -0400) (2004.86ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 1236 MHz
+GPU HW active residency:  91.01% (389 MHz: 5.0% 486 MHz: .31% 648 MHz: .30% 778 MHz: .55% 972 MHz: .64% 1296 MHz:  84%)
+GPU SW requested state: (P1 : 5.5% P2 : .45% P3 : .17% P4 : .92% P5 : .61% P6 :  92%)
+GPU idle residency:   8.99%
+GPU Power: 26583 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:39 2026 -0400) (2004.79ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 915 MHz
+GPU HW active residency:  84.62% (389 MHz: 6.5% 486 MHz:  13% 648 MHz:  12% 778 MHz:  10% 972 MHz: 8.2% 1296 MHz:  35%)
+GPU SW requested state: (P1 :  12% P2 :  19% P3 : 9.6% P4 :  12% P5 :  10% P6 :  37%)
+GPU idle residency:  15.38%
+GPU Power: 10795 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:41 2026 -0400) (2005.59ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 856 MHz
+GPU HW active residency:  81.43% (389 MHz:  21% 486 MHz: 6.0% 648 MHz: 6.7% 778 MHz: 9.5% 972 MHz: 7.0% 1296 MHz:  31%)
+GPU SW requested state: (P1 :  28% P2 : 8.8% P3 : 8.0% P4 :  12% P5 : 8.9% P6 :  34%)
+GPU idle residency:  18.57%
+GPU Power: 10150 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:43 2026 -0400) (2005.15ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 902 MHz
+GPU HW active residency:  79.81% (389 MHz:  15% 486 MHz: 7.1% 648 MHz: 8.0% 778 MHz: 8.4% 972 MHz: 7.5% 1296 MHz:  34%)
+GPU SW requested state: (P1 :  21% P2 :  11% P3 : 8.3% P4 :  11% P5 : 8.8% P6 :  39%)
+GPU idle residency:  20.19%
+GPU Power: 10671 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:45 2026 -0400) (2004.61ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 943 MHz
+GPU HW active residency:  79.68% (389 MHz:  10% 486 MHz: 8.4% 648 MHz: 7.2% 778 MHz: 8.6% 972 MHz: 8.5% 1296 MHz:  37%)
+GPU SW requested state: (P1 :  15% P2 :  13% P3 : 7.9% P4 :  13% P5 : 9.2% P6 :  42%)
+GPU idle residency:  20.32%
+GPU Power: 11102 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:47 2026 -0400) (2005.04ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 914 MHz
+GPU HW active residency:  79.62% (389 MHz:  16% 486 MHz: 5.4% 648 MHz: 5.1% 778 MHz:  10% 972 MHz: 9.4% 1296 MHz:  34%)
+GPU SW requested state: (P1 :  21% P2 : 6.8% P3 : 9.0% P4 :  14% P5 :  11% P6 :  38%)
+GPU idle residency:  20.38%
+GPU Power: 10767 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:49 2026 -0400) (2004.67ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 902 MHz
+GPU HW active residency:  81.82% (389 MHz:  19% 486 MHz: 6.3% 648 MHz: 6.0% 778 MHz: 7.1% 972 MHz: 7.4% 1296 MHz:  36%)
+GPU SW requested state: (P1 :  25% P2 : 9.5% P3 : 5.5% P4 :  10% P5 : 8.7% P6 :  41%)
+GPU idle residency:  18.18%
+GPU Power: 10479 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:51 2026 -0400) (2004.91ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 910 MHz
+GPU HW active residency:  80.07% (389 MHz:  14% 486 MHz: 6.2% 648 MHz: 8.0% 778 MHz:  10% 972 MHz: 7.7% 1296 MHz:  34%)
+GPU SW requested state: (P1 :  19% P2 :  11% P3 : 9.4% P4 :  13% P5 : 8.7% P6 :  39%)
+GPU idle residency:  19.93%
+GPU Power: 10720 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:53 2026 -0400) (2004.72ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 875 MHz
+GPU HW active residency:  80.14% (389 MHz:  19% 486 MHz: 6.0% 648 MHz: 7.4% 778 MHz: 8.9% 972 MHz: 7.7% 1296 MHz:  31%)
+GPU SW requested state: (P1 :  25% P2 :  11% P3 : 7.4% P4 :  11% P5 :  10% P6 :  35%)
+GPU idle residency:  19.86%
+GPU Power: 10135 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:55 2026 -0400) (2003.83ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 927 MHz
+GPU HW active residency:  78.34% (389 MHz:  17% 486 MHz: 5.8% 648 MHz: 5.2% 778 MHz: 6.6% 972 MHz: 7.4% 1296 MHz:  37%)
+GPU SW requested state: (P1 :  22% P2 : 7.8% P3 : 7.0% P4 : 9.7% P5 : 9.1% P6 :  44%)
+GPU idle residency:  21.66%
+GPU Power: 10127 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:57 2026 -0400) (2005.02ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 416 MHz
+GPU HW active residency:  78.48% (389 MHz:  71% 486 MHz: 2.5% 648 MHz: 2.4% 778 MHz: 1.9% 972 MHz: .81% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  91% P2 : 3.8% P3 : 1.7% P4 : 3.1% P5 : .01% P6 :   0%)
+GPU idle residency:  21.52%
+GPU Power: 2160 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:47:59 2026 -0400) (2005.18ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 430 MHz
+GPU HW active residency:  78.85% (389 MHz:  63% 486 MHz: 8.6% 648 MHz: 5.2% 778 MHz: 1.7% 972 MHz: .69% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  85% P2 :  11% P3 : 1.4% P4 : 2.4% P5 : .42% P6 :   0%)
+GPU idle residency:  21.15%
+GPU Power: 2233 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:48:01 2026 -0400) (2005.17ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 409 MHz
+GPU HW active residency:  79.90% (389 MHz:  73% 486 MHz: 2.9% 648 MHz: 1.6% 778 MHz: 1.7% 972 MHz: .40% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  93% P2 : 3.2% P3 : 1.4% P4 : 1.9% P5 : .26% P6 :   0%)
+GPU idle residency:  20.10%
+GPU Power: 2219 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:48:03 2026 -0400) (2004.87ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 490 MHz
+GPU HW active residency:  84.26% (389 MHz:  38% 486 MHz:  24% 648 MHz:  18% 778 MHz: 2.5% 972 MHz: .73% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  58% P2 :  35% P3 : 5.0% P4 : 2.5% P5 : .38% P6 :   0%)
+GPU idle residency:  15.74%
+GPU Power: 2583 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:48:05 2026 -0400) (2004.76ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 628 MHz
+GPU HW active residency:  88.37% (389 MHz:  12% 486 MHz:  16% 648 MHz:  33% 778 MHz:  24% 972 MHz: 2.9% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  18% P2 :  34% P3 :  31% P4 :  16% P5 : .64% P6 :   0%)
+GPU idle residency:  11.63%
+GPU Power: 3698 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:48:07 2026 -0400) (2004.82ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 542 MHz
+GPU HW active residency:  85.37% (389 MHz:  13% 486 MHz:  36% 648 MHz:  34% 778 MHz: 1.8% 972 MHz:   0% 1296 MHz:   0%)
+GPU SW requested state: (P1 :  21% P2 :  69% P3 : 9.9% P4 : .26% P5 :   0% P6 :   0%)
+GPU idle residency:  14.63%
+GPU Power: 3180 mW
+
+
+
+*** Sampled system activity (Sat Sep 26 13:48:09 2026 -0400) (2003.58ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 642 MHz
+GPU HW active residency:  89.29% (389 MHz: .73% 486 MHz:  18% 648 MHz:  51% 778 MHz:  19% 972 MHz: .49% 1296 MHz:   0%)
+GPU SW requested state: (P1 : .45% P2 :  43% P3 :  48% P4 : 9.3% P5 : .04% P6 :   0%)
+GPU idle residency:  10.71%
+GPU Power: 3683 mW
+

@@ -1,0 +1,35 @@
+commit      195d317 on claude/beautiful-rubin-kl1wy2
+chip        Apple M1 Max
+memory      64 GiB
+gpu cores   32
+macOS       27.0 (26A428)
+swift       6.4
+model       /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
+model disk  Protocol=PCI-Express  Device Location=External  Solid State=Yes  
+arms        splitwide
+rounds      1, prompt 28000 chars, max-new 64, cooldown 20s
+golden      not checked (model is not under models/)
+
+arm          prefill s          prefill tok/s  decode tok/s  occ %     dec hit %   rss GiB    swap MB   output
+splitwide    150.85             52.2           n/a(1tok)     71        -           15.8       0         DIFFERS from base
+
+Values are per round, in round order; read the spread before the mean.
+
+How to read it:
+  occ % on base well under 90 -> prefill is waiting on the SSD here, unlike the M3;
+     s256 and a >4096 chunk are the levers to build on.
+  c2048 much slower than base -> prefill cost tracks the chunk count;
+     an 8K/16K chunk (needs code: PrefillRuntimeConfig.maxChunkTokens) should pay.
+  s256 faster with swap +0 -> run with --expert-cache-slots 256 (or --ram-budget) now.
+  nobound faster -> the page-cache trade pays on this machine (EMONE_BOUNDED_IO=0).
+  c2048 may legitimately differ in output (different chunking); the others should not.
+Spike 2:
+  coalesce MUST read "same as base"; if it does not, that is a bug, not a trade.
+  qqmm/hcfused/qsagpu may differ; a faster arm that differs needs a quality check
+     (benchmark/quant_perplexity_ab.py) before it becomes a default.
+  split is a diagnostic: read its prefill_split_* roles in r*-split.log, not its time.
+Spike 3:
+  mppwide/all may differ from base (different summation order); faster AND
+     close is the bar, then benchmark/quant_perplexity_ab.py before a default.
+  gqa MUST read "same as base": it keeps the per-head arithmetic exactly.
+  Read GPU work (Gcycles) first; prefill seconds move with the clock.

@@ -524,6 +524,8 @@ extension RealForwardRunner {
                 // as the routed stage's phase-2 reduce adds a mixture's. The
                 // buffer is submitted after `sharedCB` on the same queue, so the
                 // read of `h1Buf` is ordered behind its write.
+                try captureDenseMLP(
+                    sharedCB: sharedCB, layer: L, position: position, token: token)
                 guard let denseCB = ctx.queue.makeCommandBuffer() else {
                     throw ModelError.residentBufferWrapFailed
                 }
@@ -533,6 +535,7 @@ extension RealForwardRunner {
                     sublayer: .mlp, layer: L)
                 recordKernelGPU(role: "dense_ffn_exit", denseCB)
                 denseCB.commit()
+                try captureResidual(exitCB: denseCB, layer: L, position: position, token: token)
             } else {
                 try await encodeDecodeRoutedMoE(
                     layer: L, position: position, sharedProj: sharedProj,
@@ -1179,6 +1182,7 @@ extension RealForwardRunner {
             scratchGate: denseScratchGate,
             scratchUp: denseScratchUp,
             scratchAct: denseScratchAct)
+        try encodeWeightPatchDecodeDown(commandBuffer: sharedCB, layer: L)
         if cfg.sharedExpertGated {
             // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX)
             let gateView = try requireTensorView(sharedProj.scalarGate, "shared-expert scalar gate")
@@ -1235,6 +1239,7 @@ extension RealForwardRunner {
         totalRouterReadbackNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - readbackStarted
         let experts = decodeExpertsScratch
         recordRouteTrace(layer: L, position: position, experts: experts)
+        captureRoutedInput(layer: L, position: position, experts: experts)
 
         let routedOffsets = try model.routedExpertOffsets(layer: L)
         let topK = UInt32(cfg.topKExperts)

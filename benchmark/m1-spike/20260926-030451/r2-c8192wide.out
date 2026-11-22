@@ -1,0 +1,5 @@
+0240), summed into the GatedResidual input/inject paths.
+
+**Runtime plan: skip PLE initially** (as with Ornith's PLE  the port stays
+faithful to the transformer core). Record it as a follow-up; the 32 GB table
+plus hashing is

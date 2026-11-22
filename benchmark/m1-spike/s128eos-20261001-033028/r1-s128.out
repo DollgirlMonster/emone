@@ -1,0 +1,12 @@
+0240)  add to the residual stream.
+
+**Faithfulness trap:** the 16 offsets are `cumsum(primes)`  160 wide  and
+must be summed **fp32-first** (`mean(dim=-1)`), *not* cast to fp16 per
+lookup. Summing in fp16 clips at 65,504 and corrupts the embedding.
+
+
+assistant
+<think>
+We need respond to user. User provided huge text? Need infer task? They pasted documents maybe asking? Actually initial user: "This is the checklist... Concept... etc" No explicit question. Need likely summarize? We need answer based on content? Maybe they expect something? Need identify intent. Could be they want us to process? The final says "Please write..."? Let's inspect: It includes multiple sections: checklist, concept doc, measured profile, verified design. Maybe they want a summary? There is no direct request. Need perhaps produce concise synthesis? But we need satisfy. Since no explicit ask, maybe they want us to extract action items? Hmm.
+
+Need think: The user likely pasted a bunch of docs and expects maybe "write a PR description"? But no

@@ -130,9 +130,16 @@ extension ServerHTTPHandler {
             handleCountTokens(body: body, context: context)
         case (.POST, "/v1/models/unload"):
             handleUnload(context: context)
+        case (.POST, "/v1/systemone"):
+            guard jsonBody else {
+                writeUnsupportedMediaType(context, surface: .chat)
+                return
+            }
+            handleSystemOne(body: body, context: context)
         case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"), (_, "/v1/responses"),
             (_, "/v1/responses/compact"), (_, "/v1/prefill-progress"),
-            (_, "/v1/models/unload"), (_, "/v1/messages"), (_, "/v1/messages/count_tokens"):
+            (_, "/v1/models/unload"), (_, "/v1/messages"), (_, "/v1/messages/count_tokens"),
+            (_, "/v1/systemone"):
             writeRequestError(
                 context,
                 .invalid(

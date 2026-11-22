@@ -1,0 +1,6 @@
+0240)  add to the residual stream.
+
+**Correctness trap:** `id % prime` must be computed on the **unsigned**
+representation. Python's `%` floors toward negative infinity; Swift's `%`
+floors toward zero. A naive port yields wrong indices for negative products
+and

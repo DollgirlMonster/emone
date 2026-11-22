@@ -76,3 +76,40 @@ kernel void bf16_gemv_simd_one_row_many_x(
     accumulator = simd_sum(accumulator);
     if (lane == 0u) y[token * yStride] = half(accumulator);
 }
+
+// `bf16_gemv_simd` over many independent inputs in one dispatch: the grid is
+// (row groups) x (inputs), one simdgroup per (output row, input). The coalesced
+// rows path used to issue one dispatch per input -- a prefill chunk's 16-row
+// Gated-DeltaNet `in_proj_a` / `in_proj_b` became 1,800 two-threadgroup
+// dispatches per layer on a 1,800-token prompt, 4.4 ms each on an M1 Max for
+// 64 KB of weights. Each simdgroup runs exactly `bf16_gemv_simd`'s loop and
+// reduction for its (row, input), so every output is the same bits.
+kernel void bf16_gemv_simd_many_x(
+    device const bfloat* weights  [[buffer(0)]],
+    device const half*   x        [[buffer(1)]],
+    device half*         y        [[buffer(2)]],
+    constant uint&       rows     [[buffer(3)]],
+    constant uint&       columns  [[buffer(4)]],
+    constant uint&       xStride  [[buffer(5)]],
+    constant uint&       yStride  [[buffer(6)]],
+    uint2 tg     [[threadgroup_position_in_grid]],
+    uint sg_idx  [[simdgroup_index_in_threadgroup]],
+    uint lane    [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_threadgroup = 8;
+    constexpr uint lanes = 32;
+    const uint row = tg.x * rows_per_threadgroup + sg_idx;
+    if (row >= rows) return;
+    device const bfloat* row_weights = weights + row * columns;
+    device const half* xr = x + tg.y * xStride;
+    float accumulator = 0.0f;
+    for (uint base = 0; base < columns; base += lanes * 2u) {
+        const uint first = base + lane * 2u;
+        accumulator = fma(float(row_weights[first]), float(xr[first]),
+                          accumulator);
+        accumulator = fma(float(row_weights[first + 1u]), float(xr[first + 1u]),
+                          accumulator);
+    }
+    accumulator = simd_sum(accumulator);
+    if (lane == 0u) y[tg.y * yStride + row] = half(accumulator);
+}

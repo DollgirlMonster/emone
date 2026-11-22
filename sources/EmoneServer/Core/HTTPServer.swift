@@ -50,11 +50,16 @@ public actor EmoneHTTPServer {
     private let modelID: String
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
+    /// The side models' lane: one at a time, beside the primary's.
+    private let sideCoordinator: ServerCoordinator
     private let heartbeatInterval: TimeAmount
     private let reasoningProfile: ServerReasoningProfile
     /// Set when the server routes between catalog models; nil keeps the
     /// single-model server exactly as it was.
     private let router: (any ModelRouting)?
+    /// `/v1/systemone`, when the catalog holds a decision adapter whose base is
+    /// installed; nil answers the route with 404.
+    private let systemOne: SystemOneService?
     private let childChannels = ChildChannelRegistry(
         maximumChannels: maximumConcurrentConnections)
     /// Finished /v1/responses kept for previous_response_id and retrieval.
@@ -71,8 +76,10 @@ public actor EmoneHTTPServer {
         reasoningProfile: ServerReasoningProfile = .default,
         group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1),
         router: (any ModelRouting)? = nil,
-        coordinator: ServerCoordinator? = nil
+        coordinator: ServerCoordinator? = nil,
+        systemOne: SystemOneService? = nil
     ) {
+        self.systemOne = systemOne
         self.group = group
         self.modelID = modelID
         self.backend = backend
@@ -84,6 +91,7 @@ public actor EmoneHTTPServer {
             ?? ServerCoordinator(
                 queueLimit: queueLimit,
                 width: maxConcurrentSequences)
+        self.sideCoordinator = ServerCoordinator(queueLimit: queueLimit, width: 1)
         self.heartbeatInterval = heartbeatInterval
         self.reasoningProfile = reasoningProfile
         self.router = router
@@ -93,9 +101,11 @@ public actor EmoneHTTPServer {
         let modelID = self.modelID
         let backend = self.backend
         let coordinator = self.coordinator
+        let sideCoordinator = self.sideCoordinator
         let heartbeatInterval = self.heartbeatInterval
         let reasoningProfile = self.reasoningProfile
         let router = self.router
+        let systemOne = self.systemOne
         let childChannels = self.childChannels
         let responseStore = self.responseStore
         let bootstrap = ServerBootstrap(group: group)
@@ -112,9 +122,11 @@ public actor EmoneHTTPServer {
                             modelID: modelID,
                             backend: backend,
                             coordinator: coordinator,
+                            sideCoordinator: sideCoordinator,
                             heartbeatInterval: heartbeatInterval,
                             reasoningProfile: reasoningProfile,
                             router: router,
+                            systemOne: systemOne,
                             childChannels: childChannels,
                             responseStore: responseStore))
                 }
@@ -136,10 +148,14 @@ public actor EmoneHTTPServer {
         channel = nil
         let childChannels = self.childChannels
         let coordinator = self.coordinator
+        let sideCoordinator = self.sideCoordinator
+        let systemOne = self.systemOne
         let group = self.group
         let task = Task { @Sendable in
             var firstError: (any Error)?
             await coordinator.shutdown()
+            await sideCoordinator.shutdown()
+            await systemOne?.shutdown()
             if let listeningChannel {
                 do {
                     try await listeningChannel.close().get()

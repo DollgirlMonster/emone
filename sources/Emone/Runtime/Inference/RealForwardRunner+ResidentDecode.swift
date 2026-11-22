@@ -56,6 +56,7 @@ extension RealForwardRunner {
         if prefetchTraceFD >= 0 { return "EMONE_PREFETCH_TRACE" }
         if Self.probe2TraceEnabled { return "probe-2 trace" }
         if Self.layerTraceFlag { return "EMONE_LAYER_TRACE" }
+        if MLPCapture.shared.active { return "MLP capture" }
         return nil
     }
 

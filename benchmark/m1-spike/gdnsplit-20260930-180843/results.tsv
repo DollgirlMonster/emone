@@ -1,0 +1,2 @@
+round	arm	prefill_tok	prefill_s	prefill_tps	decode_tps	occupancy_pct	decode_hit_pct	decode_gib	max_rss_gib	swap_mb_delta	output_sha	exit	gpu_mhz	gpu_residency_pct	gpu_busy_s	gpu_gcycles
+1	split	16931	166.62	101.6	4.020	61	-	-	17.5	+0	d460a004d525	0	-	-	97.8	-

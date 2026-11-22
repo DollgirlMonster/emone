@@ -134,8 +134,12 @@ extension RepackPlanner {
         case .qwen35Dense:
             // A dense Qwen 3.5 has no hashed n-gram block and no PLE
             // constants; its tokenizer travels with the payload like every
-            // other family's.
-            return []
+            // other family's. A System One decision model (Kev, built by
+            // `tools/prepare_qwen35.py --size kev-0.8b`) also carries its
+            // pointer head, which the snapshot writes beside the payload.
+            // Optional because every chat build lacks it; recorded in the
+            // manifest and receipt like any other file when present.
+            return [("decision_head.safetensors", false, 64 * 1024 * 1024)]
         case .qwen38flash:
             return [
                 // The PLE hash constants: multipliers, per-head offsets and

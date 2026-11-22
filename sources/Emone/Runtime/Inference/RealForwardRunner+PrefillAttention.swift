@@ -63,6 +63,7 @@ extension RealForwardRunner {
             xStrideElements: D,
             yStrideElements: la.qkvDim,
             useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_in_qkv")
         try encodeAffineProjection(
             commandBuffer: cb,
             family: .kv,
@@ -76,6 +77,7 @@ extension RealForwardRunner {
             xStrideElements: D,
             yStrideElements: la.valueDim,
             useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_in_z")
         try encodeAffineProjection(
             commandBuffer: cb,
             family: .kv,
@@ -89,6 +91,7 @@ extension RealForwardRunner {
             xStrideElements: D,
             yStrideElements: la.numVHeads,
             useTwoRowProjection: useTwoRowProjection)
+        try prefillSplitPoint(&cb, role: "prefill_split_gdn_in_a")
         try encodeAffineProjection(
             commandBuffer: cb,
             family: .kv,
@@ -102,6 +105,25 @@ extension RealForwardRunner {
             xStrideElements: D,
             yStrideElements: la.numVHeads,
             useTwoRowProjection: useTwoRowProjection)
+        // The four input projections read the same normed rows: their LoRA
+        // deltas run together, after the last base GEMM (Emone-lmw.12).
+        try encodeLoRADeltas(
+            commandBuffer: cb, layer: L,
+            items: [
+                LoRADeltaItem(
+                    target: .gdnQKV, x: scratch.normed, xStrideElements: D, y: scratch.q,
+                    yStrideElements: la.qkvDim, rows: la.qkvDim, columns: D),
+                LoRADeltaItem(
+                    target: .gdnZ, x: scratch.normed, xStrideElements: D, y: scratch.gdnZ,
+                    yStrideElements: la.valueDim, rows: la.valueDim, columns: D),
+                LoRADeltaItem(
+                    target: .gdnA, x: scratch.normed, xStrideElements: D, y: scratch.gdnA,
+                    yStrideElements: la.numVHeads, rows: la.numVHeads, columns: D),
+                LoRADeltaItem(
+                    target: .gdnB, x: scratch.normed, xStrideElements: D, y: scratch.gdnB,
+                    yStrideElements: la.numVHeads, rows: la.numVHeads, columns: D),
+            ],
+            tokenCount: t)
         try prefillSplitPoint(&cb, role: "prefill_split_gdn_in_proj")
         let convW = linConv
         let tail = gdnState.convTailSlot(layer: L, slot: slot)
@@ -155,6 +177,8 @@ extension RealForwardRunner {
             weightOffset: Int(gatedNormW.offset),
             out: scratch.attentionOutput,
             rows: t)
+        try encodeWeightPatchHeadScale(
+            commandBuffer: cb, layer: L, attention: scratch.attentionOutput, tokens: t)
         try prefillSplitPoint(&cb, role: "prefill_split_gdn_scan")
         try encodeAffineProjection(
             commandBuffer: cb,
@@ -168,7 +192,8 @@ extension RealForwardRunner {
             tokenCount: t,
             xStrideElements: la.valueDim,
             yStrideElements: D,
-            useTwoRowProjection: useTwoRowProjection)
+            useTwoRowProjection: useTwoRowProjection,
+            layer: L, target: .gdnOut)
         try prefillSplitPoint(&cb, role: "prefill_split_gdn_out_proj")
     }
 
@@ -227,6 +252,20 @@ extension RealForwardRunner {
             xStrideElements: D,
             yStrideElements: kvDim,
             useTwoRowProjection: useTwoRowProjection)
+        try encodeLoRADeltas(
+            commandBuffer: cb, layer: L,
+            items: [
+                LoRADeltaItem(
+                    target: .q, x: scratch.normed, xStrideElements: D, y: scratch.q,
+                    yStrideElements: qProjRows, rows: qProjRows, columns: D),
+                LoRADeltaItem(
+                    target: .k, x: scratch.normed, xStrideElements: D, y: scratch.kStage,
+                    yStrideElements: kvDim, rows: kvDim, columns: D),
+                LoRADeltaItem(
+                    target: .v, x: scratch.normed, xStrideElements: D, y: scratch.vStage,
+                    yStrideElements: kvDim, rows: kvDim, columns: D),
+            ],
+            tokenCount: t)
         if activationDumpActive(position: startPosition) {
             dumpActivationDeferred(
                 "L\(L)_in", scratch.normed,
@@ -393,6 +432,8 @@ extension RealForwardRunner {
                 out: scratch.attentionOutput,
                 gate: scratch.attnGate,
                 count: t * qDim)
+            try encodeWeightPatchHeadScale(
+                commandBuffer: cb, layer: L, attention: scratch.attentionOutput, tokens: t)
         }
         try prefillSplitPoint(&cb, role: "prefill_split_attn_core")
         try encodeAffineProjection(
@@ -407,7 +448,8 @@ extension RealForwardRunner {
             tokenCount: t,
             xStrideElements: qDim,
             yStrideElements: D,
-            useTwoRowProjection: useTwoRowProjection)
+            useTwoRowProjection: useTwoRowProjection,
+            layer: L, target: .o)
         try prefillSplitPoint(&cb, role: "prefill_split_attn_o_proj")
     }
 }

@@ -16,6 +16,17 @@ struct Qwen4ExpPassthroughTests {
         #expect(flash.map(\.name) == ["ple_constants.json", "ngram_table.bin"])
     }
 
+    @Test("A dense Qwen 3.5 carries a decision head when its snapshot has one")
+    func denseDecisionHead() throws {
+        let dense = RepackPlanner.passthroughRequirements(family: .qwen35Dense)
+        let head = try #require(dense.first { $0.name == "decision_head.safetensors" })
+        #expect(dense.count == 1)
+        // Every chat build lacks it, so it must never be required.
+        #expect(!head.required)
+        // Kev-0.8B's head is 2.1 MB; the cap leaves room for a 9B's (4.7 MB).
+        #expect(head.capBytes >= 8 * 1024 * 1024)
+    }
+
     @Test("The hash constants are required; the 102 GB table is not")
     func requiredness() throws {
         let flash = RepackPlanner.passthroughRequirements(family: .qwen38flash)

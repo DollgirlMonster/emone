@@ -1,0 +1,10 @@
+
+model   /Volumes/Chai/TinyTitan/models/ornith-1.5_35B_A3B_4Bit
+commit  90d96667
+A env   (none), chunk 4096
+B env   TINYTITAN_ATTN_DECODE_LONG=1, chunk 4096
+tokens  512
+A       mean nll 2.23198  perplexity 9.3183
+B       mean nll 2.23136  perplexity 9.3126
+B - A   mean dNLL -0.00061  (se 0.00595, t -0.10)  perplexity -0.061%
+verdict no measurable change (|t| < 2)

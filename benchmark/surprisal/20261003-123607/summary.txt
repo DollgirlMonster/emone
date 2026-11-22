@@ -1,0 +1,10 @@
+
+model   /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
+commit  25d6440
+A env   (none), chunk 8192
+B env   EMONE_PREFILL_ROUTED_QMM=1, chunk 8192
+tokens  512
+A       mean nll 2.14564  perplexity 8.5475
+B       mean nll 2.15098  perplexity 8.5932
+B - A   mean dNLL +0.00534  (se 0.01281, t +0.42)  perplexity +0.535%
+verdict no measurable change (|t| < 2)

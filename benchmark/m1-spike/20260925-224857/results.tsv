@@ -1,0 +1,2 @@
+round	arm	prefill_tok	prefill_s	prefill_tps	decode_tps	occupancy_pct	decode_hit_pct	decode_gib	max_rss_gib	swap_mb_delta	output_sha	exit	gpu_mhz	gpu_residency_pct	gpu_busy_s	gpu_gcycles
+1	base	-	-	-	n/a(0tok)	-	-	-	6.8	0	01ba4719c80b	130	823	78.0	-	-

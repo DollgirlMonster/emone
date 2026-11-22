@@ -60,7 +60,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/DollgirlMonster/emone.git"
 REPO_URL_RAW="https://raw.githubusercontent.com/DollgirlMonster/emone/main"
-DEFAULT_MODEL="ornith15-8bit"
+DEFAULT_MODEL="qwen36"
 DEFAULT_DIR="$HOME/emone"
 
 say()  { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -377,9 +377,9 @@ else
   if (( MODEL_WAS_SET )) || [[ ! -t 0 ]]; then
     echo "  No model is installed yet. Emone needs one to run."
     if [[ "$MODEL" == "$DEFAULT_MODEL" ]]; then
-      echo "  The recommended starting model is Ornith 1.5 35B-A3B at 8-bit,"
-      echo "  about 37 GB installed. The 4-bit version is about 20 GB and faster"
-      echo "  to download if that is a lot:  $TOOLS_PATH/install_models.sh ornith15"
+      echo "  The recommended starting model is Qwen 3.6 35B-A3B at 4-bit,"
+      echo "  about 20 GB installed. The 8-bit version is about 38 GB:"
+      echo "  $TOOLS_PATH/install_models.sh qwen36-8bit"
     else
       echo "  This run was asked for '$MODEL'."
     fi

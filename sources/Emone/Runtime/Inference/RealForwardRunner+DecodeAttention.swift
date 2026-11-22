@@ -113,6 +113,7 @@ extension RealForwardRunner {
                 weightOffset: Int(gatedNormW.offset),
                 out: gdnOut)
         }
+        try encodeWeightPatchHeadScale(commandBuffer: cb, layer: L, attention: gdnOut, tokens: 1)
         try rotate(&cb, role: "gdn.gatednorm")
         if !ablated("outproj") {
             try encodePrimaryGEMV(
@@ -287,6 +288,7 @@ extension RealForwardRunner {
             out: attnOut,
             gate: attnGateScratch,
             count: Int(qDim))
+        try encodeWeightPatchHeadScale(commandBuffer: cb, layer: L, attention: attnOut, tokens: 1)
         try rotate(&cb, role: "qsa.gatemul")
         try encodePrimaryGEMV(
             commandBuffer: cb,

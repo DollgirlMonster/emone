@@ -147,8 +147,13 @@ struct QwenRepackPlannerTests {
                 == "ornith-1.5-35b-a3b-8bit")
     }
 
+    /// The default install is Qwen 3.6 4-bit; Ornith is a coding fallback.
+    @Test func defaultSourceIsQwen36FourBit() {
+        #expect(SupportedModelSource.default == .qwen36)
+        #expect(SupportedModelSource.default.modelID == "qwen3.6-35b-a3b-4bit")
+    }
+
     @Test func ornithSourcesArePinnedAndSixBitRemainsUnsupported() {
-        #expect(SupportedModelSource.default == .ornith15_8bit)
         #expect(SupportedModelSource.named("ornith15") == .ornith15)
         #expect(SupportedModelSource.named("ornith15-8bit") == .ornith15_8bit)
         #expect(SupportedModelSource.named("ornith15-6bit") == nil)

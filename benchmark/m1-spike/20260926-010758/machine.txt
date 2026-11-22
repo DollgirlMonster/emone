@@ -1,0 +1,10 @@
+commit      f761aae on claude/beautiful-rubin-kl1wy2
+chip        Apple M1 Max
+memory      64 GiB
+gpu cores   32
+macOS       27.0 (26A428)
+swift       6.4
+model       /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
+model disk  Protocol=PCI-Express  Device Location=External  Solid State=Yes  
+arms        base c8192 c8192qsa c8192wide
+rounds      2, prompt 56000 chars, max-new 64, cooldown 20s

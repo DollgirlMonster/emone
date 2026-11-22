@@ -1,0 +1,45 @@
+commit      97bf41b (dirty) on claude/determined-archimedes-m1vd6h
+chip        Apple M1 Max
+memory      64 GiB
+gpu cores   32
+macOS       27.0 (26A428)
+swift       6.4
+model       /Volumes/Chai/TinyTitan/models/qwen38flash.gturbo
+model disk  Protocol=PCI-Express  Device Location=External  Solid State=Yes  
+arms        base c32768
+rounds      3, prompt 56000 chars, max-new 256, cooldown 20s
+golden      not checked (model is not under models/)
+
+arm          prefill s          prefill tok/s  decode tok/s  occ %     dec hit %   rss GiB    swap MB   output
+base         159.88 155.67 154.67 105.9 108.8 109.5 4.403 2.752 4.216 64 60 65  - - -       16.2 17.3 17.3 +0 +0 +0  reference
+c32768       143.74 151.24 142.35 117.8 111.9 118.9 3.693 4.262 4.308 61 59 60  - - -       16.2 17.5 17.5 +0 +0 +0  same as base
+
+Values are per round, in round order; read the spread before the mean.
+  c32768       prefill -7.0% vs base
+
+How to read it:
+  occ % on base well under 90 -> prefill is waiting on the SSD here, unlike the M3;
+     s256 and a >4096 chunk are the levers to build on.
+  c2048 much slower than base -> prefill cost tracks the chunk count.
+  s256 faster with swap +0 -> run with --expert-cache-slots 256 (or --ram-budget) now.
+  nobound faster -> the page-cache trade pays on this machine (EMONE_BOUNDED_IO=0).
+  c2048 may legitimately differ in output (different chunking); the others should not.
+Spike 2:
+  coalesce MUST read "same as base"; if it does not, that is a bug, not a trade.
+  qqmm/hcfused/qsagpu may differ; a faster arm that differs needs a quality check
+     (benchmark/quant_perplexity_ab.py) before it becomes a default.
+  split is a diagnostic: read its prefill_split_* roles in r*-split.log, not its time.
+Spike 3:
+  mppwide/all may differ from base (different summation order); faster AND
+     close is the bar, then benchmark/quant_perplexity_ab.py before a default.
+  gqa MUST read "same as base": it keeps the per-head arithmetic exactly.
+  Read GPU work (Gcycles) first; prefill seconds move with the clock.
+Spike 4:
+  c8192/c16384 read the routed experts 2x/4x fewer times than base on a ~16K
+     prompt; the win is in prefill seconds and the "expert fetch + tiles"
+     phase (r*-*.log), not in Gcycles. They may differ in output (chunking).
+  pergqa MUST read "same as base" and should be slower: the old kernel.
+
+Prefill phases per round (s): chunks / route readback + GPU / expert fetch + tiles
+  base          2 / 100.9 / 48.9  2 / 98.2 / 48.1  2 / 97.5 / 47.6
+  c32768        1 / 98.8 / 35.8  1 / 98.9 / 39.8  1 / 97.5 / 35.3

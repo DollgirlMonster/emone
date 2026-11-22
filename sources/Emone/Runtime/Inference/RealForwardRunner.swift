@@ -418,6 +418,25 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// (`RealForwardRunner+HiddenCapture.swift`). Nil until the first readout;
     /// its plan is nil outside one, so every ordinary prefill is unchanged.
     var hiddenReadout: HiddenReadoutCapture?
+    /// Decision readout buffers (`RealForwardRunner+DecisionReadout.swift`).
+    /// Nil until the first one; disarmed outside one, so ordinary prefills
+    /// are unchanged.
+    var decisionReadout: DecisionReadoutCapture?
+    /// A runtime-LoRA adapter laid over this runner's prefill projections
+    /// (`RealForwardRunner+LoRA.swift`, Emone-lmw.11). Nil for every
+    /// ordinary runner, so their prefills are unchanged.
+    public internal(set) var loraAdapter: LoRAAdapter?
+    /// A weight patch laid over this runner's prefill and decode
+    /// (`RealForwardRunner+WeightPatch.swift`, Emone-a37). Nil for every
+    /// ordinary runner, so their forward passes are unchanged.
+    public internal(set) var weightPatch: WeightPatch?
+    /// The registry entry for this runner's weights when they are shared
+    /// with another runner (`ModelWeightsRegistry`); held so they stay live
+    /// while this runner is.
+    let sharedWeights: SharedModelWeights?
+    var loraDeltaKernel: LoRADelta?
+    /// Per-head output scale for a weight patch's `head_scale` vectors.
+    var headScaleKernel: HeadScale?
 
     /// Host scratch reused across prefill chunks (R38) and decode layers (R16).
     /// The runner is single-flight per generation (guarded by
@@ -480,9 +499,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         model: Model, context: MetalContext, maxContext: Int,
         slots: Int = 1,
         runtimeConfiguration: RuntimeConfiguration = .production,
-        enableSpeculativeGDN: Bool = false
+        enableSpeculativeGDN: Bool = false,
+        profileModelID: String? = nil,
+        sharedWeights: SharedModelWeights? = nil
     ) throws {
         self.model = model
+        self.sharedWeights = sharedWeights
         self.ctx = context
         self.cfg = model.config
         self.maxContext = maxContext
@@ -519,8 +541,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         // The family's measured optimum is the default; an explicit
         // EMONE_PREDICTIVE_PREFETCH still wins either way, so a probe can turn
         // it on where it ships off and off where it ships on.
+        // `profileModelID`: a runner over another model's weights -- a decision
+        // adapter over the side chat model's -- takes its own measured row,
+        // so the two runners share the weights but not the switches.
         let profile = ModelProfile.resolve(
-            modelID: model.modelID, family: cfg.family,
+            modelID: profileModelID ?? model.modelID, family: cfg.family,
             weightBits: model.routedExpertWeightBits)
         self.profile = profile
         self.prefillWideMPP = profile.prefillWideMPP

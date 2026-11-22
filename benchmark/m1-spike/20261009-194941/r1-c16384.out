@@ -1,0 +1,5 @@
+28)  `key_proj` feeds the indexer.
+
+PLE is the **only** subsystem that is not a kernel. It is a CPU gather,
+exact, deterministic, and it is the only subsystem that is not a kernel. It
+is the only subsystem that is not a kernel. It is the

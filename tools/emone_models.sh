@@ -57,10 +57,10 @@ EMONE_CLIENTS=(
 # and any future menu cannot disagree about what exists or how big it is.
 # shellcheck disable=SC2034  # consumed by install_models.sh and the installer's menu
 EMONE_MODEL_CHOICES=(
-  "ornith15-8bit|Ornith 1.5 35B-A3B|8|36.9|Recommended. Best measured coding and tooling results."
-  "ornith15|Ornith 1.5 35B-A3B|4|19.5|The same model at 4-bit: half the disk, faster decode."
-  "qwen36-8bit|Qwen 3.6 35B-A3B|8|37.8|The other 35B family, at 8-bit."
-  "qwen36|Qwen 3.6 35B-A3B|4|19.5|The other 35B family, at 4-bit."
+  "qwen36|Qwen 3.6 35B-A3B|4|19.5|Recommended. The general-purpose default."
+  "qwen36-8bit|Qwen 3.6 35B-A3B|8|37.8|The same model at 8-bit: twice the disk, slower decode."
+  "ornith15-8bit|Ornith 1.5 35B-A3B|8|36.9|Coding fine-tune; best measured coding and tooling results."
+  "ornith15|Ornith 1.5 35B-A3B|4|19.5|The coding fine-tune at 4-bit."
   "agentworld-8bit|Qwen-AgentWorld 35B-A3B|8|41.0|Tuned for agentic tool use."
   "agentworld|Qwen-AgentWorld 35B-A3B|4|20.0|Agentic tool use at 4-bit."
   "katcoder-8bit|KAT-Coder-V2.5-Dev 35B-A3B|8|38.0|Coding-specialised Qwen 3.6 fine-tune."
@@ -71,6 +71,8 @@ EMONE_MODEL_CHOICES=(
   "qwen35-9b-8bit|Qwen 3.5 9B|8|11.0|Dense 9B at 8-bit."
   "qwen35-2b|Qwen 3.5 2B|4|2.3|Dense 2B: seconds to load. Weak at arithmetic and long instructions."
   "qwen35-2b-8bit|Qwen 3.5 2B|8|2.2|Dense 2B at 8-bit."
+  "qwen35-0.8b-8bit|Qwen 3.5 0.8B|8|1.0|Side model for session titles and one-word answers, not a chat model."
+  "qwen35-0.8b|Qwen 3.5 0.8B|4|0.7|The side model at 4-bit."
   "qwen38-27b|Qwen3.8-27B|4|17.0|Dense 27B, Qwen3.8 generation: a general assistant, all in RAM."
   "qwen38-27b-8bit|Qwen3.8-27B|8|29.0|Dense 27B at 8-bit."
   "qwen38flash|Qwen3.8-Flash-Next 125B-A6B|4|162.0|The largest model, and the most disk."
@@ -171,6 +173,13 @@ emone_resolve_model() {
       EMONE_MODEL_ENGINES=gpu
       EMONE_MODEL_THINKING="off,low,medium,xhigh" ;;
     # The dense models: the one shape both engines implement, GPU by default.
+    qwen35-0.8b|qwen3.5-0.8b)
+      EMONE_MODEL_KEY=qwen35-0.8b
+      EMONE_MODEL_STEM="qwen3.5_0.8B"
+      EMONE_MODEL_LABEL="Qwen 3.5 0.8B"
+      EMONE_MODEL_FAMILY=qwen3_5_dense
+      EMONE_MODEL_ENGINES="gpu,cpu"
+      EMONE_MODEL_THINKING="off,on" ;;
     qwen35-2b|qwen3.5-2b)
       EMONE_MODEL_KEY=qwen35-2b
       EMONE_MODEL_STEM="qwen3.5_2B"
@@ -204,7 +213,7 @@ emone_resolve_model() {
       EMONE_MODEL_ENGINES=gpu
       EMONE_MODEL_THINKING="off,on" ;;
     *)
-      echo "unknown AI model: ${1:-} (ornith|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|qwen38-27b)" >&2
+      echo "unknown AI model: ${1:-} (ornith|qwen36|agentworld|katcoder|qwen38|qwen35-0.8b|qwen35-2b|qwen35-4b|qwen35-9b|qwen38-27b)" >&2
       return 2 ;;
   esac
 }
@@ -228,7 +237,7 @@ emone_model_port() {
 # Every model this checkout knows about, for help text and for the fallback
 # list when the server cannot report its catalog. One list: the catalog is
 # still the source of what is installed.
-EMONE_ALL_MODELS=(ornith qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b qwen38-27b)
+EMONE_ALL_MODELS=(ornith qwen36 agentworld katcoder qwen38 qwen35-0.8b qwen35-2b qwen35-4b qwen35-9b qwen38-27b)
 
 # --- Installed models, from the server's catalog -----------------------
 #

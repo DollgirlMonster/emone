@@ -1,0 +1,1112 @@
+# Adding a model to the family
+
+This is the checklist for turning a Hugging Face checkpoint into a first-class
+Emone member at 4-bit and 8-bit. It exists because the work is spread over
+eight places in the tree and the order matters: the research decides whether it
+is a wiring job or a runtime job, and nothing is called *supported* until a real
+model has been run.
+
+`KAT-Coder-V2.5-Dev` is the worked example throughout  a Qwen3.6-35B-A3B
+fine-tune, which is the cheap case. A checkpoint whose architecture is not
+already implemented is a different project; see the tracker's "planned work".
+
+## 0. Research the checkpoint before touching the tree
+
+Read it from the source, not from the model card's prose:
+
+```bash
+# Identity, gating, parameter count, per-file sizes, the pinned sha.
+curl -sL 'https://huggingface.co/api/models/<org>/<name>?blobs=true' | python3 -m json.tool | head -40
+
+# Geometry: hidden size, layers, experts, rope block, tie_word_embeddings.
+curl -sL 'https://huggingface.co/<org>/<name>/raw/<sha>/config.json'
+
+# Sampling the authors actually asked for (not the base model's).
+curl -sL 'https://huggingface.co/<org>/<name>/raw/<sha>/generation_config.json'
+
+# Tensor names, and how many there are.
+curl -sL 'https://huggingface.co/<org>/<name>/resolve/<sha>/model.safetensors.index.json' \
+  | python3 -c 'import json,sys; wm=json.load(sys.stdin)["weight_map"]; print(len(wm))'
+```
+
+Record, because each one has burned a release or a conversion before:
+
+- **`gated`**  if true, stop and ask the human for a token; do not paste one
+  into a script.
+- **The pinned sha**, not `main`: the install receipt records the source, and a
+  moved `main` must not silently change what "4-bit" means.
+- **`tie_word_embeddings`**  decides whether the head exists. A vision-language
+  wrapper often unties it.
+- **The rope block.** A multimodal wrapper can carry `mrope_interleaved` /
+  `mrope_section` even in text-only use. Compare it against a model the runtime
+  already serves rather than reasoning about it: if it matches, the text path
+  needs no new kernel.
+- **The EOS ids.** `generation_config.json` may list two. Check they resolve as
+  stop tokens by *string* (`<|endoftext|>`, `<|im_end|>`) rather than by number,
+  because the numbers move between releases.
+- **Recommended sampling**, including `presence_penalty` and any extra template
+  kwargs (`preserve_thinking`). Note which of them this runtime cannot do  it
+  supports presence penalty `0.0` only  and say so in the docs rather than
+  quietly dropping it.
+
+## 1. Decide: wiring job or runtime job
+
+Compare the config's geometry and the index's tensor names against a family the
+runtime already serves. For a converter built on `prepare_agentworld.py`, the
+only namespaces it knows are `model.language_model.*`, `lm_head.weight` and
+`mtp.*`; anything else is a new case. Verify rather than trust:
+
+```bash
+python3 - <<'PY'
+import json
+wm = json.load(open("/tmp/index.json"))["weight_map"]
+known = ("model.language_model.", "model.visual.", "mtp.")
+outside = [k for k in wm if k != "lm_head.weight" and not k.startswith(known)]
+print(len(wm), "tensors;", len(outside), "outside the known namespaces")
+print("visual:", sum(1 for k in wm if k.startswith("model.visual.")),
+      "mtp:", sum(1 for k in wm if k.startswith("mtp.")),
+      "head:", "lm_head.weight" in wm)
+PY
+```
+
+A `vision_config` in `config.json` does **not** mean the checkpoint carries a
+vision tower: KAT declares one and ships language weights only. Check the index.
+
+### The checks that cost nothing and catch the expensive mistakes
+
+All four run before a byte of weights is fetched. They exist because a
+conversion is 69 GB of download and an hour of quantization, and each of these
+has a failure mode that would otherwise appear at the end of it.
+
+**1. Diff the chat template against a sibling the runtime already serves.** The
+renderer uses the model's own `chat_template.jinja` (its absence is a hard
+error), so the template *is* the prompt, the tool-call dialect and the
+reasoning markers. KAT's differs from AgentWorld's in two places  AgentWorld
+has an extra `audio` content branch, and a mid-conversation system message
+raises on AgentWorld where KAT renders it inline  and nowhere else: the ChatML
+markers, the `<tool_call>` block, the thinking block and the generation prompt
+are byte-identical. That answers "will the parser accept its tool calls?" by
+construction rather than by hoping.
+
+**2. Resolve every key the repacker's arch reader requires.** Read the
+`loadQwen35MoE` branch of `sources/EmoneRepack/Core/Format/ArchInfo.swift`,
+extract its `try i("")` keys, and check each against the checkpoint's
+`text_config`. A missing one is a `configJsonInvalid` at the end of the
+conversion; KAT has all seventeen, plus `layer_types` and both rope keys.
+
+**3. Check the production cross-check.** The same file carries
+`crossCheckProductionQwen35MoE`, which refuses a 2048/40 model whose geometry
+differs in any field from the shipped one. If the checkpoint matches it
+exactly, the repacker will treat it as *the* production geometry; if it does
+not, that is a runtime question to answer before converting, not after.
+
+**4. Confirm the tokenizer sidecar.** The converter's `TOKENIZER_FILES` marks
+`tokenizer.json` and `tokenizer_config.json` required and the rest optional, and
+skips a missing optional file rather than failing. But the *runtime* needs
+`chat_template.jinja`  it errors with "installed tokenizer is missing
+chat_template.jinja"  so a checkpoint that omits it needs a template supplied
+even though the converter would not complain.
+
+## 2. The eight wiring points
+
+| # | Where | What |
+| --- | --- | --- |
+| 1 | `tools/prepare_agentworld.py`  `MODELS` | The repo and the **pinned sha**, with a comment recording what was verified about the checkpoint |
+| 2 | `tools/install_models.sh`  `CATALOGUE` | Two rows (`<key>`, `<key>-8bit`) and the presetserved-id `case` |
+| 3 | `tools/emone_models.sh` | The key/stem/label `case` with the fallback fields it carries beside them  `ENGINES`, `THINKING` and `FAMILY`  because that list is what the launcher offers when the server cannot report a catalog; plus the unknown-model help text and `EMONE_ALL_MODELS` |
+| 4 | `tools/server_launcher.sh` | The model-key list in the header comment and in the unknown-model error |
+| 5 | `ModelProfile.swift` | One row per width. Sample from the **checkpoint's** config; say in the comment when cache/prefetch values are inherited from identical geometry rather than measured |
+| 6 | `ModelCatalog.swift`  `displayNames` | The served id  human name (`/v1/models` reads this) |
+| 7 | `tests/` | `ModelProfileTests.shipped` (and the table count) |
+| 8 | ANE prefill sidecar | `tools/ane_sidecars.sh <install>`  export and verify it. A GPU-path install without one has no ANE prefill at all: the switch is on by default, the runtime asks for the sidecar, and finds nothing. Two kinds are skipped. The exporter has no graph for the one-layer MTP draft, which the runtime verifies rather than prefills on the ANE. And the ANE has been *measured not to pay* for `qwen38flash`: its GPU path already attends to only the indexer's ~2,051 selected keys while the ANE graph is dense over the context, so a sidecar there only slows the default path (0.72, `benchmark/ane-prefill/README.md`). Its block is still exportable  the runtime folds the QSA selection into the mask  but export one explicitly to re-measure, never to install |
+
+Validate 1 before any download:
+
+```bash
+python3 tools/prepare_agentworld.py --model <key> --plan
+```
+
+It fetches the config and the index only, and prints the shard count, the
+tensor split per width, the bf16 keeps and the output size. `--plan` writing no
+files is the point: it is the cheap place to discover that a last dimension is
+not group-aligned.
+
+The converters need **Python 3.10+ with numpy, ml_dtypes and safetensors**, and
+they resolve that themselves: `tools/lib/python.sh` tries `python3.14` down to
+`python3`, testing version *and* imports for each, and takes the first that
+passes. Use whichever name it resolved, or point `EMONE_PYTHON` at a specific
+interpreter (a virtualenv, say). A bare `python3` is not safe to assume: on a
+stock macOS it is 3.9 from `/usr/bin`, older than these scripts' syntax and
+without the packages.
+
+## 3. Convert and install
+
+```bash
+tools/install_models.sh <key>            # 4-bit
+tools/install_models.sh <key>-8bit       # 8-bit
+```
+
+The installer streams one source shard at a time (about 11 GB in flight for a
+35B-A3B) and deletes each after use; it does **not** stage the full checkpoint.
+
+**An interrupted conversion is not resumable the way it looks.** Each source
+shard is deleted once converted, and the snapshot's index and `config.json` are
+written only at the very end, so a run that dies at shard N re-downloads those N
+shards on the next attempt, and `OutputWriter` never clears its output directory
+ orphan `model-*.safetensors` from the dead run sit beside the new ones, which
+is wasted space in exactly the disk budget you were trying to fit. Before
+re-running, remove the partial output (`rm -rf .build/<key>-affine-*`), and run
+the conversion as a supervised background job with a log rather than in a
+session that might be interrupted.
+
+**What *does* resume is the download inside a run.** Each shard is fetched as a
+sequence of 64 MiB ranged requests, and a partial shard is continued at its own
+offset, so a dropped connection costs one chunk rather than the whole file.
+That matters on a link that truncates a long transfer: the host this was
+written against kills a 5.3 GB response every few minutes
+(`curl: (18) end of response with N bytes missing`), and a whole-file download
+could never finish because each attempt was shorter than the interval between
+truncations. Every chunk is length-checked against a size derived from the
+shard's own header, which is also what makes resuming safe  a wrongly appended
+file is the wrong length and is rejected rather than decoded into silently
+wrong weights.
+
+**The download is usually the whole critical path, so measure it before
+starting.** Three things were worth doing on a slow link, in this order:
+`--http1.1` (this host resets HTTP/2 streams continuously; 214 KB/s  908 KB/s
+on the same range), a pool of three concurrent downloads (the throttle is per
+connection  a second connection added ~490 KB/s beside a ~205 KB/s one), and
+the chunking above. What did **not** help: relaying through a fast remote host.
+A VPS that pulled the checkpoint at 40 MB/s still delivered it to the working
+Mac at 1.40 MB/s, because the Mac's own link was the ceiling.
+Both widths come from one download when the converter is called with `--bits 4
+8`, but the **snapshot and the install exist at the same time**, so budget:
+
+| Build | Shards | Snapshot | Install | Peak |
+| --- | ---: | ---: | ---: | ---: |
+| 35B-A3B 4-bit | ~11 GB | ~20 GB | ~20 GB | ~50 GB |
+| 35B-A3B 8-bit | ~11 GB | ~38 GB | ~35 GB | ~84 GB |
+
+Delete the snapshot after the install (`rm -rf .build/<key>-affine-*`) and do
+one width at a time on a full disk: 8-bit needs the space the 4-bit snapshot and
+install are holding. Check `df -h .` against the table before starting, and say
+so rather than starting a conversion that will die at 90%.
+
+## 4. Verify before calling it supported
+
+The project's bar, in this order:
+
+1. **It loads and answers** through the CLI, and the continuations this project
+   uses behave: `Once upon a`  " time", `The capital of France is`  " Paris",
+   `The quick brown fox jumps over the lazy`  " dog".
+2. **A golden baseline**, added to `tools/golden-baseline.sh` (target table) and
+   to `release.sh`'s `check_golden` list, captured only for a deliberate
+   numerics change  never re-captured to make a mismatch go away. Declare both
+   **before** the install exists: `release.sh` verifies only the targets that
+   have an install under `models/`, reports every one it could not check, and
+   `--publish` requires the notes to name them  so the gate neither fails on a
+   machine that has not installed the model nor lets that pass unrecorded, and
+   it never downloads the model to close the gap. Until the baseline is
+   captured, a direct `--check <target>` fails closed with "no verified install"
+   or "no baseline", which is the guard working.
+3. **The receipt**: `EmoneRepack --verify-install --input-gturbo <dir>` passes,
+   and the manifest's `sourceSnapshotHash` matches the snapshot that produced
+   it.
+4. **The catalog is right**: `/v1/models` lists the id with the name from
+   `displayNames` and the sampling from the profile row, and the launcher
+   resolves the key, the stem and both widths.
+5. **A first measured row** (TTFT, decode) from the model's own install, with
+   the machine and commit stated.
+
+## 5. Document it where a user will look
+
+- `README.md`  the supported list, with the status stated honestly.
+- The wiki: `Getting-Started` (the install table), `Features` (the model row),
+  `Runtime-Controls` (thinking levels, and the temperature line if this
+  checkpoint differs from its base's), `Project-Tracker` (what was checked,
+  what landed, what is pending, and any deviation from the model's own
+  recommendations).
+- Deviations are stated, not hidden: presence penalty, extra template kwargs,
+  an unverified tool-call dialect, an inherited profile value.
+
+Never mark a model "supported" before 4 passes. "Install path landed,
+verification pending" is the honest state, and it is worth writing down.
+
+## 6. After the checkout moves
+
+An install receipt is bound to its absolute path. Moving or renaming the
+checkout invalidates **every** install's receipt, with
+`trusted receipt invalid: model directory mismatch`  not corruption, and no
+re-download. Re-issue each in place:
+
+```bash
+for d in models/*/; do
+  [ -f "$d/verified-install.json" ] || continue
+  swift run -c release EmoneRepack --verify-install --input-gturbo "$d"
+done
+```
+
+Never hand-edit `verified-install.json`: the path binding is what detects a
+moved or swapped directory.
+
+## Checklist
+
+- [ ] Gating, pinned sha, geometry, rope block, tie-embeddings and EOS ids read
+      from the source
+- [ ] The index's tensor names checked against the converter's namespaces
+- [ ] `--plan` classifies every tensor and the output size fits the disk table
+- [ ] All eight wiring points above
+- [ ] Conversion and install, one width at a time, snapshots deleted after
+- [ ] Continuations, golden target, receipt, catalog, launcher keys
+- [ ] README, wiki pages, tracker, roadmap  with deviations and status
+- [ ] Committed, pushed, and the receipts re-issued if the checkout moved
+# Prefill on an M1 Max: what the spikes measured
+
+Qwen3.8-Flash-Next 125B-A6B 4-bit on an M1 Max (32-core GPU, 64 GB), macOS 27.0,
+model on an external Thunderbolt NVMe (`Device Location: External`, PCI-Express).
+Every Qwen3.8 verdict elsewhere in `docs/` was measured on a 24 GiB base M3 with an
+internal SSD; this is the first record from an M1. Driver: `tools/m1_spike.sh`
+(7,879-token prompt, greedy, seed 1, chunk 4096, arms interleaved).
+
+## Spike 1 (commit 85e104a, two rounds)
+
+| arm | prefill s (r1, r2) | vs base | note |
+| --- | --- | --- | --- |
+| base | 199.23, 202.44 | -- | **39 tok/s** |
+| s128 (128 expert slots) | 209.42, 194.46 | +0.6% | noise |
+| s256 (256 slots, ~34 GiB) | 211.58, 197.34 | +1.8% | swapped 8 GB, 2x sys time |
+| nobound (`EMONE_BOUNDED_IO=0`) | 199.91, 199.01 | -0.7% | noise |
+| s256nobound | 217.60, 214.86 | +7.7% | decode collapsed (0.1 tok/s) |
+| c2048 (half chunk) | 221.93, 234.36 | +13.6% | ~13 s per extra chunk |
+
+Base, GPU time by role (r1 / r2):
+
+| role | ms | share of GPU |
+| --- | ---: | ---: |
+| `prefill_attn_router` (12 full-attention layers x 2 chunks) | 59,953 / 59,821 | 42% |
+| `prefill_gdn_router` (36 GDN layers x 2) | 31,665 / 31,717 | 22% |
+| `prefill_routed_tile` | 29,845 / 31,181 | 21% |
+| `prefill_shared_expert` | 12,938 / 12,747 | 9% |
+| `prefill_qsa_index` | 6,212 / 6,208 | 4% |
+| GPU busy of span | 141,484 of 184,539 / 142,292 of 186,680 | 77% / 76% |
+
+Read: expert cache and page cache do nothing for prefill here (each chunk touches
+nearly every expert), and prefill is mostly GPU compute. The chunk-count cost is
+real: going 4096 -> 2048 added ~8 s of GPU and ~19 s of non-GPU time.
+
+## Found in the code, then measured in spike 2
+
+- **One compute encoder per token.** The shared-expert scalar gate (and its
+  sigmoid) runs one GEMV plus one elementwise dispatch per token, each in its own
+  encoder: 8,192 encoders per layer-chunk. The per-token GEMV fallback for a
+  q-family projection (attention `q_proj`, GDN `in_proj_qkv`) and for
+  bf16-promoted projections does the same. `EMONE_PREFILL_COALESCE=1` keeps
+  every kernel, argument and grid and puts a loop's dispatches in one encoder
+  (`GEMVRows`); `GEMVRowsTests` requires the result to be byte-identical.
+- **Which projection path an M1 takes was never logged.** The Metal 4 tensor-op
+  QMM (`MPPPrefillInt4QMM`) is optional; when it does not compile, `.q` falls to
+  one GEMV per token. With `EMONE_KERNEL_STATS` the runner now prints a
+  `prefill paths:` line naming the path per family and the MPP state.
+- **`EMONE_PREFILL_Q_QMM=1`** serves `.q` with the batched QMM instead. It sums
+  in a different order, so it can change the output and needs a quality check
+  (`benchmark/quant_perplexity_ab.py`) before it could become a default.
+- **`EMONE_PREFILL_SPLIT=1`** (diagnostic) commits and times each stage of a
+  prefill layer as `prefill_split_*` roles: `hc_in`, `attn_qkv_proj`,
+  `attn_rope_kv`, `attn_core`, `attn_o_proj`, `gdn_in_proj`, `gdn_scan`,
+  `gdn_out_proj`, `hc_out`. The waits serialize stages; read the roles, not
+  the wall clock.
+- Two existing switches, off by default pending proof of identical output, are
+  spike arms: `EMONE_HC_FUSED=1` and `EMONE_QSA_GPU_SELECT=1` (QSA key
+  selection otherwise runs on the CPU between the indexer and attention).
+
+## Not pursued, with the reason
+
+- **Neural Engine attention.** Measured on the M3 for this model
+  (`benchmark/ane-prefill/ane-correctness-v5.6-ane-38-4bit.json`): 439 s against
+  184 s on the GPU. On an M1 Max the GPU is larger and the ANE older, so it would
+  lose by more.
+- **Bigger expert cache for prefill.** Spike 1 above.
+
+## Spike 2 (commit 83b019b, two rounds)
+
+Every arm produced the same output as base, `coalesce` included (it is
+bit-identical by construction and `GEMVRowsTests` says so), and so did
+`EMONE_HC_FUSED=1` and `EMONE_QSA_GPU_SELECT=1`, which were off only until
+that was shown. The M1 compiles the Metal 4 tensor-op QMM: every attention and
+GDN projection already takes it (`prefill paths: mpp_int4=available attn_q=mpp/4b
+gdn_in=mpp/4b kv=mpp/4b o=mpp/4b`), so the per-token q GEMV never runs here and
+`qqmm` is a second base.
+
+| arm | prefill s (r1, r2) | GPU busy s (r1, r2) |
+| --- | --- | --- |
+| base | 197.7, 205.7 | 141.8, 146.3 |
+| coalesce | 242.6, 206.3 | 183.9, 145.6 |
+| qqmm (= base) | 222.7, 199.5 | 170.7, 145.5 |
+| hcfused | 213.2, 209.2 | 158.6, 148.1 |
+| qsagpu | 199.3, 210.8 | 145.6, 142.6 |
+| combo | 195.0, 194.9 | 141.1, 141.8 |
+
+The spread is the clock, not the arms: an unchanged binary ran 12.6% apart, and
+in the slow runs every role -- including ones the flag never touches -- slowed
+together. `powermetrics` during prefill showed 93-98% GPU residency at
+1.10-1.22 GHz average, 23-57% of the time on the 972 MHz step. Nothing here is
+separable from that; `m1_spike.sh --gpu-clock` now reports busy x clock
+(Gcycles) so the next comparison is.
+
+Where the GPU time goes (`EMONE_PREFILL_SPLIT=1`, mean of two rounds, s):
+
+| stage | s | share | note |
+| --- | ---: | ---: | --- |
+| `attn_core` (QSA sparse attention, 12 layers x 2 chunks) | 54.2 | 38% | one kernel, ~2.3 s per layer-chunk |
+| `routed_tile` | 30.6 | 21% | one-output-per-thread expert GEMV |
+| `hc_in` + `hc_out` (hyper-connections) | 17.5 | 12% | projections on the scalar `prefillQMM`, not MPP |
+| `shared_expert` | 12.9 | 9% | unchanged by coalescing: the MLP, not dispatch |
+| routers (`attn_router` + `gdn_router` remainders) | 7.2 | 5% | |
+| `gdn_in_proj` + `gdn_out_proj` | 8.4 | 6% | already MPP |
+| `gdn_scan` (conv, norms, delta rule, gated norm) | 5.1 | 4% | the sequential recurrence is *not* a hotspot |
+| `qsa_index` | 4.3 | 3% | |
+| `attn_qkv_proj` + `attn_o_proj` + `attn_rope_kv` | 2.9 | 2% | already MPP |
+
+Outside the GPU: ~55-60 s of each ~200 s prefill, of which ~15 s precedes the
+first kernel. `TURBO_FIELDFARE_PHASES` (now on stderr, and on in every spike
+arm) splits the host side per chunk.
+
+## Spike 3: the scalar GEMMs onto MPP, and the attention kernel's shape
+
+Two findings from reading the code behind spike 2's split:
+
+- **The prefill shared expert is the decode path, once per token.**
+  `PrefillSharedExpert.encodeBlock` runs gate, up, activation and down for each
+  of a chunk's 4,096 tokens through a one-row scratch, so every token's four
+  dispatches wait on the previous token's. Coalescing never touched this loop,
+  which is why it did nothing for the 12.9 s. `EMONE_PREFILL_MPP_WIDE=1` runs
+  it as three MPP GEMMs over the chunk plus one elementwise activation, and
+  routes the other projections still on the scalar `prefillQMM`
+  (hyper-connection gates, QSA indexer, PLE) to MPP. It sums in a different
+  order: `PrefillSharedExpertBatchedTests` holds it within 2% of the per-token
+  path, and a speed win still needs `benchmark/quant_perplexity_ab.py`.
+- **The QSA attention kernel repeats its key/value reads 12 times.** It runs one
+  threadgroup per (token, query head), but Qwen3.8's 24 query heads share 2
+  key/value heads and the QSA selection is per token, shared by every head: the
+  12 query heads of a KV head each re-read and re-dequantize the same ~2,048
+  selected K and V rows. One threadgroup per (token, KV head) covering its 12
+  query heads reads each row once, and its scores (12 x 256 by 256 x keys) and
+  output (12 x keys by keys x 256) are matrix-unit shapes. That is the next
+  kernel; the Apple10 tensor-ops attention path cannot help here, because a
+  selection is present for every 4,096-token chunk and forces the tiled kernel.
+
+### The grouped QSA kernel (`EMONE_PREFILL_QSA_GQA=1`)
+
+`attention_prefill_causal_qsa_gqa` runs one threadgroup per (token, KV head) for
+all of its query heads (12 for Qwen3.8, at most 16, head dim at most 256). It
+loads the G query rows once, computes each (head, key) score with the same
+`prefill_qsa_dot` in phase A (G x 128 dots per tile over 256 threads, where the
+per-head kernel left half its threads idle), keeps each head's running max and
+sum in threadgroup memory updated by one thread per head in key order, writes
+each weight once, and in phase D loads every V element once and feeds it to the
+G accumulators a thread owns. Per head, every value goes through the same
+expression in the same order as `attention_prefill_causal_qsa_tiled`, so the
+output is meant to be byte-identical: `PrefillAttentionQSAGroupedTests` checks
+that on Qwen3.8's shape (24/2 heads, dim 256, int8 KV) for the compacted and the
+mask selection. K/V traffic per selected key falls 12x; the matrix units are not
+used yet -- the next step if this kernel is still the top role.
+
+First test run on the M1: both byte-equality tests failed by exactly one fp16
+ULP (max |diff| 0.000244 at values up to 0.503). The grouped kernel used 64-key
+tiles against the per-head kernel's 128, and the online softmax rescales at each
+tile boundary: the same sum, rounded at different points. The tile is now tied
+to `kPrefillQSATile`.
+
+## Spike 3 results (commit 195d317, three rounds, `--gpu-clock`)
+
+The grouped-kernel byte-equality tests pass on the M1 with the tile fix.
+
+| arm | prefill s (r1, r2, r3) | Gcycles (r1, r2, r3) | GPU work vs base | output |
+| --- | --- | --- | ---: | --- |
+| base | 228.1, 202.6, 202.0 | 164.5, 182.4, 176.2 | -- | reference (`0.1.0.`) |
+| mppwide | 184.3, 177.5, 174.8 | 140.7, 143.7, 150.9 | -16.8% | differs (empty reply) |
+| gqa | 179.9, 173.8, 172.9 | 139.3, 135.5, 150.6 | -18.7% | **same as base** |
+| wide (both) | 157.1, 151.6, 150.2 | 110.5, 108.5, 118.1 | -35.6% | differs (empty reply) |
+
+`gqa` is byte-identical and the largest single cut so far: `attn_core` went from
+54.2 s to 28.7 s. `mppwide` and `wide` differ in the same way every round: the
+prompt ends mid-sentence in repository prose ("... at tag"), base continues with
+`0.1.0.` and the wide arms end the turn at once. That is one close first-token
+decision flipping, the same way three times -- rounding, not noise -- and it is
+exactly what a quality loss would also look like, so `mppwide` stays off until
+`benchmark/quant_perplexity_ab.py` clears it. The kernel itself was re-read for
+a real defect: N edges are masked, accumulation is float, and it is built for
+the same weight width as the `prefillQMM` it replaces; the one numeric
+difference is each dequantized weight rounded to fp16 before the multiply.
+
+Where the GPU time goes now (`splitwide`, one round, s):
+
+| stage | s | spike 2 | note |
+| --- | ---: | ---: | --- |
+| `routed_tile` | 30.1 | 30.6 | now the top role |
+| `attn_core` | 28.7 | 54.2 | grouped kernel |
+| `gdn_in_proj` + `gdn_out_proj` | 8.6 | 8.4 | |
+| `gdn_scan` | 5.6 | 5.1 | |
+| routers (remainders) | 7.4 | 7.2 | |
+| `shared_expert` | 4.7 | 12.9 | batched MPP |
+| `qsa_index` | 3.9 | 4.3 | |
+| `hc_in` + `hc_out` | 3.4 | 17.5 | MPP |
+| `attn_qkv_proj` + `attn_o_proj` + `attn_rope_kv` | 2.9 | 2.9 | |
+| GPU busy of span | 95.6 of 134.2 | 141-146 of ~185 | 71% occupied |
+
+The host side (`wide`, round 2, `TURBO_FIELDFARE_PHASES`): per chunk,
+"route readback + GPU" 31.7 s / 38.4 s and "expert fetch + tiles" 25.2 s /
+24.0 s, with 432.5 / 411.5 distinct experts per layer. That is 57.5 + 54.7 GB
+of routed experts (active x 48 layers x 2,768,896 B) streamed in 49.2 s, about
+2.3 GB/s, against 30.6 s of routed-tile GPU work in the same phase. Read: the
+routed half of prefill is now bound by the external drive, not the GPU, and
+each extra chunk is one more near-full sweep of the expert corpus. The levers,
+in order: a chunk above 4,096 (one sweep for this prompt instead of two), a
+faster drive, and only then the routed-tile kernel. About 17 s of each prefill
+still precedes the first GPU command buffer.
+
+## After spike 3: what changed, and spike 4
+
+- **The grouped QSA kernel is the default** (`EMONE_PREFILL_QSA_GQA=0` restores
+  the per-head one). Its byte-equality test now also covers int4 and fp16 KV.
+- **The chunk ceiling is 16,384** (`--prefill-chunk 8192|16384`; the default stays
+  4,096 until spike 4 measures it). Everything a chunk sizes was already sized
+  from the configured chunk; the one new limit is the key selection, indexed
+  `row * visibleKeys + key` in 32 bits, so chunk x context may not pass 2^32 --
+  every native context takes 16K, the 512K/1M YaRN contexts cap it at 8K/4K,
+  and `RuntimeConfiguration.validate(maxContext:)` refuses the rest with the
+  largest chunk that fits. Qwen3.8's chunk scratch is 0.81 GiB at 4K and
+  3.22 GiB at 16K.
+- **The shared expert no longer blocks the expert reads.** Its command buffer
+  is committed and awaited only before the tail that reads it, so the host
+  starts the routed tiles' reads while the GPU runs it. Same kernels, same
+  queue order.
+- **Installer-made models now find their profile row.** The installer writes
+  `qwen3.8-flash-next-4bit`; the table is keyed `qwen3.8-flash-next`, so every
+  installed model ran on its family fallback (`family-default` in the log). On
+  Qwen3.8 that left the expert cache unwired through prefill, which the row
+  measured at 1.6-4.7 s per request on re-wire.
+
+Spike 4 (`tools/m1_spike.sh` defaults: ~16K-token prompt, arms `base c8192
+c16384`): 4, 2 and 1 chunks, so 4, 2 and 1 sweeps of the routed experts. The
+summary now splits each run into its host phases, where the saving should
+show: "expert fetch + tiles" is the half the chunk count multiplies.
+
+## Speedups so far, 7,879-token prompt
+
+| step | prefill s | tok/s | vs spike-1 base |
+| --- | ---: | ---: | ---: |
+| spike 1 base (commit 85e104a) | ~201 | 39 | -- |
+| + grouped QSA kernel (now default, same output) | ~173 | 45 | 1.16x |
+| + MPP for the remaining GEMMs (opt-in, output differs) | ~151 | 52 | 1.33x |
+
+Rounds 2-3 of spike 3; round 1 of base read the model cold.
+
+## Spike 4 results (commit bd484b5, two rounds, 16,931-token prompt)
+
+| arm | chunks | prefill s (r1, r2) | tok/s | vs base | output |
+| --- | ---: | --- | ---: | ---: | --- |
+| base (4,096) | 5 | 451.5, 419.3 | 38.9 | -- | reference |
+| c8192 | 3 | 395.7, 391.9 | 43.0 | -9.5% | same as base |
+| c16384 | 2 | 401.8, 394.4 | 42.5 | -8.6% | same as base |
+
+GPU work is flat across the arms (+0.8% / +2.7% Gcycles), and the install
+now resolves its profile row (`tabled`, `keep_wired=true`). Decode, now that
+the runs generate 64 tokens: 3.8-4.1 tok/s on every arm.
+
+**Correction to the spike 3 reading.** "Expert fetch + tiles" scales with
+*tokens*, not with sweeps of the corpus: ~29.5 s per 4,096 tokens at base,
+~23 s at 8K and 16K. Its bulk is GPU -- routed tiles 66-69 s and the per-token
+shared expert 28-30 s over the prompt -- and the drive stall is what is left:
+~33 s at base, ~11 s at 16K. So the routed half was mostly GPU-bound; the
+drive cost ~2-3 s per extra chunk sweep, not the ~25 s spike 3 inferred from
+bandwidth alone. The bigger chunk is still a clean win (same output, less
+stall), just a smaller one.
+
+**The ~69 s nobody had named.** Every arm spent ~69 s of prefill outside the
+per-layer phases -- the same at 5, 3 and 2 chunks, and ~4.1 ms per token
+(spike 3's 7.9K prompt: ~31 s, the same rate). That is the PLE n-gram gather:
+16 uncached 320-byte `pread`s per token, issued one at a time, each a full
+round trip to the external drive. They are now issued together
+(`NgramTableReader.gatherConcurrently`); the bytes and where they land are
+unchanged, so the output is too.
+
+Where a 16.9K-token prefill goes at c16384 (round 2, 394 s):
+
+| part | s | note |
+| --- | ---: | --- |
+| dense layers on the GPU (attention + GDN + routers) | ~150 | |
+| host time inside the dense phase | ~68 | grows with context: QSA selection runs on the CPU |
+| routed tiles (GPU) | ~66 | |
+| shared expert, per-token path | ~28 | `EMONE_PREFILL_MPP_WIDE=1` makes it ~10 |
+| drive stall in the routed phase | ~11 | |
+| PLE gather | ~69 | now concurrent |
+
+## Spike 5 (commit f761aae, two rounds, 16,931-token prompt)
+
+| arm | prefill s (r1, r2) | tok/s | vs base | output |
+| --- | --- | ---: | ---: | --- |
+| base | 388.6, 352.9 | 45.7 | -- | reference |
+| c8192 | 346.5, 333.4 | 49.8 | -8.3% | same as base |
+| c8192qsa | 332.0, 346.3 | 50.0 | -8.5% | same as base |
+| c8192wide | 280.4, 289.6 | 59.4 | -23.1% | differs (MPP) |
+
+**The PLE gather fix measured:** base 419-451 s in spike 4 -> 353-389 s, and the
+time outside the layer phases 69 s -> ~10 s, as predicted.
+
+**`EMONE_QSA_GPU_SELECT` is decode-only** (`RealForwardRunner+Residual`
+reads it in the decode QSA path alone), so `c8192qsa` was a second `c8192` --
+which is what it measured. The spike-4 table's "~68 s of QSA selection" was also
+wrong in its size: it left out `prefill_qsa_index` (20-23 s of GPU).
+
+What is left in the dense phase: 213.6 s (c8192, r2) against 173.9 s of GPU
+(attention 79.7, GDN 71.4, QSA indexer 22.8), so **~40 s of host time**, the
+same at every chunk size and with or without MPP. Its size and growth match the
+prefill key selection: every query row sorts all of its block scores on one
+core, 12 layers x every token, O(rows x context log context). The rows are
+independent and now run in parallel (`QSAIndexer.selectPrefillRows`,
+byte-identical to row order by `QSAPrefillSelectionTests`); the next run says
+how much of the 40 s that was.
+
+Best measured so far on this prompt: `c8192wide`, 59.4 tok/s (output differs,
+MPP arithmetic); `c8192`, 49.8 tok/s with base's output.
+
+## Spike 6 (commit cbd6004, two rounds, 16,931-token prompt)
+
+| arm | prefill s (r1, r2) | tok/s | vs spike 5 | output |
+| --- | --- | ---: | ---: | --- |
+| base | 338.8, 314.8 | 51.9 | -10% | reference |
+| c8192 | 300.9, 297.4 | 56.6 | -12% | same as base |
+| c8192wide | 251.0, 246.0 | 68.2 | -13% | differs (MPP) |
+
+**The parallel prefill key selection measured:** the dense phase's host time
+fell from ~40 s to ~7 s (c8192, r2: 177.7 s of phase against 171.0 s of GPU),
+and GPU occupancy rose to 82-87%. Output unchanged.
+
+Against spike 4's base on this prompt (419-451 s, which already had the grouped
+QSA kernel), `c8192` is now 1.45x and `c8192wide` 1.75x. Prefill is now GPU-bound:
+of c8192's 297 s, 269 s is kernels -- attention layers 78, GDN layers 70,
+routed tiles 67, shared expert 28 (11 with MPP), QSA indexer 22 -- so the next
+wins are kernel work, not scheduling.
+
+One scheduling residue: the 547-token tail chunk costs ~20 s (13.7 s routed,
+6.9 s dense), about twice its share per token, because it still reads ~286
+experts per layer for few tokens. Balanced chunks (16,931 as 2 x 8,466 under a
+16K ceiling) would remove it, but frontier checkpoints and split prefills
+assume chunk boundaries at whole multiples of the chunk size from the resume
+point, so it is not a planner-only change.
+
+## Spike 7 (commit d61a8b5, two rounds, 16,931-token prompt)
+
+| arm | prefill s (r1, r2) | tok/s | Gcycles |
+| --- | --- | ---: | ---: |
+| c8192 | 307.3, 302.9 | 55.5 | 333 |
+| c8192wide (MPP) | 245.1, 249.6 | 68.5 | 270 |
+| c8192sg (simdgroup QMM) | 262.8, 267.7 | 63.8 | 293 |
+
+The simdgroup-matrix QMM compiles and matches the scalar kernel, but it is
+slower than the MPP QMM here (GDN role 59.8 s against 47.3 s): it stays opt-in.
+
+**Correction to the efficiency reading behind it.** Dividing whole roles by
+their FLOPs put every GEMM at ~1 TFLOPS. Spike 2's per-stage split says
+otherwise for the dense projections: `gdn_in_proj` + `gdn_out_proj` did
+~33 TFLOP in 8.4 s at 7.9K tokens, ~3.9 TFLOPS on MPP. What is genuinely slow:
+
+- **the routed tiles**, ~80 TFLOP in ~70 s, ~1.2 TFLOPS: one output element
+  per thread, a full dot product each. `EMONE_PREFILL_ROUTED_MPP=1`
+  (`PrefillRoutedExpertGEMM`) runs each tile as grouped MPP GEMMs instead --
+  gather the tile's token rows, gate and up per expert, one activation over
+  the tile, down per expert, scatter to the same route-partial slots.
+- **the shared expert's scalar gate**: ~2 GFLOP of work, but 2 x 8,192 one-token
+  encoders per layer-chunk, most of `shared_expert`'s ~11 s under MPP.
+  `EMONE_PREFILL_COALESCE` (bit-identical, spike 2) is now on by default.
+# Concept: what 20 tok/s would take for Qwen3.8-Flash-Next at 4-bit
+
+---
+
+# MEASURED, 2026-09-02: this document's inputs were wrong
+
+Everything below this line predates the profile it asks for in "Step 0". That
+profile has now been run on this model (`emone_overlap_measure`, 256-token warm
+request, 4-bit, 24 GiB M3) and it falsifies three of the inputs above. The
+analysis method was sound; the numbers fed into it were not.
+
+## The token, measured
+
+| component | ms/token | share |
+| --- | ---: | ---: |
+| GPU busy | 79 | 48.6% |
+| exposed expert I/O | 42 | 26% |
+| control plane / gaps | 41 | 25% |
+| **total** | **162.5** | |
+
+## What was wrong
+
+**The hit rate.** The ceiling table used 78%, labelled "128 slots, measured
+saturation". 78% is what **64** slots gives. Measured on this model:
+
+| slots | hit rate | tok/s |
+| ---: | ---: | ---: |
+| 64 | 78.1% | 5.58 |
+| 96 (shipped) | 85.4% | 5.71 |
+| 128 | 89.8% | 1.80 (swaps: ~17 GB of cache on a 24 GB machine) |
+
+So the curve does **not** saturate at 78%, and route A ("more resident memory")
+is blocked by this machine's RAM rather than by a saturating curve. On a 64 GiB
+machine it is ordinary work.
+
+**The binding constraint.** At the measured 87.4% warm hit rate the I/O floor is
+~48 ms, a ~19-21 tok/s ceiling -- not 12.3. The real floor is **GPU compute at
+79 ms/token = 12.6 tok/s**. The document's headline number is roughly right by
+coincidence and wrong in its reason.
+
+**The omission.** `attn_norm_qkv` (29.8 ms/token) and `attn_tail_router` (15.8)
+total **45.6 ms/token across 96 dispatches** -- larger than every MoE kernel
+combined, and absent from this document entirely. At that weight volume they run
+near unified-memory bandwidth, so there is no dispatch-fusion win hiding there.
+
+## What was tried, and closed
+
+A 15-arm sweep (`emone_knob_sweep.py`, baseline drift 2.9%) plus two defect
+fixes. **Nothing improved throughput correctly.**
+
+| lever | result |
+| --- | --- |
+| event I/O sync | **-15.5%** after fixing it; the +79% it first showed was a kernel returning early |
+| immediate submission | -9.8% -- speculative reads steal service from demand reads |
+| gpu-residency | -7.1% after fixing two defects; does strictly more work for the same answer |
+| prefetch depth 2 | -6.5% (reproduces the recorded -6.0%) |
+| cache policy lru / aging-lfu | -9.0% / -5.7% |
+| slots 128 | -68.5% |
+| layout pool, keep-wired, no-parallel-io | +1.1% to +4.6%, all inside drift |
+
+Item 1 of the plan above -- "overlap I/O with compute" -- is now measured and
+**backwards**. Three independent arms raised `io_hidden_pct` and every one of
+them lowered throughput. Overlap is a diagnostic, not an objective: the device
+is saturated, so an overlapped read is a read taken from someone else.
+
+Item 4, "cut the control plane", is not reachable by removing host waits: that
+is exactly what event sync does, and it loses 15.5%.
+
+### Attention is dispatch-shaped, and that is not an inefficiency
+
+`attn_norm_qkv` moves 745.8 MiB/token in 29.8 ms -- an effective **26.2 GB/s**
+against ~100 GB/s peak -- while `head_logits` moves 644 MiB in a single
+dispatch at **67.8 GB/s** on the same memory. That 2.6x gap looks like a
+kernel problem and is not. Three attempts, all measured, all closed:
+
+| attempt | premise | result |
+| --- | --- | --- |
+| `gdn_in_proj_gemv_simd_xsh8/_r16/_xsh16` | every row re-reads x, ~80 MB/layer | +0.3% / +1.6% / -1.0%, drift 3.2% |
+| attn/tail command-buffer merge | ~0.15 ms/CB x 36 linear layers | **-1.8%**, reverted |
+| (implied) fuse the 48 layers | one large dispatch is 2.6x more efficient | impossible: layer L+1 depends on L |
+
+The x premise was simply wrong: x is **5 KiB**, so it sits in L1 and those
+"device memory" re-reads were already cache hits. The traffic was nominal.
+
+The command-buffer premise was right about the cost and wrong about where it
+falls. Committing `attnCB` before `tailCB` is encoded lets the GPU execute
+while the CPU is still encoding, so the buffer's overhead is already hidden
+behind that overlap; removing the buffer removed the overlap too, and the two
+cancelled with a slight loss.
+
+**The conclusion is structural.** 48 dependent small GEMVs cannot be made into
+one large one without changing the model's dependency chain, so 26 GB/s is what
+this shape costs. Do not re-open it as a kernel-tuning problem.
+
+## What is actually left
+
+Only two things move this model on this hardware:
+
+1. **A machine with more RAM.** 128 slots reach 89.8% and would fit.
+2. **GPU-side fetch planning**, so the CPU never blocks on the router at all.
+   Not a knob and not a fix -- an architecture change. `gpu-residency` is now
+   correct and is the prerequisite for it, at the cost of 7%.
+
+Falsifiers for *this* section: a profile showing GPU busy well under 79 ms/token,
+or any arm that raises `io_hidden_pct` and throughput together.
+
+---
+
+
+Published decode is **6.82 tok/s** (147 ms/token) on the 24 GiB M3. The target
+is 20 tok/s, 50 ms/token  a 2.9x cut.
+
+This document leads with the constraint rather than a list of optimizations,
+because the constraint decides which optimizations can matter. The short
+version: **engineering can plausibly reach ~12 tok/s and cannot reach 20.**
+Crossing 12 requires changing what is read, not how it is read.
+
+## The governing constraint
+
+Decode reads routed experts from SSD. The volume is fixed by the architecture:
+
+| | |
+| --- | ---: |
+| experts per token | 10 of 512, in each of 48 layers = **480 reads** |
+| per-expert record | 2.77 MB (gate + up + down, 4-bit, plus scales/biases) |
+| all-miss traffic | **1.33 GB per token** |
+
+The expert cache removes most of that. What is left is what the SSD must
+deliver inside one token, and the measured effective read bandwidth is
+**3.6 GB/s**:
+
+| hit rate | bytes/token | I/O alone | ceiling |
+| ---: | ---: | ---: | ---: |
+| 65% (64 slots, measured) | 465 MB | 129 ms | 7.7 tok/s |
+| 73% (~96 slots, shipped) | 359 MB | 100 ms | 10.0 tok/s |
+| **78% (128 slots, measured saturation)** | **292 MB** | **81 ms** | **12.3 tok/s** |
+| 86.5% | 179 MB | 50 ms | 20.1 tok/s |
+
+The port measured the cache saturating at **78% around 128 slots**  512
+experts at top-10 spread far wider than Qwen 3.6's 256 at top-8, which reaches
+93.6%. So 12.3 tok/s is the ceiling for perfect engineering at the shipped
+geometry, and 20 tok/s sits ~1.6x beyond it.
+
+**No amount of overlap, prefetch depth, dispatch fusion or kernel work crosses
+that line.** Those hide latency; they do not reduce bytes, and the floor is
+bytes  bandwidth.
+
+## What engineering can still take: 6.82 -> ~12 tok/s
+
+The gap between 6.82 and the 1012.3 floor is real and worth having. It is
+~75% more throughput, and every part of it is ordinary work.
+
+**1. Overlap I/O with compute.** Decode is I/O-compute *serialized* today
+(measured). Serialized, the token is `io + compute`; overlapped it is
+`max(io, compute)`. This is the single largest structural item and it is
+worth roughly the whole compute term.
+
+**2. Prefetch the misses instead of awaiting them.** The 78% ceiling is not
+the problem  *demand-loading* the other 22% is. Prefetch depth 1 measured
++12.2%; depth 4 measured **-9.8%**, because the prefetch ring and the resident
+cache compete for one fixed budget and a deeper ring starves the cache. This
+is precisely the adaptive resident/ring split (tracker Item 11) borrowed from
+the KV-streaming work: move the boundary under pressure instead of fixing it
+at startup, with shrink hysteresis against thrash. Item 12 (churn-stable
+residency priority) protects the same budget from oscillation.
+
+**3. Saturate the device.** 3.6 GB/s effective is the number every row above
+depends on. Item 7 concluded the SSD is already saturated; that conclusion
+predates this model's access pattern and deserves one re-measurement at
+realistic queue depth, because every 1 GB/s recovered moves the ceiling by
+~3 tok/s.
+
+**4. Cut the control plane.** Qwen 3.6 measured the GPU idle over half of
+every token with 18.9 ms of inter-command-buffer gaps. Qwen 3.8 adds
+hyper-connections in all 48 layers and has never been profiled this way. Only
+matters once (1) lands and the token is `max(io, compute)`.
+
+**Tuning all four is what Item 10 is for.** The optimum is machine-dependent
+ our own numbers show depth 1 winning and depth 4 losing  and our benchmarks
+carry +/-15% run-to-run spread. An in-process A/B that interleaves arms,
+discards warmup and latches on a minimum gain is the only honest way to pick
+these, and its 0.5% threshold must be re-derived against our noise floor.
+
+## What 20 tok/s would actually require
+
+Three routes cross the floor. All change the physics rather than the code.
+
+**A. More resident memory.** At 3.6 GB/s the requirement is a **86.5%** hit
+rate. 128 slots costs 15.8 GiB and measured 78%; peak footprint on this
+machine is already 18 GiB of 24 GiB. A 64 GiB machine could hold several times
+the cache. This is the only route that keeps the model's output identical.
+Unknown: whether 86.5% is reachable at *any* cache size, since the curve was
+described as saturating. Re-measuring the hit-rate curve past 128 slots is
+cheap and decides this route.
+
+**B. Faster storage.** At the measured 78% hit rate, 20 tok/s needs
+**7.2 GB/s**  roughly twice the internal SSD. Thunderbolt/USB4 external NVMe
+lands near 35 GB/s, so this route does not reach the target alone; it moves
+the ceiling to ~17 tok/s at best and only combines usefully with A.
+
+**C. Read fewer experts.** Dropping the two lowest-weighted of the ten cuts
+traffic 20%; six-of-ten cuts it 40% and puts 20 tok/s inside the floor at the
+current hit rate and bandwidth. The router's normalized weights make this
+measurable rather than arbitrary  the bottom experts carry ~9% each. **This
+changes the model's output** and needs a quality measurement before it is
+anything but a benchmark trick. It is the only route reachable on this machine
+today.
+
+## Step 0, before any of it
+
+**The decode split for Qwen3.8-Flash-Next has never been measured.** Every
+number above except the cache curve and the 3.6 GB/s is derived from
+architecture and from Qwen 3.6's profile. This project's history is emphatic
+about what that is worth: the prefetch saving was predicted at 11.5 ms and
+measured 0.59 ms, and dispatch-count arithmetic predicted 3.8 ms where the
+real figure was 0.59. Both were wrong by more than an order of magnitude.
+
+So the first work item is an instrumented token for *this* model: exposed
+expert I/O, GPU busy, control-plane gaps, cache hit rate at the shipped 96
+slots, and the hit-rate curve past 128. `benchmark/emone_profile.py` and
+`emone_slots_ab.py` already exist for this.
+
+If that profile shows exposed I/O far below the ~100 ms this arithmetic
+predicts, the model is not I/O-bound in the way assumed here and this whole
+document is wrong in a useful way.
+
+## What would falsify this
+
+- Exposed expert I/O measuring well under 100 ms/token at 96 slots.
+- The hit-rate curve continuing to climb past 128 slots rather than saturating
+  at 78%  which would make route A ordinary work rather than new hardware.
+- Effective read bandwidth exceeding 3.6 GB/s at higher queue depth.
+
+Any of the three changes the conclusion. None of them is expensive to check,
+and all three should be checked before anyone writes a kernel.
+# Qwen3.8-Flash-Next 4-bit decode: measured profile and optimization plan
+
+> **Superseded in part, 2026-09-22.** The opt-in switches this document records
+> are no longer in the engine. Each was measured on the current build and turned
+> out a wash or a loss, so all of them were deleted rather than left as knobs:
+> `EMONE_EXPERT_CACHE_POLICY` (lru, aging-lfu, decayed),
+> `EMONE_CACHE_DECAY_HALFLIFE`, `EMONE_EXPERT_CACHE_LAYOUT` (the pooled
+> layout), `EMONE_EARLY_HITS` (with the pooled phase-1 kernel),
+> `EMONE_KEEP_WIRED`, `EMONE_PARALLEL_IO`, `EMONE_PREFETCH_MIN_MARGIN`
+> and `EMONE_PREFETCH_IO_TIER`. What survives from it is the *default* each
+> experiment confirmed: LFU, per-slot buffers, no early hits, the cache wired per
+> the profile row, parallel fills, rank-order prefetch with no margin gate, and
+> the default disk tier.
+>
+> **Superseded in part, 2026-09-21.** The 8 verdict that prefetch cannot work
+> ("loses at every setting", "not viable on this SSD in this I/O path") does not
+> hold on the current engine: with the ring at depth 1 it wins at both prompt
+> lengths re-measured (7-token 3.993 -> 4.621 tok/s, +15.7%; ~500-token
+> 3.627 -> 4.158, +14.6%), with byte-identical output, and depth 1 is now the
+> Qwen3.8-Flash-Next profile default. Note that the absolute rates here (5.8-6.1
+> tok/s) and there (3.6-4.6) are not comparable across sessions; what flipped is
+> the within-session prefetch-on against prefetch-off comparison. Everything else
+> below is the 2026-09-05 record and still reads as such. Re-measurement:
+> `benchmark/internal-speeds/v2-qwen38-4bit-telemetry.txt`.
+
+Date: 2026-09-05. Machine: base M3 MacBook Pro, 8 GPU cores, 24 GB, ~3.6 GB/s
+SSD. Checkpoint: `models/qwen3.8-flash-next_125B_A6B_4Bit` (48 layers, 512
+experts, top-10, expert stride 2,768,896 B). Shipped profile row: 12 GiB
+expert budget = 96 slots per layer, prefetch depth 2 on the utility I/O
+tier, chunk 4096, sampling 1.0 / 20 / 0.95. Every number below is from this
+tree at tag `golden-code-2026-09-05` plus the diagnostics-only counters
+added for this profile (`pre_*`, `loop_*`, `embed_ms`, `gather_ms`).
+
+## 1. The decode pipeline as it runs today
+
+Per token, `RealForwardRunner.produceToken`:
+
+1. Preamble: ANE release (no-op), `setExpertCachePinned(true)`, KV reserve,
+   QSA exactness gate.
+2. Embed lookup (one command buffer, synchronous) and hyper-connection
+   broadcast (one more).
+3. N-gram gather: 16 `pread`s of 320 B from the 102 GB table, serial, cache
+   bypassed, before layer 0.
+4. Layers 0..47, each: attention command buffer (GDN or gated QSA attention
+   plus PLE on its layers) and a tail buffer that ends in the router and the
+   next-layer probe router; the CPU waits on the tail, reads the routed
+   expert ids back, plans the cache (adopting any ready prefetch buffer by
+   `memcpy` into its slot), pins the slots, issues the miss reads on the
+   4-thread pread pool, commits a phase-1 command buffer for the resident
+   experts, awaits the reads, then commits phase-1 for the misses plus the
+   phase-2 reduce and the residual tail. The shared expert runs on its own
+   buffer concurrently. After the routed encode it begins the next layer's
+   prefetch reads from the probe's prediction, resident experts filtered
+   out, first M in rank order.
+5. Final norm, the 8-bit head GEMV (logits), then the sampler in the
+   completion loop, then the server's stream callback.
+
+## 2. Baseline
+
+Three 512-token generations after a 200-word prompt, `decode_stats.py`
+(kernel + runner stats), shipped defaults, one at a time:
+
+| run | tok/s | body ms/token | GPU wait | expert I/O (hidden) | head | hit rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 4.48 | 160 | 79 | 66 (19%) | 9.6 | 81.3% |
+| 2 | 5.23 | 170 | 85 | 67 (18%) | 10.0 | 81.3% |
+| 3 | 4.93 | 171 | 82 | 70 (18%) | 10.3 | 81.3% |
+
+Median 4.93 tok/s. Story-prompt harness the same day: 4.73 (plain) with the
+machine at 8.5 GB of a 9.2 GB swap limit and the kernel's memory-pressure
+level at critical; 5.40 the day before on the same binary and prompt. The
+server's footprint is 18.0 GB (11.9 GB malloc'd slot cache, 3.4 GB mapped
+weights, 2 GB Metal). On this 24 GB machine the shipped budget leaves ~6 GB
+for everything else, and run-to-run spread tracks how much of that has
+been swapped.
+
+Other baseline facts: TTFT 17.9 s for the 262-token prompt (prefill);
+misses 52-95 per token depending on prompt (145-240 MB/token of expert
+reads, 0.7-1.3 GB/s average, well under the SSD); load latency p50 4 ms,
+p95 16 ms; router readback 0.02 ms/token; cache plan 0.9-1.1 ms/token
+including all adoption memcpys; I/O queue 0.2 ms; I/O-completion-to-fixup
+submit 1.1 ms; 57% of misses are reloads of experts the cache once held.
+
+## 3. GPU occupancy: Case A
+
+Merged busy / span over the whole request: 36.9% (run 1), 35.3% (later
+run). Busy per token 103-120 ms of a 190-270 ms token. The GPU is not
+saturated; the kernels are not the limit. Where the idle sits (gaps
+between consecutive command buffers, per token):
+
+| transition | ms/token | meaning |
+| --- | ---: | --- |
+| moe_phase1_hit -> moe_phase1_miss_fixup_phase2 | 69-76 | exposed expert I/O inside a layer |
+| sample -> embed | 48-74 | the between-token gap (see 4) |
+| shared_expert -> moe_phase1_hit | 11-14 | CPU turnaround per layer: readback, plan, pin, encode |
+| shared_expert -> moe_phase1_2_routed | 8-9 | same, on all-hit layers |
+| embed -> attn_norm_qkv | 3 | n-gram gather and layer-0 setup |
+
+Busy roles per token: attention 36 ms, head 9-10, phase-1/2 routed 9,
+tail+router 9, phase-1 hit 7.6, shared expert 2.9, sampler 0.17.
+
+## 4. The between-token gap: one-time re-wiring, averaged
+
+The segment counters place the sample->embed gap entirely in the produce
+preamble, and inside it entirely in `setExpertCachePinned`: 73, 91, 125 and
+170 ms per token across runs, tracking memory pressure, with sampler 0.4,
+callback 0.05, loop remainder 0.6, embed 0.7 and gather 2.4 ms. Logging
+every slow call showed it is one call per request: the first decode token
+re-wires all 48 layers (4,716 ms in the logged run, 1.6-3 s in others), and
+every later token returns early in under 2 ms. Prefill unpins the 12 GiB
+cache at its start; under pressure the pages are swapped out while prefill
+streams 76 GB of expert tiles past them, and the first decode token faults
+them back. Amortized over 512 tokens that is 3-9 ms/token; over 48 tokens
+it is 98 ms/token and 29% of decode time.
+
+What was fixed: the per-layer `ProcessInfo.environment` read in the pin
+path (the env-reads regression pattern, ~1.5 ms/token) is a static, the
+48-layer walk returns early once complete, and `EMONE_KEEP_WIRED=1` now
+wires each layer as it opens instead of at model load before any layer
+exists. Measured at 512 tokens, kept wired vs shipped: 5.75 / 5.52 vs 5.72
+/ 5.88, a wash on throughput; prefill was not slower with the cache held
+(17.3 / 17.7 s vs 17.9 / 17.6). The win from keeping the cache wired is
+first-token latency and short generations, not steady-state tok/s.
+
+## 5. Closed by measurement
+
+- Prefetch -> cache zero-copy promotion: the adoption `memcpy` of one
+  expert (2.64 MiB) costs 0.06 ms at 45 GB/s; the whole cache plan
+  including every adoption is 0.9-1.1 ms/token (<0.5%). Not worth the
+  ownership complexity. Closed.
+- N-gram gather: 1.55 ms/token serial, 0.30 with all 16 reads in flight,
+  measured on an idle SSD. Worth ~1 ms/token; below the noise floor. The
+  reader's header is right that it could be issued off the critical path,
+  but there is little to gain.
+- MTP: 1.94 tok/s with the draft head vs 4.73 without on the same story
+  prompt (this run); the earlier campaign found width-2 verification costs
+  2.8x against a 2.0x ceiling. Closed as a net loss. MTP-guided expert
+  prefetch cannot work for this model anyway: routing needs each layer's
+  hidden state, which a draft token does not provide.
+- Deeper or two-layer-ahead prefetch: a wash (5.34 / 5.17 and 5.41 / 5.24
+  vs 5.21 / 5.33). The two-ahead probe is 58% precise as a set.
+- Kernels: phase-1 layouts, HC gate fusion, GEMV variants, the head GEMV
+  (89.9 GB/s, at the ceiling) all measured at or near bandwidth earlier.
+- MTP fusion's commit-then-wait: real, but on a path that loses 2.4x for
+  other reasons; not worth touching until MTP itself is viable.
+
+## 6. Where the token goes, and the three opportunities
+
+Steady-state token at 5.8 tok/s (~172 ms): GPU busy ~105, exposed expert
+I/O ~55, per-layer CPU turnaround ~20, everything else ~5.
+
+### A. Expert I/O: fewer wasted speculative bytes (Phase 5 lever, low risk)
+
+The probe router's next-layer prediction is 91% precise at rank 1, but
+what the ring actually issues, the first M predictions not already
+resident, is 38% precise at the shipped depth: 1.37 reads per layer, 0.53
+useful, 0.85 wasted = 112 MB/token of speculative bytes on an SSD that the
+demand reads of the next layer are queued behind. The probe's normalized
+weights separate the two: non-resident predictions with a margin of 0.02
+over the 10th weight are 59% precise, 0.03 gives 67%. Simulated on the
+weighted trace:
+
+| rule | reads/layer | precision | useful/layer | wasted MB/token |
+| --- | ---: | ---: | ---: | ---: |
+| shipped (rank order, cap 2) | 1.37 | 0.38 | 0.53 | 112 |
+| margin >= 0.02, cap 4 | 0.64 | 0.59 | 0.37 | 35 |
+| margin >= 0.03, cap 4 | 0.44 | 0.67 | 0.30 | 20 |
+
+Implemented behind `EMONE_PREFETCH_MIN_MARGIN` (default 0 = shipped).
+Files: `RealForwardRunner+Decode.swift` (prefetch site, weights readback),
+`RealForwardRunner.swift` (static). Correctness risk: none to output; the
+ring only changes which speculative reads it issues. Expected upside: the
+SSD spends up to 30 ms/token less on wrong reads; how much of that reaches
+the exposed-I/O line is what the A/B decides.
+
+### B. Cache policy: forget the prefill (Phase 3 lever, low risk)
+
+57% of misses are reloads. Replaying the model's own route traces through
+policies at 96 slots per layer:
+
+| policy | short prompt | 3000-word prompt |
+| --- | ---: | ---: |
+| LRU | 0.818 | 0.730 |
+| LFU (shipped) | 0.845 | 0.703 |
+| aging-LFU (existing, unselectable) | 0.831 | 0.750 |
+| LRU-2 | 0.832 | 0.753 |
+| decayed frequency, half-life 16 | 0.837 | 0.760 |
+| Belady (oracle) | 0.897 | 0.863 |
+
+LFU is best on a short prompt and worst on a long one, because prefill's
+use counts outlive their relevance. A decayed count is within a point on
+the short prompt and 5.7 points better on the long one, which is the
+agentic case. Implemented as `ExpertCachePolicy.decayed` behind
+`EMONE_EXPERT_CACHE_POLICY` (with `aging-lfu` now selectable too). Files:
+`PreadExpertStreamer.swift` (scoring, eviction), `RuntimeConfiguration.swift`
+(override). Correctness risk: none to output; eviction order only. Expected
+upside on a long prompt: ~28 fewer misses/token, ~20 ms of SSD time. The
+oracle gap that remains (5-10 points) needs future knowledge the router
+probe only partially provides.
+
+### C. Per-layer CPU turnaround (medium risk, not attempted here)
+
+~20 ms/token of GPU idle between the shared-expert buffer ending and
+phase-1 starting: the tail wait, readback, plan, pin, argument build and
+commit, ~0.4 ms per layer. The GPU-residency execution mode moves the
+classification to the GPU but measured a loss on AgentWorld; a
+double-buffered plan (encode layer L+1's hit phase-1 before layer L's fixup
+completes) is the structural version. Files: `RealForwardRunner+Decode.swift`
+(`encodeDecodeRoutedMoE`, `finishPendingRoutedCommand`). Expected upside
+5-10%; risk: slot pin/lease lifetimes across two layers in flight.
+
+## 7. What the A/Bs said, and what they exposed
+
+Phase 3, 512-token story runs, two rounds interleaved (tok/s; expert hit rate):
+
+| arm | round 1 | round 2 |
+| --- | ---: | ---: |
+| shipped | 5.62 (81.3%) | 5.85 (81.3%) |
+| gate margin 0.02, cap 4 | 5.62 (81.3%) | 5.94 (81.3%) |
+| gate margin 0.03, cap 4 | 5.56 (81.3%) | 5.87 (81.3%) |
+| decayed policy, half-life 16 | 5.55 (80.0%) | 5.60 (80.0%) |
+| keep cache wired through prefill | 5.75 (81.3%) | 5.52 (81.3%) |
+
+The gate arms were identical to shipped to the fourth digit of the hit
+rate, which is impossible if the gate had changed what the ring issues.
+Per-token counters added to the ring settled it: the shipped ring issued
+4.8 reads per token (0.1 per layer, against 1.37 the trace simulation
+assumed) and adopted 1.45. At every `begin`, 1.78 of its 2 slots were
+held by completed reads whose layer had not been planned. The reclaim
+rule frees a terminal slot only when `slot.layer <= currentLayer`; a
+prediction for layer 46 or 47 made at the end of one token carries that
+layer index into the next token, where the current layer restarts at 0,
+and a wrong prediction for layer 47 is never reclaimed at all. The ring
+has been clogged since the first token of every generation, and the
+prefetch depth, tier and lookahead experiments of the last week compared
+variants of a mechanism that was effectively off (the 1.5 adoptions per
+token were stale reads from the previous token that happened to match).
+
+With a token-boundary reclaim the ring runs as designed: 62 reads issued
+per token, 1.8 slots free at each begin, speculative queue wait 0.01 ms,
+load 3.5 ms. And that loses: 4.9 adoptions per token (8% of issued reads),
+expert I/O up from 75 to 102 ms/token, 3.8 tok/s. Reads take 3.5 ms
+against a ~3 ms window before the next layer's plan, so half land late,
+and every one takes SSD time the demand reads are waiting on. Break-even
+needs roughly 50% precision and on-time completion; rank order gives 8%
+in situ. Phase 5 measures the repaired ring against prefetch off and
+against the margin gate at 0.03 and 0.06, which the trace puts at 67% and
+~75% precision.
+
+The decayed policy loses 1.3 points of hit rate and 4% on the short
+prompt, as its replay predicted; its long-prompt case (+5.7 points in
+replay) is not yet measured in situ.
+
+Keeping the cache wired through prefill is a throughput wash and removes
+the 1.6-4.7 s first-token re-wire; prefill w

@@ -204,3 +204,63 @@ kernel void dequant_int8_gemv_simd_one_row_many_x(
     acc = simd_sum(acc);
     if (lane == 0) y[token * yStride] = half(acc);
 }
+
+// `dequant_int8_gemv_simd` for a many-row weight over many inputs, the inputs
+// taken `kInt8ManyXBlock` at a time: one simdgroup per (output row, block of
+// inputs) dequantizes each weight pair once and applies it to every input in
+// the block. The coalesced rows path issued one dispatch per input instead, so
+// a short prefill chunk paid a dispatch per token per projection and re-read
+// the weights for each. Each (row, input) accumulator sees exactly the
+// per-input kernel's sequence -- same pairs, same fma order, one simd_sum --
+// so every output is the same bits (`GEMVRowsTests`).
+constant constexpr uint kInt8ManyXBlock = 4;
+
+[[kernel, max_total_threads_per_threadgroup(256)]]
+kernel void dequant_int8_gemv_simd_many_x(
+    device const uint8_t* W       [[buffer(0)]],
+    device const bfloat*  scales  [[buffer(1)]],
+    device const bfloat*  biases  [[buffer(2)]],
+    device const half*    x       [[buffer(3)]],
+    device half*          y       [[buffer(4)]],
+    constant uint&        M       [[buffer(5)]],
+    constant uint&        N       [[buffer(6)]],
+    constant uint&        count   [[buffer(7)]],
+    constant uint&        xStride [[buffer(8)]],
+    constant uint&        yStride [[buffer(9)]],
+    uint2                 tg      [[threadgroup_position_in_grid]],
+    uint                  sg_idx  [[simdgroup_index_in_threadgroup]],
+    uint                  lane    [[thread_index_in_simdgroup]]
+) {
+    const uint row = tg.x * kRowsPerTGInt8 + sg_idx;
+    if (row >= M) return;
+    const uint first = tg.y * kInt8ManyXBlock;
+    const uint inputs = min(kInt8ManyXBlock, count - first);
+    const uint n_groups = N / kInt8GroupSize;
+    device const uint8_t* W_row = W      + row * N;
+    device const bfloat*  s_row = scales + row * n_groups;
+    device const bfloat*  b_row = biases + row * n_groups;
+    device const half* xb = x + first * xStride;
+
+    float acc[kInt8ManyXBlock];
+    for (uint j = 0; j < kInt8ManyXBlock; ++j) acc[j] = 0.0f;
+    for (uint g = 0; g < n_groups; ++g) {
+        float s = float(s_row[g]);
+        float b = float(b_row[g]);
+        uint i0 = g * kInt8GroupSize + lane * 2;
+        uint i1 = i0 + 1;
+        float q0 = float(uint(W_row[i0]));
+        float q1 = float(uint(W_row[i1]));
+        for (uint j = 0; j < inputs; ++j) {
+            float x0 = float(xb[j * xStride + i0]);
+            float x1 = float(xb[j * xStride + i1]);
+            float dot_qx = q0 * x0 + q1 * x1;
+            float sum_x  = x0 + x1;
+            acc[j] = fma(s, dot_qx, acc[j]);
+            acc[j] = fma(b, sum_x,  acc[j]);
+        }
+    }
+    for (uint j = 0; j < inputs; ++j) {
+        float total = simd_sum(acc[j]);
+        if (lane == 0) y[(first + j) * yStride + row] = half(total);
+    }
+}

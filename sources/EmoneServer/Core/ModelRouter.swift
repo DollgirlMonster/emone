@@ -32,6 +32,14 @@ public struct ServedModel: Sendable, Equatable {
 public protocol ModelRouting: Sendable {
     /// Every model a request may name, in listing order.
     var servedModels: [ServedModel] { get }
+    /// Whether `id` (a served id) is a side model: resident beside the
+    /// primary rather than swapped in for it, and admitted on its own lane so
+    /// a title request does not queue behind the primary's reply.
+    func isSideModel(_ id: String) -> Bool
+}
+
+extension ModelRouting {
+    public func isSideModel(_ id: String) -> Bool { false }
 }
 
 extension ModelRouting {
@@ -119,7 +127,13 @@ public enum ModelRouterError: Error, CustomStringConvertible {
     }
 }
 
-/// Serves every catalog model through one server, keeping at most one resident.
+/// Serves every catalog model through one server, keeping at most one primary
+/// resident, plus any *side* models beside it.
+///
+/// Side models (`sideModelIDs`: small models for titles and one-word answers)
+/// never take the primary's place. Each has its own slot -- loaded on its first
+/// request, released after the same idle window -- so asking the 0.8B for a
+/// title neither evicts the 35B nor waits for it to unload.
 ///
 /// A request names its model; if that is not the resident one, the router
 /// waits for in-flight work on the resident model to drain, releases it, and
@@ -183,6 +197,9 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
     private var waiters: [Waiter] = []
     private var lastActivity = ContinuousClock.now
     private var reaper: Task<Void, Never>?
+    /// Served ids (aliases included) that live in side slots.
+    private nonisolated let sideIDs: Set<String>
+    private var sides: [String: IdleResident<any ServerInferenceBackend>] = [:]
 
     /// What the reaper should do next; see `ManagedModelBackend.ReaperStep`.
     enum ReaperStep: Equatable {
@@ -197,7 +214,8 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         maximumContext: Int,
         loader: @escaping Loader,
         counter: @escaping Counter = ModelRouter.standardCounter,
-        idleTimeout: Duration? = nil
+        idleTimeout: Duration? = nil,
+        sideModelIDs: Set<String> = []
     ) throws {
         var served: [ServedModel] = []
         var choices: [String: ReasoningChoice] = [:]
@@ -254,6 +272,32 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         self.loader = loader
         self.counter = counter
         self.idleTimeout = idleTimeout
+        // The model the server was started with is the primary even when it is
+        // one that would otherwise be a side model.
+        // Engine aliases (`<id>@cpu`) follow their install.
+        let withAliases = sideModelIDs.union(
+            entries.keys.filter { key in
+                sideModelIDs.contains(where: { key.hasPrefix($0 + "@") })
+            })
+        self.sideIDs = withAliases.intersection(entries.keys).subtracting([initialModelID])
+    }
+
+    public nonisolated func isSideModel(_ id: String) -> Bool { sideIDs.contains(id) }
+
+    /// The side slot for a request's model, made on first use; nil for the
+    /// primary path.
+    private func sideSlot(_ requested: String?) -> IdleResident<any ServerInferenceBackend>? {
+        guard let requested, let served = servedModel(named: requested),
+            sideIDs.contains(served.id),
+            let entry = entries[served.id], let choice = choices[served.id]
+        else { return nil }
+        if let existing = sides[served.id] { return existing }
+        let loader = self.loader
+        let made = IdleResident<any ServerInferenceBackend>(
+            name: "\(served.id) (side)", idleTimeout: idleTimeout,
+            loader: { try await Task { try await loader(entry, choice) }.value })
+        sides[served.id] = made
+        return made
     }
 
     /// Mirrors `CPUModelBackend`'s own clamp, so validation bounds max_tokens
@@ -294,6 +338,9 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         _ request: ValidatedChatRequest,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
+        if let side = sideSlot(request.model) {
+            return try await side.use { try await $0.generate(request, onEvent: onEvent) }
+        }
         let active = try await acquire(request.model)
         defer { release() }
         return try await active.generate(request, onEvent: onEvent)
@@ -304,6 +351,18 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
     /// and the resident model stays loaded; routing it like a generation
     /// made the next generation pay a full reload for a number.
     public func countPromptTokens(_ request: ValidatedChatRequest) async throws -> Int {
+        if let side = sideSlot(request.model), let model = request.model,
+            let served = servedModel(named: model)
+        {
+            // Never loads a side model for a count, the same rule as below.
+            if let loaded = await side.loadedValue as? any PromptTokenCounting {
+                return try await loaded.countPromptTokens(request)
+            }
+            guard let entry = entries[served.id], let choice = choices[served.id] else {
+                throw ServerRequestError.unknownModel
+            }
+            return try await counter(entry, choice, request)
+        }
         let target = request.model ?? resident?.id ?? initialModelID
         if target != resident?.id, let entry = entries[target], let choice = choices[target] {
             return try await counter(entry, choice, request)
@@ -328,6 +387,9 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
     /// Releases the resident model once in-flight work drains. The next
     /// request loads whichever model it names.
     public func unload() async -> Bool {
+        var releasedSide = false
+        for side in sides.values where await side.unloadNow() { releasedSide = true }
+        guard resident != nil || switching else { return releasedSide }
         while resident != nil || switching {
             if !switching, inFlight == 0, let released = resident {
                 resident = nil
@@ -344,6 +406,16 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         reaper?.cancel()
         reaper = nil
         resident = nil
+        let slots = Array(sides.values)
+        sides.removeAll()
+        Task { for slot in slots { await slot.shutdown() } }
+    }
+
+    /// Ids of the side models loaded right now, for the readiness view and tests.
+    public func residentSideModelIDs() async -> [String] {
+        var loaded: [String] = []
+        for (id, slot) in sides where await slot.isLoaded { loaded.append(id) }
+        return loaded.sorted()
     }
 
     public var residentModelID: String? { resident?.id }

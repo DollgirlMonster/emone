@@ -83,6 +83,7 @@ do {
     // either, so the profile is the family's plain default.
     var reasoningProfile: ServerReasoningProfile?
 
+    var systemOne: SystemOneService?
     if let modelsDirectory = arguments.modelsDirectory {
         var catalog = ModelCatalog.scan(directory: URL(fileURLWithPath: modelsDirectory))
         // --model may name a directory outside the models directory; it is
@@ -100,7 +101,21 @@ do {
             maximumContext: arguments.maxContext,
             loader: ModelRouter.standardLoader(arguments: arguments),
             idleTimeout: arguments.idleUnloadSeconds > 0
-                ? .seconds(arguments.idleUnloadSeconds) : nil)
+                ? .seconds(arguments.idleUnloadSeconds) : nil,
+            sideModelIDs: catalog.sideModelIDs())
+        if let package = catalog.systemOnePackage() {
+            systemOne = try SystemOneService(
+                package: package,
+                idleTimeout: arguments.idleUnloadSeconds > 0
+                    ? .seconds(arguments.idleUnloadSeconds) : nil)
+            print(
+                "System One: \(package.modelID) over \(package.base.id) at /v1/systemone "
+                    + "(adapter \(package.adapter.lastPathComponent), loads on the first request)")
+        }
+        let sides = catalog.sideModelIDs().subtracting([initial.id]).sorted()
+        if !sides.isEmpty {
+            print("side models (beside the primary, own lane): \(sides.joined(separator: ", "))")
+        }
         // Idle unloading implies deferring the first load, as on the
         // single-model path.
         if !arguments.managesResidency {
@@ -210,7 +225,8 @@ do {
         backend: servingBackend,
         reasoningProfile: try reasoningProfile ?? makePlan().reasoningProfile(),
         router: router,
-        coordinator: coordinator)
+        coordinator: coordinator,
+        systemOne: systemOne)
     _ = try await server.start(port: arguments.port)
     let diskCache =
         facts.promptCacheMode == .off

@@ -1,0 +1,4 @@
+0240)  add to the residual stream.
+
+**Faithfulness trap:** the 16 offsets are `cumsum(primes)`  160 wide  and
+must be summed **fp32-first** (`mean(dim=-1)`), *not* cast to fp16

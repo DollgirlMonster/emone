@@ -4,7 +4,7 @@
 # pass". Phase 2 of the production audit needs this before RealForwardRunner
 # is decomposed.
 #
-#   tools/golden-baseline.sh [target ...]     # default: ornith-8
+#   tools/golden-baseline.sh [target ...]     # default: qwen36-4
 #   tools/golden-baseline.sh --check [...]    # compare against the stored file
 #   tools/golden-baseline.sh --server [...]   # CLI and server must agree
 #
@@ -14,7 +14,7 @@
 # qwen38-27b targets are declared whether
 # or not their install is present: a target is inert until the directory is
 # there, and release.sh demands the baseline as soon as it is.
-# Bare 4 and 8 still mean
+# The default is Qwen 3.6 4-bit (qwen36-4). Bare 4 and 8 still mean
 # Ornith, because the stored baselines are named for it.
 #
 # Qwen3.8-Flash-Next is the broader gate: it is the only family exercising
@@ -107,7 +107,7 @@ for arg in "$@"; do
     *)        targets+=("$arg") ;;
   esac
 done
-[ ${#targets[@]} -eq 0 ] && targets=(ornith-8)
+[ ${#targets[@]} -eq 0 ] && targets=(qwen36-4)
 
 if [ ! -x "$CLI" ]; then
   echo "missing $CLI — run: swift build -c release" >&2
@@ -272,6 +272,8 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     # The dense Qwen 3.5 models, which had no baseline at all. They are the one
     # shape that runs on either engine, so this drives the default engine (GPU);
     # the CPU-versus-GPU equivalence is a separate opt-in test.
+    qwen35-0.8b-4) dir="qwen3.5_0.8B_4Bit"; file="qwen3.5-0.8b-4bit.txt"; q=4 ;;
+    qwen35-0.8b-8) dir="qwen3.5_0.8B_8Bit"; file="qwen3.5-0.8b-8bit.txt"; q=8 ;;
     qwen35-2b-4) dir="qwen3.5_2B_4Bit"; file="qwen3.5-2b-4bit.txt"; q=4 ;;
     qwen35-2b-8) dir="qwen3.5_2B_8Bit"; file="qwen3.5-2b-8bit.txt"; q=8 ;;
     qwen35-4b-4) dir="qwen3.5_4B_4Bit"; file="qwen3.5-4b-4bit.txt"; q=4 ;;
@@ -282,7 +284,7 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     # first --capture on an install makes it.
     qwen38-27b-4) dir="qwen3.8_27B_4Bit"; file="qwen3.8-27b-4bit.txt"; q=4 ;;
     qwen38-27b-8) dir="qwen3.8_27B_8Bit"; file="qwen3.8-27b-8bit.txt"; q=8 ;;
-    *) echo "unknown target: $t (ornith-4, ornith-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8, katcoder-4, katcoder-8, qwen35-2b-4, qwen35-2b-8, qwen35-4b-4, qwen35-4b-8, qwen35-9b-4, qwen35-9b-8, qwen38-27b-4, qwen38-27b-8)" >&2
+    *) echo "unknown target: $t (ornith-4, ornith-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8, katcoder-4, katcoder-8, qwen35-0.8b-4, qwen35-0.8b-8, qwen35-2b-4, qwen35-2b-8, qwen35-4b-4, qwen35-4b-8, qwen35-9b-4, qwen35-9b-8, qwen38-27b-4, qwen38-27b-8)" >&2
        status=1; continue ;;
   esac
   model="$ROOT/models/$dir"

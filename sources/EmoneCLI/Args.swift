@@ -50,6 +50,9 @@ public struct Args: Equatable, Sendable {
     /// `--live-trace`: draw the live expert-grid view while decoding, when
     /// stdout is a terminal. Off by default; changes no output byte or number.
     public var liveTrace: Bool = false
+    /// `--weight-patch <dir>`: a hand-written weight patch laid over the
+    /// model's prefill and decode (`WeightPatch`, Emone-a37).
+    public var weightPatch: String?
 
     public init(
         model: String,
@@ -194,6 +197,7 @@ extension Args {
                                     mean surprisal (NLL) of those n by teacher
                                     forcing. Compares prefill paths on one text.
           --score-out <file>        One NLL per scored token (needs --score).
+          --weight-patch <dir>      Lay a weight patch (weight_patch.json) over the model.
           --live-trace              Draw a live view of decode on the terminal: the
                                     expert grid of the layer in flight (router
                                     picks green = cache hit, red = SSD read), a
@@ -256,6 +260,7 @@ extension Args {
         var ropeScalingMode: RuntimeRoPEScalingMode = .none
         var scoreTokens: Int?
         var scoreOutput: String?
+        var weightPatch: String?
 
         var index = 0
         while index < argv.count {
@@ -399,6 +404,8 @@ extension Args {
                 scoreTokens = parsed
             case "--score-out":
                 scoreOutput = try takeValue(argv, &index, flag: flag)
+            case "--weight-patch":
+                weightPatch = try takeValue(argv, &index, flag: flag)
             case "--kv-bits":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let bits = Int(value),
@@ -477,6 +484,7 @@ extension Args {
             scoreOutput: scoreOutput)
         parsed.ignoreEOS = ignoreEOS
         parsed.liveTrace = liveTrace
+        parsed.weightPatch = weightPatch
         return parsed
     }
 

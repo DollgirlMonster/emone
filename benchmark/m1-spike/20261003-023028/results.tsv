@@ -1,0 +1,5 @@
+round	arm	prefill_tok	prefill_s	prefill_tps	decode_tps	occupancy_pct	decode_hit_pct	decode_gib	max_rss_gib	swap_mb_delta	output_sha	exit	gpu_mhz	gpu_residency_pct	gpu_busy_s	gpu_gcycles
+1	base	16931	153.48	110.3	3.803	64	-	-	20.8	-8	d460a004d525	0	-	-	102.7	-
+1	gdnchunk	16931	148.60	113.9	3.684	60	-	-	21.5	+0	63ba46ff014f	0	-	-	90.6	-
+2	gdnchunk	16931	141.26	119.9	3.714	61	-	-	21.5	+0	63ba46ff014f	0	-	-	88.7	-
+2	base	16931	151.92	111.4	3.934	64	-	-	21.5	+0	d460a004d525	0	-	-	101.5	-

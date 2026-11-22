@@ -97,6 +97,27 @@ public struct ModelProfile: Sendable, Equatable {
     /// with context. Same rule as the prefill switches;
     /// `EMONE_ATTN_DECODE_LONG` overrides.
     public var decodeLong: Bool
+    /// Prefill chunks of 3 to 31 tokens on the tiled simdgroup QMM (with
+    /// `prefillDenseQMM`) instead of one GEMV per token. Below 32 tokens the
+    /// per-token path costs a dispatch per row, so a 15-token chunk was slower
+    /// than a 40-token one. The QMM sums in a different order from the GEMV,
+    /// so this moves numerics and ships only where measured: `smallChunkQMM`.
+    /// Two rows stay off it -- the MTP verify has its own two-row path.
+    /// `EMONE_PREFILL_SMALL_QMM` overrides.
+    public var prefillSmallChunkQMM = false
+
+    /// Rows with `prefillSmallChunkQMM`. Kev-0.8B 8-bit: measured against its
+    /// fp32 reference (benchmark/kev), 2026-10-23; Rev-0.8B, the same geometry,
+    /// against its own (benchmark/rev). Qwen 3.6 and Ornith 1.5 4-bit: the
+    /// divergence overview (Emone-8d0, benchmark/divergence, 2026-11-20)
+    /// found no measurable change in surprisal or task outcomes, and on Qwen 3.6
+    /// a 17-token continuation at ~8.5K context fell from 189 to 167 ms with the
+    /// key split on (Emone-9ul.11). Kept apart from `table` so adding the
+    /// switch did not widen every row.
+    public static let smallChunkQMM: Set<Key> = [
+        Key("kev-0.8b", 8), Key("rev-0.8b", 8),
+        Key("qwen3.6-35b-a3b", 4), Key("ornith-1.5-35b-a3b", 4),
+    ]
 
     /// Split a short chunk's dense-flash keys into 1,024-key ranges merged
     /// after (`PrefillAttention.flashKeySplit`), so a few rows against a deep
@@ -385,6 +406,33 @@ public struct ModelProfile: Sendable, Equatable {
                 true, true, false, false, false, false, false, false, false, false, false, false,
                 false, false, false
             ),
+            // Kev-0.8B, a System One decision model (8-bit only; the pointer
+            // head reads final-normed rows and never decodes). The 27B 4-bit
+            // row's three prefill switches: chunked GDN, the dense projections
+            // and FFN on the tiled QMM, causal attention on the flash kernel.
+            // 2026-10-23, M1 Max, `EmoneCLI decide` over Kev's reference
+            // fixture and a 1,793-token state: the feed-forward 2.6x, flash
+            // attention 1,142 -> 107 ms of GPU across the stack, chunked GDN
+            // ~9%; the state prefill 5.69 -> 0.37 s together with the bf16
+            // many-input GEMV (the 16-row in_proj_a/b had been 1,800 dispatches
+            // a layer). Probabilities stay within 0.009 of Kev's fp32 reference,
+            // no argmax change (0.0085 on the per-token paths). Sampling is the
+            // family's and unused.
+            Key("kev-0.8b", 8): (
+                RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
+                GenerationDefaults.forFamily(.qwen35Dense),
+                true, true, false, false, false, false, false, true, false, false, true, true,
+                false, false, false
+            ),
+            // Rev-0.8B (Emone-lmw.9): Kev's geometry and recipe on the
+            // post-trained 0.8B, so Kev's measured switches carry over;
+            // parity against Rev's own fp32 reference in benchmark/rev.
+            Key("rev-0.8b", 8): (
+                RuntimeConfiguration.defaultExpertCacheBudgetBytes, 0, 4_096,
+                GenerationDefaults.forFamily(.qwen35Dense),
+                true, true, false, false, false, false, false, true, false, false, true, true,
+                false, false, false
+            ),
         ]
 
     /// Environment switches applied last. Read once per process.
@@ -445,6 +493,8 @@ public struct ModelProfile: Sendable, Equatable {
         if let v = env["EMONE_PREFILL_QSA_PACKED"] { profile.prefillQSAPacked = v == "1" }
         if let v = env["EMONE_PREFILL_ROUTER_LOGITS"] { profile.prefillRouterLogits = v == "1" }
         if let v = env["EMONE_ATTN_DECODE_LONG"] { profile.decodeLong = v == "1" }
+        profile.prefillSmallChunkQMM = smallChunkQMM.contains(profile.key)
+        if let v = env["EMONE_PREFILL_SMALL_QMM"] { profile.prefillSmallChunkQMM = v == "1" }
         profile.prefillFlashKeySplit = flashKeySplitRows.contains(profile.key)
         if let v = env["EMONE_PREFILL_FLASH_SPLIT"] { profile.prefillFlashKeySplit = v == "1" }
         if let v = env["EMONE_PREDICTIVE_PREFETCH"] {
@@ -490,6 +540,6 @@ public struct ModelProfile: Sendable, Equatable {
             + "routed_qmm=\(prefillRoutedQMM) dense_qmm=\(prefillDenseQMM) "
             + "dense_flash=\(prefillDenseFlash) qsa_packed=\(prefillQSAPacked) "
             + "router_logits=\(prefillRouterLogits) decode_long=\(decodeLong) "
-            + "flash_split=\(prefillFlashKeySplit)"
+            + "small_qmm=\(prefillSmallChunkQMM) flash_split=\(prefillFlashKeySplit)"
     }
 }

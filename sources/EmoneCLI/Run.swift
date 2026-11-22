@@ -279,6 +279,16 @@ public func run(
             context: context,
             maxContext: args.maxContext,
             runtimeConfiguration: runtime)
+        if let patchPath = args.weightPatch {
+            let patch = try WeightPatch(
+                directory: URL(fileURLWithPath: patchPath), baseModelID: model.modelID,
+                device: context.device, maxTokens: runtime.prefillConfig.chunkTokens)
+            try runner.setWeightPatch(patch)
+            let note =
+                "weight patch: \(patch.targetCount) deltas, rank \(patch.rank), "
+                + "layers \(patch.layers); head scales on layers \(patch.headScaleLayers)\n"
+            try? stderr.write(contentsOf: Data(note.utf8))
+        }
         let scratch = try RawCompletionScratch(
             context: context,
             vocab: model.config.vocabSize,
