@@ -287,39 +287,59 @@ public enum FastPathCommand {
                 // EMONE_FASTPATH_DUMP=<dir>: read out every row and write rep 1's
                 // rows as raw Float32 to <dir>/<N>-<R>.f32, for numerics checks.
                 let dump = ProcessInfo.processInfo.environment["EMONE_FASTPATH_DUMP"]
-                for r in rowList.split(separator: ",").compactMap({ Int($0) }) {
-                    let row = ids[newBase..<(newBase + r)]
+                // An entry "d<label>" in the list is the k=2 decision branch instead
+                // of corpus rows (its label is only a name), read out at its
+                // decision rows.
+                // EMONE_FASTPATH_TIMELINE=<dir>: rep 1's timed command buffers
+                // (role,start,end) to <dir>/<N>-<R>.csv (needs EMONE_KERNEL_STATS).
+                let timeline = ProcessInfo.processInfo.environment["EMONE_FASTPATH_TIMELINE"]
+                let decision = branchRow(
+                    question(k: 2, pool: questionPool), marker: questionPool[0])
+                for entry in rowList.split(separator: ",") {
+                    let decisionRow = entry.hasPrefix("d")
+                    guard let count = Int(decisionRow ? entry.dropFirst() : entry) else { continue }
+                    let r = decisionRow ? decision.ids.count : count
+                    let label = String(entry)
+                    let row =
+                        decisionRow ? ArraySlice(decision.ids) : ids[newBase..<(newBase + r)]
+                    let offsets =
+                        decisionRow
+                        ? decision.readouts : (dump == nil ? [r - 1] : Array(0..<r))
                     var totals: [Double] = []
                     for rep in 0...o.reps {
                         runner.resetKernelGPUTimings()
                         let started = now()
-                        let got = try await readout(
-                            row, from: n, offsets: dump == nil ? [r - 1] : Array(0..<r))
+                        let got = try await readout(row, from: n, offsets: offsets)
+                        if let timeline, rep == 1 {
+                            try runner.kernelGPUTimelineCSV().write(
+                                toFile: "\(timeline)/\(n)-\(label).csv", atomically: true,
+                                encoding: .utf8)
+                        }
                         if let dump, rep == 1 {
                             let flat = got.flatMap { $0 }
                             try flat.withUnsafeBytes {
                                 try Data($0).write(
-                                    to: URL(fileURLWithPath: "\(dump)/\(n)-\(r).f32"))
+                                    to: URL(fileURLWithPath: "\(dump)/\(n)-\(label).f32"))
                             }
                         }
                         let total = ms(now() - started)
                         if kstats {
                             for s in runner.kernelGPUTimingSummary() {
                                 say(
-                                    "kstat\t\(n)\t\(r)\t\(rep)\t\(s.role)\t\(String(format: "%.3f", s.millis))\t\(s.count)"
+                                    "kstat\t\(n)\t\(label)\t\(rep)\t\(s.role)\t\(String(format: "%.3f", s.millis))\t\(s.count)"
                                 )
                             }
                             let occ = runner.kernelGPUOccupancy()
                             say(
-                                "kocc\t\(n)\t\(r)\t\(rep)\tbusy=\(String(format: "%.3f", occ.busyMillis))\tspan=\(String(format: "%.3f", occ.spanMillis))"
+                                "kocc\t\(n)\t\(label)\t\(rep)\tbusy=\(String(format: "%.3f", occ.busyMillis))\tspan=\(String(format: "%.3f", occ.spanMillis))"
                             )
                         }
                         try await runner.restoreDecisionBranchPoint(point)
-                        say("rows\t\(n)\t\(r)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))")
+                        say("rows\t\(n)\t\(label)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))")
                         if rep > 0 { totals.append(total) }
                     }
                     say(
-                        "ROWS\t\(n)\t\(r)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
+                        "ROWS\t\(n)\t\(label)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
                     )
                 }
             } else {
