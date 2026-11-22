@@ -84,6 +84,9 @@ extension RealForwardRunner {
         try encodePrefillSharedBranch(
             commandBuffer: cb, layer: L, scratch: scratch, tokenCount: t, hiddenSize: D)
         try prefillSplitPoint(&cb, role: "prefill_split_shared")
+        if residentPrefillDeferLastWait, Self.shortBranchRouteStats {
+            try copyShortBranchRoutes(cb: cb, layer: L, tokenCount: t, scratch: scratch)
+        }
         if shortBranchGroupedChosen,
             try encodeGroupedRoutedPrefill(
                 try shortBranchGroupedKernels(), cb: &cb, layer: L, addresses: addresses,
@@ -166,6 +169,28 @@ extension RealForwardRunner {
             throw ModelError.residentBufferWrapFailed
         }
         cb = next
+    }
+
+    /// EMONE_SHORT_BRANCH_ROUTE_STATS=1: log each layer's picks of a short
+    /// branch for the trace's routing summary. Diagnostic; a copy only.
+    static let shortBranchRouteStats =
+        ProcessInfo.processInfo.environment["EMONE_SHORT_BRANCH_ROUTE_STATS"] == "1"
+
+    func copyShortBranchRoutes(
+        cb: MTLCommandBuffer, layer L: Int, tokenCount t: Int, scratch: PrefillChunkScratchBuffers
+    ) throws {
+        let stride = Self.residentPrefillMaxBlockedRows * cfg.topKExperts * 4
+        if (shortBranchRouteStatsLog?.length ?? 0) < cfg.numLayers * stride {
+            shortBranchRouteStatsLog = ctx.device.makeBuffer(
+                length: cfg.numLayers * stride, options: .storageModeShared)
+        }
+        guard let log = shortBranchRouteStatsLog, let blit = cb.makeBlitCommandEncoder() else {
+            throw MetalError.bufferAllocationFailed("shortBranch.routeStats")
+        }
+        blit.copy(
+            from: scratch.routeIDs, sourceOffset: 0, to: log, destinationOffset: L * stride,
+            size: t * cfg.topKExperts * 4)
+        blit.endEncoding()
     }
 
     /// The grouped stage's pipelines, built the first time a short branch takes it.

@@ -264,6 +264,9 @@ extension RealForwardRunner {
             gpuElapsedNanos: UInt64(max(0, span.elapsedSeconds) * 1e9),
             groupedMinRows: groupedMinRows, groupedEdge: shortBranchGroupedEdge)
         if Self.shortBranchTrace { writeShortBranchTrace(report, startPosition: startPosition) }
+        if Self.shortBranchRouteStats, stage == .residentRows || stage == .residentGrouped {
+            writeShortBranchRouteStats(rows: t, startPosition: startPosition)
+        }
         return report
     }
 
@@ -299,6 +302,35 @@ extension RealForwardRunner {
         return "not every layer's experts are resident"
     }
 
+    /// One line per call under EMONE_SHORT_BRANCH_ROUTE_STATS=1: per layer,
+    /// distinct experts, the most rows one expert took, and the 32-row work
+    /// items the grouped stage uses against its padded grid.
+    private func writeShortBranchRouteStats(rows t: Int, startPosition: Int) {
+        guard let log = shortBranchRouteStatsLog else { return }
+        let k = cfg.topKExperts
+        let stride = Self.residentPrefillMaxBlockedRows * k
+        let ids = log.contents().assumingMemoryBound(to: UInt32.self)
+        var distinct: [Int] = []
+        var maxRows: [Int] = []
+        var items: [Int] = []
+        for L in 0..<cfg.numLayers {
+            let stats = ShortBranchRouteStats(
+                ids: (0..<(t * k)).map { ids[L * stride + $0] }, numExperts: cfg.numExperts,
+                edge: 32)
+            distinct.append(stats.distinct)
+            maxRows.append(stats.maxRows)
+            items.append(stats.items)
+        }
+        let capacity = ShortBranchGroupedMoE.workCapacity(
+            pairs: t * k, numExperts: cfg.numExperts, edge: 32)
+        let join = { (v: [Int]) in v.map(String.init).joined(separator: ",") }
+        let line =
+            "[short-branch-routes] rows=\(t) start=\(startPosition) picks=\(t * k)"
+            + " distinct_sum=\(distinct.reduce(0, +)) items32_sum=\(items.reduce(0, +))"
+            + " grid32=\(capacity) distinct=\(join(distinct)) maxrows=\(join(maxRows))\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
     private func writeShortBranchTrace(_ report: ShortBranchPrefillReport, startPosition: Int) {
         let ms = { (n: UInt64) in String(format: "%.1f", Double(n) / 1e6) }
         let stage: String
@@ -316,5 +348,27 @@ extension RealForwardRunner {
             + " grouped_min_rows=\(report.groupedMinRows == Int.max ? "never" : String(report.groupedMinRows))"
             + " grouped_edge=\(report.groupedEdge)\n"
         FileHandle.standardError.write(Data(line.utf8))
+    }
+}
+
+/// Routing shape of one layer's picks: distinct experts, the largest expert's
+/// rows, and the work items the grouped stage makes at `edge` rows each.
+struct ShortBranchRouteStats: Equatable {
+    let distinct: Int
+    let maxRows: Int
+    let items: Int
+
+    init(distinct: Int, maxRows: Int, items: Int) {
+        self.distinct = distinct
+        self.maxRows = maxRows
+        self.items = items
+    }
+
+    init(ids: [UInt32], numExperts: Int, edge: Int) {
+        var counts = [Int](repeating: 0, count: max(1, numExperts))
+        for id in ids { counts[min(Int(id), counts.count - 1)] += 1 }
+        distinct = counts.filter { $0 > 0 }.count
+        maxRows = counts.max() ?? 0
+        items = counts.reduce(0) { $0 + ($1 + edge - 1) / edge }
     }
 }

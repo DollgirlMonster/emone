@@ -325,6 +325,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     var shortBranchGroupedChosen = false
     /// Rows per QMM tile the grouped stage uses for this branch.
     var shortBranchGroupedEdge = 64
+    /// EMONE_SHORT_BRANCH_ROUTE_STATS=1 (diagnostic): every layer's routed picks
+    /// of a short branch, `[numLayers][rows * topK]` UInt32, copied on the GPU.
+    var shortBranchRouteStatsLog: MTLBuffer?
     let prefillFinalRowHead: PrefillFinalRowHeadInt4
 
     // Scratch — preallocated per spec'd D / F / vocab.
