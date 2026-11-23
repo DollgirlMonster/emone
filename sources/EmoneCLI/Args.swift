@@ -29,6 +29,8 @@ public struct Args: Equatable, Sendable {
     public var stops: [String]
     /// Benchmarks: generate through stop tokens (`--ignore-eos`).
     public var ignoreEOS: Bool = false
+    /// Fill the routed-expert cache at load (`--warm`); off by default.
+    public var warm: WarmAtLoadMode = .off
     public var quiet: Bool
     public var concise: Bool
     public var thinkingMode: ModelThinkingMode
@@ -191,6 +193,12 @@ extension Args {
                                     the prompt with the smallest allowed chunk.
           --ignore-eos              Keep generating through stop tokens, so a
                                     benchmark decode runs the full --max-new count.
+          --warm <auto|on|off>      Fill the routed-expert cache before the
+                                    prompt (default off). on: always, when the
+                                    cache can hold every expert. auto: only when
+                                    it is predicted to save time and leaves
+                                    enough memory free. The choice and its
+                                    reason are printed before the footer.
           --kv-bits <4|8|16>        KV-cache storage precision (default 8).
           --score <n>               Score instead of generate: prefill all but
                                     the prompt's last n tokens, then report the
@@ -248,6 +256,7 @@ extension Args {
         var seed: UInt64?
         var stops: [String] = []
         var ignoreEOS = false
+        var warm: WarmAtLoadMode = .off
         var liveTrace = false
         var quiet = false
         var concise = false
@@ -271,6 +280,12 @@ extension Args {
             case "--ignore-eos":
                 ignoreEOS = true
                 index += 1
+            case "--warm":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = WarmAtLoadMode(rawValue: value) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                warm = parsed
             case "--quiet":
                 quiet = true
                 index += 1
@@ -483,6 +498,7 @@ extension Args {
             scoreTokens: scoreTokens,
             scoreOutput: scoreOutput)
         parsed.ignoreEOS = ignoreEOS
+        parsed.warm = warm
         parsed.liveTrace = liveTrace
         parsed.weightPatch = weightPatch
         return parsed

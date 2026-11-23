@@ -279,6 +279,8 @@ public func run(
             context: context,
             maxContext: args.maxContext,
             runtimeConfiguration: runtime)
+        try await warmAtLoad(
+            args: args, model: model, runner: runner, promptIds: promptIds, stderr: stderr)
         if let patchPath = args.weightPatch {
             let patch = try WeightPatch(
                 directory: URL(fileURLWithPath: patchPath), baseModelID: model.modelID,
