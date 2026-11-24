@@ -31,6 +31,16 @@ public struct MoEExpertOffsets {
 }
 
 final class MoE {
+    /// `EMONE_MOE_P1_VARIANT` (read once), a comma list. `base` selects the
+    /// pre-r16 decode phase-1 kernel (r16 is the default). EXPERIMENT:
+    /// `rows_dev` (resident-prefill rows phase 1) and `subset_dev`
+    /// (partial-residency decode phase 1) swap in kernels that read x from
+    /// device memory instead of every simdgroup staging all of it in
+    /// threadgroup memory; same buffers and dispatch.
+    static let phase1Variants: Set<String> = Set(
+        (ProcessInfo.processInfo.environment["EMONE_MOE_P1_VARIANT"] ?? "")
+            .split(separator: ",").map { String($0) })
+
     /// The largest expert count `encodeRouter` accepts, and therefore the size
     /// the router-logits scratch has to cover.
     ///
@@ -190,12 +200,23 @@ final class MoE {
         self.routerSelectKNSimdPSO = try? context.pipeline("router_topk_select_kn_simd")
         self.residencyClassifyPSO = try context.pipeline("moe_classify_expert_residency")
         self.resolveResidentPSO = try context.pipeline("moe_resolve_resident_experts")
+        // The 4-bit routed decode phase 1 runs on the 16-row kernel that reads
+        // x from device memory. The older kernel had every simdgroup stage all
+        // of x into threadgroup memory and then barrier, 16 times per
+        // threadgroup. Same buffers, dispatch and per-row arithmetic:
+        // byte-identical acts in `EmoneBench p1` and an identical qwen36-4
+        // golden. M1 Max: 94 -> 37 us per launch; warm decode +16% short,
+        // +15% 8k, +9% 32k. EMONE_MOE_P1_VARIANT=base selects the older kernel.
         let phase1Name =
             routedWeightBits == 4
-            ? "moe_phase1_gate_up_act_u16load" : "moe_affine_phase1_gate_up_act"
+            ? (Self.phase1Variants.contains("base")
+                ? "moe_phase1_gate_up_act_u16load" : "moe_phase1_gate_up_act_u16load_r16")
+            : "moe_affine_phase1_gate_up_act"
         let phase1SubsetName =
             routedWeightBits == 4
-            ? "moe_phase1_gate_up_act_subset_u16load" : "moe_affine_phase1_gate_up_act_subset"
+            ? (Self.phase1Variants.contains("subset_dev")
+                ? "moe_phase1_p1_subset_dev" : "moe_phase1_gate_up_act_subset_u16load")
+            : "moe_affine_phase1_gate_up_act_subset"
         let phase2Name =
             routedWeightBits == 4
             ? "moe_phase2_down_reduce_k8" : "moe_affine_phase2_down_reduce_k8"
@@ -221,12 +242,13 @@ final class MoE {
             constants: moeConstants)
         if routedWeightBits == 4, topKExperts == 8, !eventGatedIO {
             let generic = activationConstants + weightConstants + ioConstants
-            self.rowsPhase1PSO = try context.pipeline(
-                "moe_phase1_gate_up_act_u16load_rows", constants: generic)
+            let rowsName =
+                Self.phase1Variants.contains("rows_dev")
+                ? "moe_phase1_p1_rows_dev" : "moe_phase1_gate_up_act_u16load_rows"
+            self.rowsPhase1PSO = try context.pipeline(rowsName, constants: generic)
             self.rowsPhase2PSO = try context.pipeline(
                 "moe_phase2_down_reduce_k8_rows", constants: generic)
-            self.rowsPhase1SpecializedPSO = try context.pipeline(
-                "moe_phase1_gate_up_act_u16load_rows", constants: moeConstants)
+            self.rowsPhase1SpecializedPSO = try context.pipeline(rowsName, constants: moeConstants)
             self.rowsPhase2SpecializedPSO = try context.pipeline(
                 "moe_phase2_down_reduce_k8_rows", constants: moeConstants)
         } else {
