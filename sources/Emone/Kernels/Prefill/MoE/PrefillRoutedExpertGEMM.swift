@@ -150,13 +150,13 @@ final class PrefillRoutedExpertGEMM {
         // fill the GPU. One concurrent encoder lets them all run side by side;
         // spike 8 measured them serialized, one encoder each, no faster than the
         // tile kernels.
-        guard let gateUp = commandBuffer.makeComputeCommandEncoder(dispatchType: .concurrent)
+        guard let gateUp = commandBuffer.timedComputeEncoder(dispatchType: .concurrent)
         else { throw MetalError.commandEncoderFailed }
         // Scoped so the encoder ends here on every path: one left open when a
         // projection throws traps when the command buffer is released, and the
         // next encoder cannot be made while it is open.
         do {
-            defer { gateUp.endEncoding() }
+            defer { gateUp.releaseEncoder() }
             for group in groups where group.pairCount > 0 {
                 let view = try Self.view(for: group, in: binding)
                 let base = Int(view.offset)
@@ -175,7 +175,7 @@ final class PrefillRoutedExpertGEMM {
             }
         }
 
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         // Elementwise, so the whole tile's rows in one dispatch.
@@ -189,12 +189,12 @@ final class PrefillRoutedExpertGEMM {
             MTLSize(width: pairs * f, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(
                 width: min(activation.maxTotalThreadsPerThreadgroup, 256), height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
 
-        guard let down = commandBuffer.makeComputeCommandEncoder(dispatchType: .concurrent)
+        guard let down = commandBuffer.timedComputeEncoder(dispatchType: .concurrent)
         else { throw MetalError.commandEncoderFailed }
         do {
-            defer { down.endEncoding() }
+            defer { down.releaseEncoder() }
             for group in groups where group.pairCount > 0 {
                 let view = try Self.view(for: group, in: binding)
                 let row = Int(group.pairStart - tile.pairStart)
@@ -279,7 +279,7 @@ final class PrefillRoutedExpertGEMM {
             (gateUp, rowsIn, activated, gateUpParams, f, gateUpWork, Self.gateUpColumns),
             (down, activated, rowsOut, downParams, d, downWork, Self.downEdge),
         ] {
-            guard let enc = cb.makeComputeCommandEncoder() else {
+            guard let enc = cb.timedComputeEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
             enc.setComputePipelineState(pso)
@@ -293,7 +293,7 @@ final class PrefillRoutedExpertGEMM {
             enc.dispatchThreadgroups(
                 MTLSize(width: n / edge, height: work.count, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
-            enc.endEncoding()
+            enc.releaseEncoder()
         }
     }
 
@@ -336,7 +336,7 @@ final class PrefillRoutedExpertGEMM {
         source: MTLBuffer, destination: MTLBuffer, sortedPairs: MTLBuffer,
         tile: PrefillMoETile, d: Int, last: UInt32
     ) throws {
-        guard let encoder = cb.makeComputeCommandEncoder() else {
+        guard let encoder = cb.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(pipeline)
@@ -354,6 +354,6 @@ final class PrefillRoutedExpertGEMM {
         encoder.dispatchThreads(
             MTLSize(width: d, height: Int(tile.pairCount), depth: 1),
             threadsPerThreadgroup: MTLSize(width: 64, height: 4, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

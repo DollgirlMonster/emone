@@ -64,7 +64,7 @@ final class PrefillRoPE {
                 frequencies: frequencies)
             return
         }
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoNeoxSubdim)
@@ -89,7 +89,7 @@ final class PrefillRoPE {
                 width: min(pairs, psoNeoxSubdim.maxTotalThreadsPerThreadgroup),
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     private func encodeYaRNNeoxSubdim(
@@ -104,7 +104,7 @@ final class PrefillRoPE {
         tokenStrideElements: UInt32,
         frequencies: MTLBuffer
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoYaRNNeoxSubdim)
@@ -128,7 +128,7 @@ final class PrefillRoPE {
             threadsPerThreadgroup: MTLSize(
                 width: min(pairs, psoYaRNNeoxSubdim.maxTotalThreadsPerThreadgroup),
                 height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     func encodeDefaultNeox(
@@ -147,7 +147,7 @@ final class PrefillRoPE {
         precondition(
             tokenStrideElements >= numHeads * headDim,
             "token stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoDefaultNeox)
@@ -170,7 +170,7 @@ final class PrefillRoPE {
                 width: min(pairs, psoDefaultNeox.maxTotalThreadsPerThreadgroup),
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     func encodeProportionalNeox(
@@ -193,7 +193,7 @@ final class PrefillRoPE {
         precondition(
             tokenStrideElements >= numHeads * headDim,
             "token stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoProportionalNeox)
@@ -219,6 +219,6 @@ final class PrefillRoPE {
                     psoProportionalNeox.maxTotalThreadsPerThreadgroup),
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

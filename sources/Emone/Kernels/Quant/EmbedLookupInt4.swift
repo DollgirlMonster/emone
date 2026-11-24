@@ -33,7 +33,7 @@ final class EmbedLookupInt4 {
         precondition(
             d % UInt32(Quantization.groupSize) == 0,
             "D must be a multiple of \(Quantization.groupSize)")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -54,6 +54,6 @@ final class EmbedLookupInt4 {
         let gridSize = MTLSize(width: Int(d), height: 1, depth: 1)
         let tgSize = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
         enc.dispatchThreads(gridSize, threadsPerThreadgroup: tgSize)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

@@ -30,7 +30,7 @@ final class PrefillEmbedLookupInt4 {
         precondition(
             d % UInt32(Quantization.groupSize) == 0,
             "D must be a multiple of \(Quantization.groupSize)")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -50,7 +50,7 @@ final class PrefillEmbedLookupInt4 {
         enc.dispatchThreads(
             MTLSize(width: Int(d), height: Int(t), depth: 1),
             threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }
 
@@ -70,7 +70,7 @@ final class PrefillRMSNorm {
         d: UInt32,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoBF16W)
@@ -87,7 +87,7 @@ final class PrefillRMSNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: Int(t), height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }
 
@@ -146,7 +146,7 @@ final class PrefillAffineSimdgroupQMM {
         else {
             throw MetalError.commandEncoderFailed
         }
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pipeline)
@@ -164,7 +164,7 @@ final class PrefillAffineSimdgroupQMM {
         enc.dispatchThreadgroups(
             MTLSize(width: n / edge, height: (t + edge - 1) / edge, depth: 1),
             threadsPerThreadgroup: MTLSize(width: Self.threads, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }
 
@@ -196,7 +196,7 @@ final class PrefillInt4QMM {
         precondition(
             k % Quantization.groupSize == 0,
             "K must be a multiple of \(Quantization.groupSize)")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -214,6 +214,6 @@ final class PrefillInt4QMM {
         enc.dispatchThreadgroups(
             MTLSize(width: (n + 7) / 8, height: (t + 7) / 8, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

@@ -114,7 +114,7 @@ final class MetalExpertStagingTransfer: @unchecked Sendable {
     }
 
     func encodeCopy(commandBuffer: MTLCommandBuffer) throws {
-        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+        guard let blit = commandBuffer.blitEncoder() else {
             throw ModelError.residentBufferWrapFailed
         }
         for index in destinations.indices {

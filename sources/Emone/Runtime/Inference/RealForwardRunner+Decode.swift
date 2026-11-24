@@ -405,9 +405,9 @@ extension RealForwardRunner {
                         numExperts: UInt32(cfg.numExperts))
                 }
             }
-            attnCB.commit()
+            attnCB.commitEncoded()
             if let attentionCB = softmaxCB {
-                attentionCB.commit()
+                attentionCB.commitEncoded()
             }
             if residentToken {
                 // The shared MLP and the routed stage ride the tail buffer:
@@ -421,7 +421,7 @@ extension RealForwardRunner {
                 totalBodyNanos &+= now - tBodyStart
                 continue
             }
-            tailCB.commit()
+            tailCB.commitEncoded()
             // Queued before the wait below, not after: the GPU runs the shared
             // MLP while the CPU blocks on tailCB for the routing.
             let overlapCompletionClock = runnerStatsEnabled ? CommandCompletionClock() : nil
@@ -534,7 +534,7 @@ extension RealForwardRunner {
                     hidden: hidden, delta: h1Buf,
                     sublayer: .mlp, layer: L)
                 recordKernelGPU(role: "dense_ffn_exit", denseCB)
-                denseCB.commit()
+                denseCB.commitEncoded()
                 try captureResidual(exitCB: denseCB, layer: L, position: position, token: token)
             } else {
                 try await encodeDecodeRoutedMoE(
@@ -681,7 +681,7 @@ extension RealForwardRunner {
 
     func rotate(_ cb: inout MTLCommandBuffer, role: String) throws {
         guard splitKernelTiming else { return }
-        cb.commit()
+        cb.commitEncoded()
         splitTimedBuffers.append((role, cb))
         guard let next = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
@@ -870,7 +870,7 @@ extension RealForwardRunner {
     func runSync(_ body: (MTLCommandBuffer) throws -> Void) throws -> MTLCommandBuffer? {
         guard let cb = ctx.queue.makeCommandBuffer() else { return nil }
         try body(cb)
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
         if let err = cb.error {
             throw ModelError.commandBufferFailed(detail: String(describing: err))
@@ -1163,7 +1163,7 @@ extension RealForwardRunner {
         }
         try encodeSharedExpert(commandBuffer: sharedCB, layer: L)
         completionClock?.track(sharedCB)
-        sharedCB.commit()
+        sharedCB.commitEncoded()
         return sharedCB
     }
 
@@ -1466,7 +1466,7 @@ extension RealForwardRunner {
 
         if let cb = phase1HitCB {
             overlapCompletionClock?.track(cb)
-            cb.commit()
+            cb.commitEncoded()
         }
         let missCount = plannedFetch?.misses.count ?? experts.count
         let completionClock = missCount > 0 ? overlapCompletionClock : nil
@@ -1596,7 +1596,7 @@ extension RealForwardRunner {
         let ioToken = eventLoad?.storage.completionToken
         let ioStatus = ioToken.map { ($0.status, $0.statusOffset) }
         if let token = ioToken {
-            routedCB.encodeWaitForEvent(token.event, value: token.value)
+            routedCB.waitForEvent(token.event, value: token.value)
         }
         if let stagingTransfer = eventLoad?.storage.metalStagingTransfer {
             // The compute command references cache slots only after it has
@@ -1649,7 +1649,7 @@ extension RealForwardRunner {
             ioStatus: ioStatus?.0,
             ioStatusOffset: ioStatus?.1 ?? 0)
         try gTail(routedCB)
-        routedCB.commit()
+        routedCB.commitEncoded()
         if missCount > 0, let completed = completedStorageNanos, completed > 0 {
             let submitted = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             if submitted >= completed {

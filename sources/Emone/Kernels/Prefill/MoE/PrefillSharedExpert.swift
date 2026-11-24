@@ -103,7 +103,7 @@ final class PrefillSharedExpert {
         // A runtime-LoRA delta lands on the gate and up rows before the
         // activation reads them, and on y after the down projection.
         try afterGateUp?(cb)
-        guard let encoder = cb.makeComputeCommandEncoder() else {
+        guard let encoder = cb.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         // The per-token activation kernel, over every token's row at once: it is
@@ -118,7 +118,7 @@ final class PrefillSharedExpert {
         encoder.dispatchThreads(
             MTLSize(width: queryCount * intermediate, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
         guard try project(down, scratchAct, 0, y, yOffset, rows: d, columns: intermediate) else {
             return false
         }

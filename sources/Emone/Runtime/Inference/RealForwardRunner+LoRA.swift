@@ -140,10 +140,10 @@ extension RealForwardRunner {
                     + "\(entry.rows)x\(entry.columns); the projection is \(item.rows)x\(item.columns)"
             )
         }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
-        defer { encoder.endEncoding() }
+        defer { encoder.releaseEncoder() }
         let first = present[0].0
         if present.count > 1, present.count <= LoRADelta.maximumGroup,
             present.allSatisfy({

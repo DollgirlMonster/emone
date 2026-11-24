@@ -101,7 +101,7 @@ final class DequantInt8GEMV {
         if m == 1, rows.count > 1, rows.xRowStride % half == 0, rows.yRowStride % half == 0 {
             // A one-row weight over many inputs (the shared-expert scalar gate
             // across a prefill chunk): one dispatch, not one per input.
-            guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+            guard let enc = commandBuffer.timedComputeEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
             enc.setComputePipelineState(oneRowManyX)
@@ -121,7 +121,7 @@ final class DequantInt8GEMV {
             enc.dispatchThreadgroups(
                 MTLSize(width: (rows.count + 7) / 8, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            enc.endEncoding()
+            enc.releaseEncoder()
             return
         }
         // Not for a constant-folded shape: fast-math may compile that one
@@ -131,7 +131,7 @@ final class DequantInt8GEMV {
         {
             // Every input in one dispatch, each weight pair dequantized once per
             // 4 inputs; the same per-(row, input) arithmetic, so the same bits.
-            guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+            guard let enc = commandBuffer.timedComputeEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
             enc.setComputePipelineState(manyX)
@@ -154,10 +154,10 @@ final class DequantInt8GEMV {
                     width: (Int(m) + 7) / 8,
                     height: (rows.count + Self.manyXBlock - 1) / Self.manyXBlock, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            enc.endEncoding()
+            enc.releaseEncoder()
             return
         }
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(specializedPSOs[Shape(m: m, n: n)] ?? pso)
@@ -179,6 +179,6 @@ final class DequantInt8GEMV {
         rows.dispatch(
             enc, xIndex: 3, yIndex: 4,
             threadgroups: tgCount, threadsPerThreadgroup: tgSize)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

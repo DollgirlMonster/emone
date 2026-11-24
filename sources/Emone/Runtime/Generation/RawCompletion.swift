@@ -589,7 +589,7 @@ private func sampleOnce(
         commandBuffer: cb, logits: scratch.logits, probs: scratch.probs,
         history: history, config: config, position: position,
         outToken: scratch.outToken)
-    cb.commit()
+    cb.commitEncoded()
     cb.waitUntilCompleted()
     timing?.recordKernelGPU(role: "sample", cb)
     if ProcessInfo.processInfo.environment["EMONE_LOGIT_TRACE"] == "1" {

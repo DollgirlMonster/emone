@@ -118,8 +118,10 @@ extension EmoneBench {
         let residual = try makeBuffer(Int(D) * 2, 0x33)
         let y = try makeBuffer(Int(D) * 2, 0)
 
-        // RoutedBlobs arg buffer: 8 device pointers (shared memory, so the
-        // host address is the GPU address).
+        // RoutedBlobs arg buffer: 8 device pointers. These must be GPU
+        // addresses (`gpuAddress`); the CPU address (`contents()`) is a
+        // different virtual address, and writing it here made every expert
+        // read fault to zeros. The blobs are made resident below.
         guard
             let argBuf = device.makeBuffer(
                 length: Int(topK) * 8,
@@ -127,9 +129,47 @@ extension EmoneBench {
         else {
             fatalError("arg buffer alloc failed")
         }
-        let argPtr = argBuf.contents().assumingMemoryBound(to: UnsafeMutableRawPointer?.self)
+        let argPtr = argBuf.contents().assumingMemoryBound(to: UInt64.self)
         for i in 0..<Int(topK) {
-            argPtr[i] = blobs[i].contents()
+            argPtr[i] = blobs[i].gpuAddress
+        }
+
+        // DIAG (local only): EMONE_BENCH_MOE_REAL=<packed_experts dir> reads 8
+        // real experts per layer from each of the 40 layer files and rotates
+        // the layer set every iteration, so the reads come from DRAM (566 MB a
+        // pass) instead of the 14 MB of fixed blobs the system cache holds.
+        var argBufs: [MTLBuffer] = [argBuf]
+        var realSets: [MTLBuffer] = []
+        if let dir = ProcessInfo.processInfo.environment["EMONE_BENCH_MOE_REAL"] {
+            argBufs = []
+            var rng = SystemRandomNumberGenerator()
+            for layer in 0..<40 {
+                let path = String(format: "%@/layer_%02d.bin", dir, layer)
+                let fd = open(path, O_RDONLY)
+                guard fd >= 0 else { fatalError("cannot open \(path)") }
+                let experts = Int(lseek(fd, 0, SEEK_END)) / blobBytes
+                let set = try makeBuffer(Int(topK) * blobBytes, 0)
+                guard
+                    let arg = device.makeBuffer(length: Int(topK) * 8, options: .storageModeShared)
+                else { fatalError("arg buffer alloc failed") }
+                let ptrs = arg.contents().assumingMemoryBound(to: UInt64.self)
+                var picked = Set<Int>()
+                while picked.count < Int(topK) {
+                    picked.insert(Int.random(in: 0..<experts, using: &rng))
+                }
+                for (slot, expert) in picked.sorted().enumerated() {
+                    let dst = set.contents().advanced(by: slot * blobBytes)
+                    let got = pread(fd, dst, blobBytes, off_t(expert * blobBytes))
+                    guard got == blobBytes else { fatalError("short read \(path)") }
+                    ptrs[slot] = set.gpuAddress + UInt64(slot * blobBytes)
+                }
+                close(fd)
+                realSets.append(set)
+                argBufs.append(arg)
+            }
+            print(
+                "real expert blobs: 40 layers x \(topK) experts, \(40 * Int(topK) * blobBytes / 1_000_000) MB"
+            )
         }
 
         var offsets = MoEBenchOffsets(
@@ -189,7 +229,7 @@ extension EmoneBench {
             maxTotalThreadsPerThreadgroup: phase1Threads)
         let phase2PSO = try context.pipeline(
             topK == 8 ? "moe_phase2_down_reduce_k8" : "moe_phase2_down_reduce_kn",
-            constants: [],
+            constants: specialize ? phase1Constants : [],
             maxTotalThreadsPerThreadgroup: 256)
         let subsetPSO = try context.pipeline(
             kernelName == "moe_phase1_subset"
@@ -221,7 +261,10 @@ extension EmoneBench {
             from: &activeSlots,
             byteCount: Int(topK) * MemoryLayout<UInt32>.size)
         var activeCount = topK
-        for _ in 0..<iterations {
+        for set in realSets { enc.useResource(set, usage: .read) }
+        for blob in blobs { enc.useResource(blob, usage: .read) }
+        for iteration in 0..<iterations {
+            let argBuf = argBufs[iteration % argBufs.count]
             if runSubset {
                 enc.setComputePipelineState(subsetPSO)
                 enc.setBuffer(argBuf, offset: 0, index: 0)
@@ -266,7 +309,7 @@ extension EmoneBench {
             }
         }
         enc.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
         if let err = cb.error {
             print("COMMAND BUFFER ERROR: \(err)")
@@ -512,7 +555,7 @@ extension EmoneBench {
             }
         }
         enc.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
         if let err = cb.error {
             print("COMMAND BUFFER ERROR: \(err)")
@@ -608,7 +651,7 @@ extension EmoneBench {
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
         }
         enc.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
         let total = cb.gpuEndTime - cb.gpuStartTime
         let per = total / Double(iterations)

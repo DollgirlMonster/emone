@@ -121,7 +121,7 @@ final class MPPPrefillInt4QMM {
         }
         // `existing` lets a caller put several independent GEMMs in one
         // concurrent encoder (they then run side by side); the caller ends it.
-        guard let encoder = existing ?? commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = existing ?? commandBuffer.timedComputeEncoder() else {
             if required { throw MetalError.commandEncoderFailed }
             return .unavailable
         }
@@ -147,7 +147,7 @@ final class MPPPrefillInt4QMM {
                 width: pipeline.threadExecutionWidth * 4,
                 height: 1,
                 depth: 1))
-        if existing == nil { encoder.endEncoding() }
+        if existing == nil { encoder.releaseEncoder() }
         return .affineThreadgroupF16
     }
 

@@ -127,7 +127,7 @@ final class DequantInt4GEMV {
         precondition(
             weightsOffset % 2 == 0,
             "dequant_int4_gemv_simd needs a 2-aligned weightsOffset, got \(weightsOffset)")
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let half = MemoryLayout<Float16>.stride
@@ -157,7 +157,7 @@ final class DequantInt4GEMV {
                     height: (rows.count + Self.manyXBlock - 1) / Self.manyXBlock, depth: 1),
                 threadsPerThreadgroup: MTLSize(
                     width: 32 * Self.rowsPerThreadgroup, height: 1, depth: 1))
-            encoder.endEncoding()
+            encoder.releaseEncoder()
             return
         }
         encoder.setComputePipelineState(
@@ -183,7 +183,7 @@ final class DequantInt4GEMV {
         rows.dispatch(
             encoder, xIndex: 3, yIndex: 4,
             threadgroups: threadgroupCount, threadsPerThreadgroup: threadgroupSize)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeTwoRows(

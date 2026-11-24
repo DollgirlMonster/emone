@@ -317,6 +317,17 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     let prefillSharedExpert: PrefillSharedExpert
     let prefillGroupedMoE: PrefillGroupedRoutedMoE
     let prefillMoE: PrefillMoE
+    /// The short-branch grouped routed stage's pipelines, built on first use
+    /// (`shortBranchGroupedKernels`), so nothing outside a short branch pays
+    /// for them.
+    var shortBranchGroupedStorage: ShortBranchGroupedMoE?
+    /// Set by a short branch whose row count the router sends to the grouped stage.
+    var shortBranchGroupedChosen = false
+    /// Rows per QMM tile the grouped stage uses for this branch.
+    var shortBranchGroupedEdge = 64
+    /// EMONE_SHORT_BRANCH_ROUTE_STATS=1 (diagnostic): every layer's routed picks
+    /// of a short branch, `[numLayers][rows * topK]` UInt32, copied on the GPU.
+    var shortBranchRouteStatsLog: MTLBuffer?
     let prefillFinalRowHead: PrefillFinalRowHeadInt4
 
     // Scratch — preallocated per spec'd D / F / vocab.
@@ -1563,6 +1574,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// Whether the prefill chunk in progress runs its routed stage per row
     /// on the decode kernels (`encodeResidentRoutedRowsPrefill`).
     var residentPrefillChunk = false
+    /// Set by `prefillShortBranch` for its one chunk: the per-row routed
+    /// stage leaves its last layer's buffer unwaited, so the head's wait is the
+    /// branch's only one (`finishResidentPrefillBuffers` checks the rest).
+    var residentPrefillDeferLastWait = false
+    /// Set when a short branch's layer ran the grouped routed stage.
+    var residentPrefillRanGrouped = false
     /// Scratch of the row-batched routed stage: rows*8 pointers, rows*8*F
     /// activations and the picks the resolve kernel logs.
     var residentRowsArgBuffer: MTLBuffer?

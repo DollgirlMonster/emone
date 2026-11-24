@@ -136,10 +136,25 @@ extension RealForwardRunner {
         try await forwardStepGate.acquire()
         forwardActivityCount &+= 1
         do {
-            let result = try await runPrefillChunked(
-                tokens: tokens, startPosition: startPosition, slot: slot,
-                outputMode: outputMode, config: config, into: logits,
-                onProgress: onProgress)
+            let result: PrefillResult
+            if Self.shortBranchForChunkedPrefill,
+                tokens.count <= Self.residentPrefillMaxBlockedRows
+            {
+                // EMONE_SHORT_BRANCH=1: a caller that does not know the
+                // short-branch entry (the fork harness, a readout) takes it
+                // anyway, so the two paths can be timed on one binary.
+                result = try await runShortBranchPrefill(
+                    tokens: tokens, startPosition: startPosition, slot: slot,
+                    outputMode: outputMode, config: config, into: logits,
+                    options: ShortBranchPrefillOptions()
+                ).result
+                onProgress(tokens.count)
+            } else {
+                result = try await runPrefillChunked(
+                    tokens: tokens, startPosition: startPosition, slot: slot,
+                    outputMode: outputMode, config: config, into: logits,
+                    onProgress: onProgress)
+            }
             await forwardStepGate.release()
             return result
         } catch {
@@ -148,6 +163,8 @@ extension RealForwardRunner {
         }
     }
 
+    /// `residentRowLimit` raises the per-row routed stage's row limit for
+    /// this call only (`prefillShortBranch`); nil keeps the ordinary one.
     func runPrefillChunked(
         tokens: ArraySlice<Int32>,
         startPosition: Int,
@@ -155,6 +172,7 @@ extension RealForwardRunner {
         outputMode: PrefillOutputMode,
         config: PrefillRuntimeConfig,
         into logits: MTLBuffer,
+        residentRowLimit: Int? = nil,
         onProgress: (Int) -> Void
     ) async throws -> PrefillResult {
         try prefillChunkState.requireClean(operation: "prefillChunked")
@@ -201,7 +219,8 @@ extension RealForwardRunner {
                     logits: logits,
                     scratch: scratch,
                     config: config,
-                    writeFinalHead: spanIndex == spans.count - 1)
+                    writeFinalHead: spanIndex == spans.count - 1,
+                    residentRowLimit: residentRowLimit)
                 try Task.checkCancellation()
                 onProgress(span.completedCount)
             }
@@ -250,7 +269,8 @@ extension RealForwardRunner {
         preparedHidden: MTLBuffer? = nil,
         snapshotGDNAfterFirstToken: Bool = false,
         useTwoRowProjection: Bool = false,
-        pairRoutedMoE: Bool = false
+        pairRoutedMoE: Bool = false,
+        residentRowLimit: Int? = nil
     ) async throws {
         // Layer-major prefill (one band of chunks walked layer by layer, with
         // a residual per chunk) is gone: every call runs the whole stack in
@@ -261,7 +281,8 @@ extension RealForwardRunner {
         // Decode's warm reads may still be in flight from the last token;
         // prefill plans its own tiles against a cache nothing else is filling.
         try drainResidentWarm()
-        residentPrefillChunk = try prepareResidentPrefill(tokenCount: tokens.count)
+        residentPrefillChunk = try prepareResidentPrefill(
+            tokenCount: tokens.count, rowLimit: residentRowLimit)
         guard kv != nil else {
             throw PrefillError.chunkedUnsupported("chunked prefill attention requires a KV cache")
         }
@@ -364,7 +385,7 @@ extension RealForwardRunner {
                 // same vector, so it lands in the narrow staging buffer and is
                 // widened exactly the way an embedding would be.
                 let target = hyperConnection == nil ? scratch.hidden : scratch.normed
-                guard let blit = cb.makeBlitCommandEncoder() else {
+                guard let blit = cb.blitEncoder() else {
                     throw ModelError.residentBufferWrapFailed
                 }
                 blit.copy(
@@ -771,7 +792,7 @@ extension RealForwardRunner {
     /// otherwise, so the default schedule is untouched.
     func prefillSplitPoint(_ cb: inout MTLCommandBuffer, role: String) throws {
         guard Self.prefillSplitTiming else { return }
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
         recordKernelGPU(role: role, cb)
         guard let next = ctx.queue.makeCommandBuffer() else {
@@ -828,7 +849,7 @@ extension RealForwardRunner {
         bytesPerToken: Int
     ) throws {
         guard tokenCount > 0 else { return }
-        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+        guard let blit = commandBuffer.blitEncoder() else {
             throw ModelError.residentBufferWrapFailed
         }
         blit.copy(
@@ -1055,7 +1076,7 @@ extension RealForwardRunner {
                 biases: lm.buffer, biasesOffset: Int(lm.biasOffset),
                 x: scratch.normed, y: logits,
                 m: UInt32(cfg.vocabSize), n: UInt32(D))
-            finalCB.commit()
+            finalCB.commitEncoded()
             try waitForCompletion(finalCB)
             recordKernelGPU(role: "prefill_head", finalCB)
             if activationDumpDirectory != nil {
@@ -1101,7 +1122,7 @@ extension RealForwardRunner {
                 vocab: UInt32(cfg.vocabSize),
                 rmsEps: eps)
         }
-        finalCB.commit()
+        finalCB.commitEncoded()
         try waitForCompletion(finalCB)
         if activationDumpDirectory != nil {
             // The head has run and is complete, so these are the numbers the
@@ -1145,7 +1166,7 @@ extension RealForwardRunner {
             scratch: scratch, tokenCount: t, hiddenSize: D, layer: L)
         try requireElementwise().encodeResidualAdd(
             commandBuffer: cb, hidden: scratch.hidden, delta: scratch.h1, count: t * D)
-        cb.commit()
+        cb.commitEncoded()
         guard L + 1 < cfg.numLayers else {
             try waitForCompletion(cb)
             return
@@ -1183,7 +1204,7 @@ extension RealForwardRunner {
         // the layer's attention work is never submitted -- the buffers below
         // stay zero and the stack produces a zero hidden state, which reads as
         // confident nonsense rather than as an error.
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
         recordKernelGPU(
             role: cfg.layerIsLinear(L) ? "prefill_gdn_layer" : "prefill_attn_layer", cb)
@@ -1196,7 +1217,7 @@ extension RealForwardRunner {
         try encodePrefillSharedExpertBlock(
             commandBuffer: sharedCB, projections: sharedProj,
             scratch: scratch, tokenCount: t, hiddenSize: D, layer: L)
-        sharedCB.commit()
+        sharedCB.commitEncoded()
         try waitForCompletion(sharedCB)
         recordKernelGPU(role: "prefill_shared_expert", sharedCB)
 
@@ -1208,7 +1229,7 @@ extension RealForwardRunner {
             hidden: scratch.hidden,
             delta: scratch.h1,
             count: t * D)
-        tailCB.commit()
+        tailCB.commitEncoded()
         try waitForCompletion(tailCB)
         recordKernelGPU(role: "prefill_dense_ffn_tail", tailCB)
         if L + 1 < cfg.numLayers {
@@ -1358,7 +1379,7 @@ extension RealForwardRunner {
             return
         }
         let traceCommit = Self.prefillLayerTrace ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
         let traceWaited = Self.prefillLayerTrace ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0
         // Prefill had no occupancy instrumentation at all: these buffers
@@ -1468,7 +1489,7 @@ extension RealForwardRunner {
         // run in commit order -- the tiles below already rely on that for
         // their own shared scratch -- and nothing before the tail reads h1, so
         // the wait moves to just before the tail. Same kernels, same order.
-        sharedCB.commit()
+        sharedCB.commitEncoded()
 
         let metadata = try prefillGroupedMoE.makeStreamedMetadataBuffers(
             device: ctx.device,
@@ -1630,7 +1651,7 @@ extension RealForwardRunner {
                     params: streamedParams,
                     pairMicrobatchRows: scratch.layout.routedPairMicrobatchRows)
             }
-            tileCB.commit()
+            tileCB.commitEncoded()
             pendingTiles.append(
                 PendingPrefillTile(
                     tileIndex: tileIndex,
@@ -1690,7 +1711,7 @@ extension RealForwardRunner {
                 delta: scratch.h2,
                 count: t * D)
         }
-        tailCB.commit()
+        tailCB.commitEncoded()
         withExtendedLifetime(metadata) {
             do {
                 try waitForCompletion(tailCB)

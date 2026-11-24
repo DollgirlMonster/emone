@@ -148,7 +148,7 @@ final class GDN {
             Int(qkv.offset) % 2 == 0 && Int(z.offset) % 2 == 0 && Int(a.offset) % 2 == 0
                 && Int(b.offset) % 2 == 0,
             "gdn_in_proj_gemv_simd needs 2-aligned weights offsets")
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(inProjSpecializedPSO ?? inProjPSO)
@@ -176,7 +176,7 @@ final class GDN {
         encoder.dispatchThreadgroups(
             MTLSize(width: (totalRows + rpt - 1) / rpt, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 32 * rpt, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Decode: conv over [tail | current row] with SiLU, shifting the tail in
@@ -189,7 +189,7 @@ final class GDN {
         convWeight: MTLBuffer, convWeightOffset: Int,
         out: MTLBuffer, outOffset: Int = 0
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(convDecodePSO)
@@ -202,7 +202,7 @@ final class GDN {
         encoder.setBytes(&channels, length: MemoryLayout<UInt32>.size, index: 4)
         encoder.setBytes(&taps, length: MemoryLayout<UInt32>.size, index: 5)
         dispatch1D(encoder, pipeline: convDecodePSO, threads: config.qkvDim)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Prefill: conv over [tail | chunk rows]; the tail is read-only here.
@@ -214,7 +214,7 @@ final class GDN {
         out: MTLBuffer, outOffset: Int = 0,
         rows: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(convPrefillPSO)
@@ -231,7 +231,7 @@ final class GDN {
         dispatch2D(
             encoder, pipeline: convPrefillPSO,
             width: config.qkvDim, height: rows)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// After a prefill chunk: tail := last (kernel-1) raw rows of [tail | chunk].
@@ -241,7 +241,7 @@ final class GDN {
         qkvRows: MTLBuffer, qkvRowsOffset: Int = 0,
         rows: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(convTailUpdatePSO)
@@ -256,7 +256,7 @@ final class GDN {
         dispatch2D(
             encoder, pipeline: convTailUpdatePSO,
             width: config.qkvDim, height: config.convKernelSize - 1)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Capture the conv tail after the first (confirmed) row while the normal
@@ -267,7 +267,7 @@ final class GDN {
         qkvRows: MTLBuffer,
         checkpoint: MTLBuffer, checkpointOffset: Int = 0
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(convTailCheckpointPSO)
@@ -281,7 +281,7 @@ final class GDN {
         dispatch1D(
             encoder, pipeline: convTailCheckpointPSO,
             threads: (config.convKernelSize - 1) * config.qkvDim)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Per-head no-weight RMS norm over the q and k slices of `convOut`,
@@ -291,7 +291,7 @@ final class GDN {
         convOut: MTLBuffer, convOutOffset: Int = 0,
         rows: Int = 1
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(qkNormPSO)
@@ -309,7 +309,7 @@ final class GDN {
             threadsPerThreadgroup: MTLSize(
                 width: Int(Self.normThreadsPerGroup),
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Decode: one gated delta rule step. `state` is FP32 [Hv, Dv, Dk],
@@ -325,7 +325,7 @@ final class GDN {
         state: MTLBuffer, stateOffset: Int = 0,
         y: MTLBuffer, yOffset: Int = 0
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(deltaDecodePSO)
@@ -343,7 +343,7 @@ final class GDN {
                 height: config.valueHeadDim / 4,
                 depth: 1),
             threadsPerThreadgroup: MTLSize(width: 32, height: 4, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Prefill: the recurrence runs over `rows` inside the kernel; state
@@ -363,7 +363,7 @@ final class GDN {
         y: MTLBuffer, yOffset: Int = 0,
         rows: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         if let chunkPSO = deltaChunkPrefillPSO, checkpointState == nil {
@@ -383,7 +383,7 @@ final class GDN {
             encoder.dispatchThreadgroups(
                 MTLSize(width: 1, height: config.valueHeadDim / 32, depth: config.numVHeads),
                 threadsPerThreadgroup: MTLSize(width: 32, height: 4, depth: 1))
-            encoder.endEncoding()
+            encoder.releaseEncoder()
             return
         }
         encoder.setComputePipelineState(deltaPrefillPSO)
@@ -414,7 +414,7 @@ final class GDN {
                 height: config.valueHeadDim / 4,
                 depth: 1),
             threadsPerThreadgroup: MTLSize(width: 32, height: 4, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// out = rmsnorm(y; weight) * silu(z), per value head, `rows` rows.
@@ -426,7 +426,7 @@ final class GDN {
         out: MTLBuffer, outOffset: Int = 0,
         rows: Int = 1
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(gatedNormPSO)
@@ -445,7 +445,7 @@ final class GDN {
             threadsPerThreadgroup: MTLSize(
                 width: Int(Self.normThreadsPerGroup),
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     private func setHeadDims(_ encoder: MTLComputeCommandEncoder, startingAt index: Int) {

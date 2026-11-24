@@ -30,7 +30,7 @@ final class PrefillPerHeadNorm {
         precondition(
             tokenStrideElements >= headDim * numHeads,
             "token stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoBF16W)
@@ -51,7 +51,7 @@ final class PrefillPerHeadNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: Int(numHeads), height: Int(queryCount), depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     func encodeNoScale(
@@ -72,7 +72,7 @@ final class PrefillPerHeadNorm {
         precondition(
             tokenStrideElements >= headDim * numHeads,
             "token stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoNoScale)
@@ -92,6 +92,6 @@ final class PrefillPerHeadNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: Int(numHeads), height: Int(queryCount), depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

@@ -48,7 +48,7 @@ final class LoRADelta {
                 "LoRA delta: rank \(rank) or scratch \(scratch.length) B "
                     + "does not fit \(tokens) tokens")
         }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         try encode(
@@ -56,7 +56,7 @@ final class LoRADelta {
             y: y, yOffset: yOffset, yStrideElements: yStrideElements,
             a: a, aOffset: aOffset, b: b, bOffset: bOffset, scratch: scratch,
             rank: rank, rows: rows, columns: columns, tokens: tokens, scale: scale)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// The same delta into an open encoder, so the deltas of projections that

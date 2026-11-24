@@ -67,7 +67,7 @@ final class RoPE {
     ) throws {
         precondition(rotaryDim.isMultiple(of: 2), "rotary_dim must be even")
         precondition(rotaryDim <= headDim, "rotary_dim must not exceed head_dim")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(stridedNeoxSubdim)
@@ -93,7 +93,7 @@ final class RoPE {
                     Int(rotaryDim / 2),
                     stridedNeoxSubdim.maxTotalThreadsPerThreadgroup),
                 height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     func encodeNeoxSubdim(
@@ -118,7 +118,7 @@ final class RoPE {
                 frequencies: frequencies)
             return
         }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(neoxSubdim)
@@ -139,7 +139,7 @@ final class RoPE {
             pairs: Int(rotaryDim) / 2,
             heads: Int(numHeads),
             tokens: Int(numTokens))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     private func encodeYaRNNeoxSubdim(
@@ -153,7 +153,7 @@ final class RoPE {
         numTokens: UInt32,
         frequencies: MTLBuffer
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(yarnNeoxSubdim)
@@ -173,7 +173,7 @@ final class RoPE {
             encoder: encoder, pipeline: yarnNeoxSubdim,
             pairs: Int(rotaryDim) / 2, heads: Int(numHeads),
             tokens: Int(numTokens))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeDefaultNeox(
@@ -187,7 +187,7 @@ final class RoPE {
         theta: Float = 10_000.0
     ) throws {
         precondition(headDim.isMultiple(of: 2), "head_dim must be even")
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let pipeline = defaultPipeline(headDim: headDim, numHeads: numHeads)
@@ -207,7 +207,7 @@ final class RoPE {
             pairs: Int(headDim) / 2,
             heads: Int(numHeads),
             tokens: Int(numTokens))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeProportionalNeox(
@@ -225,7 +225,7 @@ final class RoPE {
         precondition(
             rotatedPairs * 2 <= headDim,
             "rotatedPairs * 2 must not exceed head_dim")
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let pipeline = proportionalPipeline(
@@ -254,7 +254,7 @@ final class RoPE {
             pairs: Int(rotatedPairs),
             heads: Int(numHeads),
             tokens: Int(numTokens))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     private static func specializedPipeline(

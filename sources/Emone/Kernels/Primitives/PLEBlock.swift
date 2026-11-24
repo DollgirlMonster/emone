@@ -332,7 +332,7 @@ final class PLEBlock {
         // Advance the window by one row: rows 1...history of the buffer we
         // just used become rows 0..<history of the next one.
         let next = xpad[1 - xpadIndex]
-        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+        guard let blit = commandBuffer.blitEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         blit.copy(

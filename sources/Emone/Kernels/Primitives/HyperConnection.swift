@@ -332,7 +332,7 @@ final class HyperConnection {
         var r = UInt32(lowRank)
         var e = eps
         var inScale = gateInputScale
-        guard let enc1 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc1 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.noDevice
         }
         enc1.setComputePipelineState(p1)
@@ -351,8 +351,8 @@ final class HyperConnection {
         enc1.dispatchThreadgroups(
             MTLSize(width: (lowRank + 7) / 8, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        enc1.endEncoding()
-        guard let enc2 = commandBuffer.makeComputeCommandEncoder() else {
+        enc1.releaseEncoder()
+        guard let enc2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.noDevice
         }
         enc2.setComputePipelineState(p2)
@@ -369,7 +369,7 @@ final class HyperConnection {
         enc2.dispatchThreadgroups(
             MTLSize(width: (dim + dPer - 1) / dPer, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        enc2.endEncoding()
+        enc2.releaseEncoder()
     }
 
     /// Same result as `encodeWrite` in one dispatch.
@@ -383,7 +383,7 @@ final class HyperConnection {
         var d = UInt32(dim)
         var s = UInt32(streams)
         var inScale = gateInputScale
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else { throw MetalError.noDevice }
+        guard let enc = commandBuffer.timedComputeEncoder() else { throw MetalError.noDevice }
         enc.setComputePipelineState(p)
         enc.setBuffer(streamsBuffer, offset: streamsOffset, index: 0)
         enc.setBuffer(normed, offset: 0, index: 1)
@@ -397,7 +397,7 @@ final class HyperConnection {
         enc.dispatchThreadgroups(
             MTLSize(width: (dim * streams) / 256, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
 }

@@ -279,33 +279,98 @@ public enum FastPathCommand {
             position = n
             let point = try await runner.makeDecisionBranchPoint()
             let before = try await probeLogits(at: point)
-            for m in o.ms {
-                for k in o.ks {
-                    let q = question(k: k, pool: questionPool)
-                    let branch = branchRow(q, marker: q.instruction[0])
-                    let row = Array(ids[newBase..<(newBase + m)]) + branch.ids
+            // DIAG (local only): EMONE_FASTPATH_ROWS=8,16,... times a readout
+            // prefill of exactly R new corpus tokens at the held point per R,
+            // then restores; with EMONE_KERNEL_STATS it prints per-role GPU sums.
+            if let rowList = ProcessInfo.processInfo.environment["EMONE_FASTPATH_ROWS"] {
+                let kstats = ProcessInfo.processInfo.environment["EMONE_KERNEL_STATS"] != nil
+                // EMONE_FASTPATH_DUMP=<dir>: read out every row and write rep 1's
+                // rows as raw Float32 to <dir>/<N>-<R>.f32, for numerics checks.
+                let dump = ProcessInfo.processInfo.environment["EMONE_FASTPATH_DUMP"]
+                // An entry "d<label>" in the list is the k=2 decision branch instead
+                // of corpus rows (its label is only a name), read out at its
+                // decision rows.
+                // EMONE_FASTPATH_TIMELINE=<dir>: rep 1's timed command buffers
+                // (role,start,end) to <dir>/<N>-<R>.csv (needs EMONE_KERNEL_STATS).
+                let timeline = ProcessInfo.processInfo.environment["EMONE_FASTPATH_TIMELINE"]
+                let decision = branchRow(
+                    question(k: 2, pool: questionPool), marker: questionPool[0])
+                for entry in rowList.split(separator: ",") {
+                    let decisionRow = entry.hasPrefix("d")
+                    guard let count = Int(decisionRow ? entry.dropFirst() : entry) else { continue }
+                    let r = decisionRow ? decision.ids.count : count
+                    let label = String(entry)
+                    let row =
+                        decisionRow ? ArraySlice(decision.ids) : ids[newBase..<(newBase + r)]
+                    let offsets =
+                        decisionRow
+                        ? decision.readouts : (dump == nil ? [r - 1] : Array(0..<r))
                     var totals: [Double] = []
                     for rep in 0...o.reps {
+                        runner.resetKernelGPUTimings()
                         let started = now()
-                        let rows = try await readout(
-                            row[...], from: n, offsets: branch.readouts.map { m + $0 })
-                        let decided = now()
-                        _ = head.logits(decide: rows[0], options: Array(rows.dropFirst()))
-                        let headDone = now()
+                        let got = try await readout(row, from: n, offsets: offsets)
+                        if let timeline, rep == 1 {
+                            try runner.kernelGPUTimelineCSV().write(
+                                toFile: "\(timeline)/\(n)-\(label).csv", atomically: true,
+                                encoding: .utf8)
+                        }
+                        if let dump, rep == 1 {
+                            let flat = got.flatMap { $0 }
+                            try flat.withUnsafeBytes {
+                                try Data($0).write(
+                                    to: URL(fileURLWithPath: "\(dump)/\(n)-\(label).f32"))
+                            }
+                        }
+                        let total = ms(now() - started)
+                        if kstats {
+                            for s in runner.kernelGPUTimingSummary() {
+                                say(
+                                    "kstat\t\(n)\t\(label)\t\(rep)\t\(s.role)\t\(String(format: "%.3f", s.millis))\t\(s.count)"
+                                )
+                            }
+                            let occ = runner.kernelGPUOccupancy()
+                            say(
+                                "kocc\t\(n)\t\(label)\t\(rep)\tbusy=\(String(format: "%.3f", occ.busyMillis))\tspan=\(String(format: "%.3f", occ.spanMillis))"
+                            )
+                        }
                         try await runner.restoreDecisionBranchPoint(point)
-                        let done = now()
-                        let total = ms(done - started)
-                        let detail =
-                            "prefill+branch=\(f1(ms(decided - started))) "
-                            + "head=\(f1(ms(headDone - decided))) restore=\(f1(ms(done - headDone)))"
-                        say(
-                            "moe\t\(n)\t\(m)\t\(k)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))\t\(detail)"
-                        )
+                        say("rows\t\(n)\t\(label)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))")
                         if rep > 0 { totals.append(total) }
                     }
                     say(
-                        "SUMMARY\tmoe\t\(n)\t\(m)\t\(k)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
+                        "ROWS\t\(n)\t\(label)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
                     )
+                }
+            } else {
+                for m in o.ms {
+                    for k in o.ks {
+                        let q = question(k: k, pool: questionPool)
+                        let branch = branchRow(q, marker: q.instruction[0])
+                        let row = Array(ids[newBase..<(newBase + m)]) + branch.ids
+                        var totals: [Double] = []
+                        for rep in 0...o.reps {
+                            let started = now()
+                            let rows = try await readout(
+                                row[...], from: n, offsets: branch.readouts.map { m + $0 })
+                            let decided = now()
+                            _ = head.logits(decide: rows[0], options: Array(rows.dropFirst()))
+                            let headDone = now()
+                            try await runner.restoreDecisionBranchPoint(point)
+                            let done = now()
+                            let total = ms(done - started)
+                            let detail =
+                                "prefill+branch=\(f1(ms(decided - started))) "
+                                + "head=\(f1(ms(headDone - decided))) restore=\(f1(ms(done - headDone)))"
+                            say(
+                                "moe\t\(n)\t\(m)\t\(k)\t\(rep == 0 ? "warm" : "\(rep)")\t\(f1(total))\t\(detail)"
+                            )
+                            if rep > 0 { totals.append(total) }
+                        }
+                        say(
+                            "SUMMARY\tmoe\t\(n)\t\(m)\t\(k)\tmedian=\(f1(median(totals)))\tmin=\(f1(totals.min() ?? .nan))\tmax=\(f1(totals.max() ?? .nan))"
+                        )
+                    }
                 }
             }
             let after = try await probeLogits(at: point)

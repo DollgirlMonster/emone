@@ -83,13 +83,13 @@ extension RealForwardRunner {
                 length: bytes,
                 options: .storageModeShared),
             let cb = ctx.queue.makeCommandBuffer(),
-            let blit = cb.makeBlitCommandEncoder()
+            let blit = cb.blitEncoder()
         else { return }
         blit.copy(
             from: buffer, sourceOffset: offset,
             to: staging, destinationOffset: 0, size: bytes)
         blit.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
         dumpActivation(name, staging, count: count, position: position)
     }

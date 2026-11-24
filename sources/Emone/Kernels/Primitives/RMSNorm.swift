@@ -82,7 +82,7 @@ final class RMSNorm {
         d: UInt32,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let pso = d == 2816 ? psoNoScaleD2816 : psoNoScale
@@ -94,7 +94,7 @@ final class RMSNorm {
         enc.setBytes(&dVar, length: MemoryLayout<UInt32>.size, index: 2)
         enc.setBytes(&epsVar, length: MemoryLayout<Float>.size, index: 3)
         dispatchOneRow(enc: enc, pso: pso)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// BF16-weight RMSNorm applied to `numHeads` contiguous heads of width
@@ -109,7 +109,7 @@ final class RMSNorm {
         headDim: UInt32, numHeads: Int,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let pso = perHeadPipeline(
@@ -129,7 +129,7 @@ final class RMSNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: numHeads, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// RMSNorm over `numGroups` contiguous groups of `groupDim`, each against
@@ -149,7 +149,7 @@ final class RMSNorm {
         eps: Float,
         tokens: Int = 1
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoBF16Grouped)
@@ -166,7 +166,7 @@ final class RMSNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: numGroups * tokens, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// No-scale RMSNorm over `numHeads` contiguous heads (v_norm), one dispatch.
@@ -177,7 +177,7 @@ final class RMSNorm {
         headDim: UInt32, numHeads: Int,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let pso = perHeadPipeline(
@@ -196,7 +196,7 @@ final class RMSNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: numHeads, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     private func encodeWeighted(
@@ -208,7 +208,7 @@ final class RMSNorm {
         d: UInt32,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -220,7 +220,7 @@ final class RMSNorm {
         enc.setBytes(&dVar, length: MemoryLayout<UInt32>.size, index: 3)
         enc.setBytes(&epsVar, length: MemoryLayout<Float>.size, index: 4)
         dispatchOneRow(enc: enc, pso: pso)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     private func dispatchOneRow(

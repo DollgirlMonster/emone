@@ -205,7 +205,7 @@ final class SharedExpertInt8 {
         scratchAct: MTLBuffer,
         scratchActOffset: Int
     ) throws {
-        guard let enc = cb.makeComputeCommandEncoder() else {
+        guard let enc = cb.timedComputeEncoder() else {
             throw SharedExpertInt8Error.dimensionMismatch("encoder alloc failed")
         }
         enc.setComputePipelineState(
@@ -232,6 +232,6 @@ final class SharedExpertInt8 {
                 width: 32 * rowsPerTG,
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

@@ -407,7 +407,7 @@ final class Attention {
         }
         let tgWidth = min(Self.threadsPerGroup, Int(partialPSO.maxTotalThreadsPerThreadgroup))
 
-        guard let p1 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let p1 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         p1.setComputePipelineState(partialPSO)
@@ -448,9 +448,9 @@ final class Attention {
         p1.dispatchThreadgroups(
             MTLSize(width: partialGroups, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
-        p1.endEncoding()
+        p1.releaseEncoder()
 
-        guard let p2 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let p2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let combinePSO = combinePipeline(
@@ -473,7 +473,7 @@ final class Attention {
         p2.dispatchThreadgroups(
             MTLSize(width: Int(numQHeads), height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: combineTGWidth, height: 1, depth: 1))
-        p2.endEncoding()
+        p2.releaseEncoder()
     }
 
     /// `1 / sqrt(head_dim)` — the classic transformer scaling. Used as the

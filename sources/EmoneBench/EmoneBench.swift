@@ -44,6 +44,16 @@ struct EmoneBench {
             return
         }
 
+        if kernelName == "p1rows" {
+            try runP1Rows(iterations: iterations, context: context)
+            return
+        }
+
+        if kernelName == "p1" {
+            try runP1(iterations: iterations, context: context)
+            return
+        }
+
         if kernelName.hasPrefix("moe") {
             try runMoE(kernelName: kernelName, iterations: iterations, context: context)
             return
@@ -132,7 +142,7 @@ struct EmoneBench {
                     height: 1, depth: 1))
         }
         enc.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
 
         let totalSeconds = cb.gpuEndTime - cb.gpuStartTime

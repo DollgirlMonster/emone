@@ -20,7 +20,7 @@ final class HeadScale {
     ) throws {
         let total = tokens * heads * dim
         guard total > 0 else { return }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         var h = UInt32(heads)
@@ -36,6 +36,6 @@ final class HeadScale {
         encoder.dispatchThreads(
             MTLSize(width: total, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

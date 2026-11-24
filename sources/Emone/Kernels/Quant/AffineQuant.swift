@@ -15,7 +15,7 @@ func encodeTwoRowsShared(
     y: MTLBuffer, yOffset: Int,
     m: UInt32, n: UInt32
 ) throws {
-    guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+    guard let encoder = commandBuffer.timedComputeEncoder() else {
         throw MetalError.commandEncoderFailed
     }
     encoder.setComputePipelineState(pipeline)
@@ -36,7 +36,7 @@ func encodeTwoRowsShared(
         threadsPerThreadgroup: MTLSize(
             width: 32 * rowsPerThreadgroup,
             height: 1, depth: 1))
-    encoder.endEncoding()
+    encoder.releaseEncoder()
 }
 
 final class AffineQuantGEMV {
@@ -105,7 +105,7 @@ final class AffineQuantGEMV {
     ) throws {
         precondition(n.isMultiple(of: UInt32(Quantization.groupSize)))
         precondition(weightsOffset.isMultiple(of: MemoryLayout<UInt32>.alignment))
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let half = MemoryLayout<Float16>.stride
@@ -132,7 +132,7 @@ final class AffineQuantGEMV {
                     width: (Int(m) + 7) / 8,
                     height: (rows.count + Self.manyXBlock - 1) / Self.manyXBlock, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            encoder.endEncoding()
+            encoder.releaseEncoder()
             return
         }
         encoder.setComputePipelineState(pipeline)
@@ -154,7 +154,7 @@ final class AffineQuantGEMV {
             threadsPerThreadgroup: MTLSize(
                 width: 32 * rowsPerThreadgroup,
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeTwoRows(
@@ -207,7 +207,7 @@ final class AffineQuantEmbeddingLookup {
     ) throws {
         precondition(d.isMultiple(of: UInt32(Quantization.groupSize)))
         precondition(tableOffset.isMultiple(of: MemoryLayout<UInt32>.alignment))
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(pipeline)
@@ -229,6 +229,6 @@ final class AffineQuantEmbeddingLookup {
             threadsPerThreadgroup: MTLSize(
                 width: width,
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

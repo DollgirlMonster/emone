@@ -61,7 +61,7 @@ final class FusedQKVGEMV {
         precondition(
             qWeightsOffset % 2 == 0 && kWeightsOffset % 2 == 0 && vWeightsOffset % 2 == 0,
             "FusedQKVGEMV needs 2-aligned weights offsets")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let shape = Shape(qRows: qRows, kvRows: kvRows, n: n)
@@ -95,6 +95,6 @@ final class FusedQKVGEMV {
                 width: 256,
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

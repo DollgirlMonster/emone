@@ -54,7 +54,7 @@ final class SharedExpertAffineQuant {
         }
         try project(gate, x, xOffset, scratchGate, scratchGateOffset)
         try project(up, x, xOffset, scratchUp, scratchUpOffset)
-        guard let encoder = cb.makeComputeCommandEncoder() else {
+        guard let encoder = cb.timedComputeEncoder() else {
             throw SharedExpertError.dimensionMismatch("encoder alloc failed")
         }
         encoder.setComputePipelineState(activationPSO)
@@ -67,7 +67,7 @@ final class SharedExpertAffineQuant {
             MTLSize(width: Int(count), height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(
                 width: min(256, activationPSO.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
         try project(down, scratchAct, scratchActOffset, y, yOffset)
     }
 }

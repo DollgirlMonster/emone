@@ -36,17 +36,36 @@ extension RealForwardRunner {
     static let layerTraceFlag =
         ProcessInfo.processInfo.environment["EMONE_LAYER_TRACE"] != nil
 
+    /// Why no token can take the resident path under this runner's settings,
+    /// whatever the cache holds; nil when the settings allow it. The cache's
+    /// own state (every expert resident or not) is `prepareResidentDecode`'s.
+    var residentPathSettingsRefusal: String? {
+        if !Self.residentDecodeFlag { return "EMONE_DECODE_RESIDENT=0" }
+        if cfg.numExperts == 0 { return "dense model (no routed experts)" }
+        if cfg.topKExperts > moe.maxStreamedExperts {
+            return "top-k \(cfg.topKExperts) exceeds \(moe.maxStreamedExperts)"
+        }
+        if decodeExpertExecution != .hitFixup {
+            return "decode expert execution is \(decodeExpertExecution), not hitFixup"
+        }
+        if expertIOSynchronization != .host {
+            return "expert I/O synchronization is \(expertIOSynchronization), not host"
+        }
+        if splitKernelTiming { return "EMONE_KERNEL_SPLIT timing" }
+        if activationDumpDirectory != nil { return "activation dump" }
+        if prefetchTraceFD >= 0 { return "EMONE_PREFETCH_TRACE" }
+        if Self.probe2TraceEnabled { return "probe-2 trace" }
+        if Self.layerTraceFlag { return "EMONE_LAYER_TRACE" }
+        if MLPCapture.shared.active { return "MLP capture" }
+        return nil
+    }
+
     /// Whether this token can take the resident path; refreshes the address
     /// tables of any layer whose cache map changed.
     func prepareResidentDecode(warm: Bool = true) throws -> Bool {
         residentTokenBuffers.removeAll(keepingCapacity: true)
         try reapResidentWarm(blocking: false)
-        guard Self.residentDecodeFlag, cfg.numExperts > 0,
-            cfg.topKExperts <= moe.maxStreamedExperts,
-            decodeExpertExecution == .hitFixup, expertIOSynchronization == .host,
-            !splitKernelTiming, activationDumpDirectory == nil, prefetchTraceFD < 0,
-            !Self.probe2TraceEnabled, !Self.layerTraceFlag, !MLPCapture.shared.active
-        else { return false }
+        guard residentPathSettingsRefusal == nil else { return false }
         if residentLayers.count != cfg.numLayers {
             residentLayers = [ResidentLayer](repeating: ResidentLayer(), count: cfg.numLayers)
         }
@@ -239,7 +258,7 @@ extension RealForwardRunner {
             allResident: slots)
         try encodeResidualExitDecode(
             commandBuffer: routedCB, hidden: hidden, delta: h2Buf, sublayer: .mlp, layer: L)
-        routedCB.commit()
+        routedCB.commitEncoded()
         residentTokenBuffers.append(("attn_norm_qkv", attnCB))
         if let softmaxCB { residentTokenBuffers.append(("attn_softmax", softmaxCB)) }
         residentTokenBuffers.append(("tail_router_shared_routed", routedCB))
