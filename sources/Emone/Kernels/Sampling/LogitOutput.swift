@@ -51,7 +51,7 @@ final class LogitSoftcapSoftmax {
         v: UInt32,
         softcap: Float = 30.0
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -137,7 +137,7 @@ final class LogitSoftcapSoftmaxTiled {
         var tileCount = UInt32(tiles)
         let threads = MTLSize(width: 256, height: 1, depth: 1)
 
-        guard let enc1 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc1 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc1.setComputePipelineState(stage1PSO)
@@ -151,7 +151,7 @@ final class LogitSoftcapSoftmaxTiled {
             threadsPerThreadgroup: threads)
         enc1.endEncoding()
 
-        guard let enc2 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc2.setComputePipelineState(mergePSO)
@@ -164,7 +164,7 @@ final class LogitSoftcapSoftmaxTiled {
             threadsPerThreadgroup: threads)
         enc2.endEncoding()
 
-        guard let enc3 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc3 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc3.setComputePipelineState(normalizePSO)
@@ -210,7 +210,7 @@ final class Sample {
         seed: UInt64,
         position: UInt32 = 0
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -335,7 +335,7 @@ final class SampleTopK64 {
         )
         let threads = MTLSize(width: 256, height: 1, depth: 1)
 
-        guard let enc1 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc1 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc1.setComputePipelineState(stage1PSO)
@@ -349,7 +349,7 @@ final class SampleTopK64 {
             threadsPerThreadgroup: threads)
         enc1.endEncoding()
 
-        guard let enc2 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc2.setComputePipelineState(reducePSO)
@@ -364,7 +364,7 @@ final class SampleTopK64 {
             threadsPerThreadgroup: threads)
         enc2.endEncoding()
 
-        guard let enc3 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc3 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc3.setComputePipelineState(finalPSO)

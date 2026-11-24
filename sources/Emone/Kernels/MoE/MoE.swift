@@ -310,7 +310,7 @@ final class MoE {
         let useSpecialized =
             numExperts == realDecodeNumExperts
             && d == realDecodeD
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(
@@ -328,7 +328,7 @@ final class MoE {
             threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
         encoder.endEncoding()
 
-        guard let selector = commandBuffer.makeComputeCommandEncoder() else {
+        guard let selector = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         // The one-simdgroup selector serves every k, k == 8 included: the k8
@@ -396,7 +396,7 @@ final class MoE {
         precondition(topK <= UInt32(maxStreamedExperts))
         var topKValue = topK
         var expertCount = numExperts
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(residencyClassifyPSO)
@@ -444,7 +444,7 @@ final class MoE {
                 && routeLog.length >= routeLogOffset + Int(topK) * MemoryLayout<UInt32>.stride)
         var topKValue = topK
         var expertCount = numExperts
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(resolveResidentPSO)
@@ -508,7 +508,7 @@ final class MoE {
         var intermediate = f
         var expertCount = UInt32(8)
         var offsets = routedOffsets
-        guard let first = commandBuffer.makeComputeCommandEncoder() else {
+        guard let first = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         first.setComputePipelineState(phase1)
@@ -524,7 +524,7 @@ final class MoE {
             MTLSize(width: (8 * Int(f) + 15) / 16, height: rows, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 512, height: 1, depth: 1))
         first.endEncoding()
-        guard let second = commandBuffer.makeComputeCommandEncoder() else {
+        guard let second = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         second.setComputePipelineState(phase2)
@@ -597,7 +597,7 @@ final class MoE {
         var dimension = d
         var intermediate = f
         var expertCount = topK
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(
@@ -648,7 +648,7 @@ final class MoE {
         var intermediate = f
         var expertCount = topK
         var active = activeCount
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(
@@ -701,7 +701,7 @@ final class MoE {
     ) throws {
         var dimension = d
         var intermediate = f
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(

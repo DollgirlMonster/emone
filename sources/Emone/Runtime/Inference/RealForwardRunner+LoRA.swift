@@ -140,7 +140,7 @@ extension RealForwardRunner {
                     + "\(entry.rows)x\(entry.columns); the projection is \(item.rows)x\(item.columns)"
             )
         }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         defer { encoder.endEncoding() }

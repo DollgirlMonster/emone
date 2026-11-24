@@ -111,7 +111,7 @@ final class ShortBranchGroupedMoE {
         }
         let capacity = Self.workCapacity(pairs: pairs, numExperts: numExperts, edge: edge)
 
-        guard let g = cb.makeComputeCommandEncoder() else { throw MetalError.commandEncoderFailed }
+        guard let g = cb.timedComputeEncoder() else { throw MetalError.commandEncoderFailed }
         g.setComputePipelineState(group)
         g.setBuffer(routeIDs, offset: 0, index: 0)
         g.setBuffer(routeWeights, offset: 0, index: 1)
@@ -152,7 +152,7 @@ final class ShortBranchGroupedMoE {
             (gateUpPSO, rowsIn, activated, gateUpParams, f, Self.gateUpColumns, "gate_up"),
             (downPSO, activated, rowsOut, downParams, d, Self.downColumns, "down"),
         ] {
-            guard let enc = cb.makeComputeCommandEncoder() else {
+            guard let enc = cb.timedComputeEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
             enc.setComputePipelineState(pso)
@@ -181,7 +181,7 @@ final class ShortBranchGroupedMoE {
         source: MTLBuffer, destination: MTLBuffer, sortedPairs: MTLBuffer,
         pairs: Int, d: Int, last: UInt32
     ) throws {
-        guard let encoder = cb.makeComputeCommandEncoder() else {
+        guard let encoder = cb.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(pipeline)

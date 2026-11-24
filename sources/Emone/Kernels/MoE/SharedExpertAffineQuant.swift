@@ -54,7 +54,7 @@ final class SharedExpertAffineQuant {
         }
         try project(gate, x, xOffset, scratchGate, scratchGateOffset)
         try project(up, x, xOffset, scratchUp, scratchUpOffset)
-        guard let encoder = cb.makeComputeCommandEncoder() else {
+        guard let encoder = cb.timedComputeEncoder() else {
             throw SharedExpertError.dimensionMismatch("encoder alloc failed")
         }
         encoder.setComputePipelineState(activationPSO)

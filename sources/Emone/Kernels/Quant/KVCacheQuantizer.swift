@@ -38,7 +38,7 @@ final class KVCacheQuantizer {
             "KV quantizer dispatches \(KVCacheManager.quantizationGroupSize) "
                 + "threads but the destination uses groups of "
                 + "\(destination.groupSize)")
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(pipeline)

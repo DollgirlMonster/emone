@@ -132,6 +132,44 @@ extension EmoneBench {
             argPtr[i] = blobs[i].contents()
         }
 
+        // DIAG (local only): EMONE_BENCH_MOE_REAL=<packed_experts dir> reads 8
+        // real experts per layer from each of the 40 layer files and rotates
+        // the layer set every iteration, so the reads come from DRAM (566 MB a
+        // pass) instead of the 14 MB of fixed blobs the system cache holds.
+        var argBufs: [MTLBuffer] = [argBuf]
+        var realSets: [MTLBuffer] = []
+        if let dir = ProcessInfo.processInfo.environment["EMONE_BENCH_MOE_REAL"] {
+            argBufs = []
+            var rng = SystemRandomNumberGenerator()
+            for layer in 0..<40 {
+                let path = String(format: "%@/layer_%02d.bin", dir, layer)
+                let fd = open(path, O_RDONLY)
+                guard fd >= 0 else { fatalError("cannot open \(path)") }
+                let experts = Int(lseek(fd, 0, SEEK_END)) / blobBytes
+                let set = try makeBuffer(Int(topK) * blobBytes, 0)
+                guard
+                    let arg = device.makeBuffer(length: Int(topK) * 8, options: .storageModeShared)
+                else { fatalError("arg buffer alloc failed") }
+                let ptrs = arg.contents().assumingMemoryBound(to: UnsafeMutableRawPointer?.self)
+                var picked = Set<Int>()
+                while picked.count < Int(topK) {
+                    picked.insert(Int.random(in: 0..<experts, using: &rng))
+                }
+                for (slot, expert) in picked.sorted().enumerated() {
+                    let dst = set.contents().advanced(by: slot * blobBytes)
+                    let got = pread(fd, dst, blobBytes, off_t(expert * blobBytes))
+                    guard got == blobBytes else { fatalError("short read \(path)") }
+                    ptrs[slot] = dst
+                }
+                close(fd)
+                realSets.append(set)
+                argBufs.append(arg)
+            }
+            print(
+                "real expert blobs: 40 layers x \(topK) experts, \(40 * Int(topK) * blobBytes / 1_000_000) MB"
+            )
+        }
+
         var offsets = MoEBenchOffsets(
             gateW: UInt32(gateWOff), gateS: UInt32(gateSOff), gateB: UInt32(gateBOff),
             upW: UInt32(upWOff), upS: UInt32(upSOff), upB: UInt32(upBOff),
@@ -189,7 +227,7 @@ extension EmoneBench {
             maxTotalThreadsPerThreadgroup: phase1Threads)
         let phase2PSO = try context.pipeline(
             topK == 8 ? "moe_phase2_down_reduce_k8" : "moe_phase2_down_reduce_kn",
-            constants: [],
+            constants: specialize ? phase1Constants : [],
             maxTotalThreadsPerThreadgroup: 256)
         let subsetPSO = try context.pipeline(
             kernelName == "moe_phase1_subset"
@@ -221,7 +259,9 @@ extension EmoneBench {
             from: &activeSlots,
             byteCount: Int(topK) * MemoryLayout<UInt32>.size)
         var activeCount = topK
-        for _ in 0..<iterations {
+        for set in realSets { enc.useResource(set, usage: .read) }
+        for iteration in 0..<iterations {
+            let argBuf = argBufs[iteration % argBufs.count]
             if runSubset {
                 enc.setComputePipelineState(subsetPSO)
                 enc.setBuffer(argBuf, offset: 0, index: 0)

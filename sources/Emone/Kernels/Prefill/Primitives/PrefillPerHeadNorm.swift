@@ -30,7 +30,7 @@ final class PrefillPerHeadNorm {
         precondition(
             tokenStrideElements >= headDim * numHeads,
             "token stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoBF16W)
@@ -72,7 +72,7 @@ final class PrefillPerHeadNorm {
         precondition(
             tokenStrideElements >= headDim * numHeads,
             "token stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoNoScale)

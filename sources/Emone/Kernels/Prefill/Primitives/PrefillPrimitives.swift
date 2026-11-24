@@ -30,7 +30,7 @@ final class PrefillEmbedLookupInt4 {
         precondition(
             d % UInt32(Quantization.groupSize) == 0,
             "D must be a multiple of \(Quantization.groupSize)")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -70,7 +70,7 @@ final class PrefillRMSNorm {
         d: UInt32,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoBF16W)
@@ -146,7 +146,7 @@ final class PrefillAffineSimdgroupQMM {
         else {
             throw MetalError.commandEncoderFailed
         }
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pipeline)
@@ -196,7 +196,7 @@ final class PrefillInt4QMM {
         precondition(
             k % Quantization.groupSize == 0,
             "K must be a multiple of \(Quantization.groupSize)")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)

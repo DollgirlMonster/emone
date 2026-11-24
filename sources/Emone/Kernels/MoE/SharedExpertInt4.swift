@@ -81,7 +81,7 @@ public final class SharedExpertInt4 {
             y: scratchUp, yOffset: scratchUpOffset,
             m: up.rows, n: up.cols)
 
-        guard let encoder = cb.makeComputeCommandEncoder() else {
+        guard let encoder = cb.timedComputeEncoder() else {
             throw SharedExpertError.dimensionMismatch("encoder alloc failed")
         }
         encoder.setComputePipelineState(geluMulPSO)

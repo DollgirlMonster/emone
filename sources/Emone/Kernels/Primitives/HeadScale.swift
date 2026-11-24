@@ -20,7 +20,7 @@ final class HeadScale {
     ) throws {
         let total = tokens * heads * dim
         guard total > 0 else { return }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         var h = UInt32(heads)

@@ -64,7 +64,7 @@ final class PrefillRoPE {
                 frequencies: frequencies)
             return
         }
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoNeoxSubdim)
@@ -104,7 +104,7 @@ final class PrefillRoPE {
         tokenStrideElements: UInt32,
         frequencies: MTLBuffer
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoYaRNNeoxSubdim)
@@ -147,7 +147,7 @@ final class PrefillRoPE {
         precondition(
             tokenStrideElements >= numHeads * headDim,
             "token stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoDefaultNeox)
@@ -193,7 +193,7 @@ final class PrefillRoPE {
         precondition(
             tokenStrideElements >= numHeads * headDim,
             "token stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoProportionalNeox)

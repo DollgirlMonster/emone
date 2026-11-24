@@ -316,7 +316,7 @@ final class QSAIndexer {
         buffers: (raw: MTLBuffer, pooled: MTLBuffer),
         block: Int, first: Int, count: Int
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(poolPSO)
@@ -401,7 +401,7 @@ final class QSAIndexer {
         firstBlock: Int, blockCount: Int,
         visibleKeys: Int
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(poolRangePSO)
@@ -458,7 +458,7 @@ final class QSAIndexer {
             rotaryDim: UInt32(headDim), theta: ropeTheta)
 
         let blocks = position / compressRatio + 1
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(scorePSO)
@@ -520,7 +520,7 @@ final class QSAIndexer {
 
         let blocks = (startPosition + tokens - 1) / compressRatio + 1
         try growScoreScratch(count: blocks * tokens)
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let matrixUnits = Self.prefillScoresOnMatrixUnits && headDim % 32 == 0
@@ -827,7 +827,7 @@ final class QSAIndexer {
     func encodeSelectKeys(commandBuffer: MTLCommandBuffer, visibleKeys: Int) throws -> MTLBuffer? {
         guard visibleKeys > selectionWidth else { return nil }
         guard let pso = selectPSO else { throw MetalError.commandEncoderFailed }
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -861,7 +861,7 @@ final class QSAIndexer {
         guard lastVisible > selectionWidth else { return nil }
         guard let pso = selectPrefillPSO else { throw MetalError.commandEncoderFailed }
         try growKeepScratch(count: lastVisible * tokens)
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)

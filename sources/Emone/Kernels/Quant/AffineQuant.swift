@@ -15,7 +15,7 @@ func encodeTwoRowsShared(
     y: MTLBuffer, yOffset: Int,
     m: UInt32, n: UInt32
 ) throws {
-    guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+    guard let encoder = commandBuffer.timedComputeEncoder() else {
         throw MetalError.commandEncoderFailed
     }
     encoder.setComputePipelineState(pipeline)
@@ -105,7 +105,7 @@ final class AffineQuantGEMV {
     ) throws {
         precondition(n.isMultiple(of: UInt32(Quantization.groupSize)))
         precondition(weightsOffset.isMultiple(of: MemoryLayout<UInt32>.alignment))
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let half = MemoryLayout<Float16>.stride
@@ -207,7 +207,7 @@ final class AffineQuantEmbeddingLookup {
     ) throws {
         precondition(d.isMultiple(of: UInt32(Quantization.groupSize)))
         precondition(tableOffset.isMultiple(of: MemoryLayout<UInt32>.alignment))
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(pipeline)

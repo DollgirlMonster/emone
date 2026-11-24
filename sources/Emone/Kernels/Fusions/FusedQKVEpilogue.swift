@@ -65,7 +65,7 @@ final class FusedQKVEpilogue {
         precondition(
             rotatedPairs * 2 <= headDim,
             "rotatedPairs must fit inside one NeoX head")
-        guard let enc = cb.makeComputeCommandEncoder() else {
+        guard let enc = cb.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(

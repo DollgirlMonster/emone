@@ -56,7 +56,7 @@ final class Elementwise {
         inScale: Float,
         outScale: Float?
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
@@ -116,7 +116,7 @@ final class Elementwise {
         dim: Int, streams: Int, tokens: Int = 1,
         inScale: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(hcMixReducePSO)
@@ -148,7 +148,7 @@ final class Elementwise {
         dim: Int, streamCount: Int, tokens: Int = 1,
         inScale: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         // Eight elements a thread when the offsets and D allow 16-byte access.
@@ -181,7 +181,7 @@ final class Elementwise {
         out: MTLBuffer, outOffset: Int = 0,
         dim: Int, streams: Int, tokens: Int = 1
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pleScorePSO)
@@ -209,7 +209,7 @@ final class Elementwise {
         out: MTLBuffer, outOffset: Int = 0,
         count: Int, floor: Float = 1e-6
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pleGatePSO)
@@ -235,7 +235,7 @@ final class Elementwise {
         out: MTLBuffer, outOffset: Int = 0,
         dim: Int, streams: Int, tokens: Int = 1
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pleBroadcastPSO)
@@ -267,7 +267,7 @@ final class Elementwise {
         channels: Int, tokens: Int,
         kernelSize: Int, dilation: Int
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pleConvPSO)
@@ -298,7 +298,7 @@ final class Elementwise {
         out: MTLBuffer, outOffset: Int = 0,
         dim: Int, streamCount: Int, tokens: Int
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(hcMeanPSO)
@@ -327,7 +327,7 @@ final class Elementwise {
         destination: MTLBuffer, destinationOffset: Int = 0,
         dim: Int, streamCount: Int, tokens: Int
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(hcExpandPSO)
@@ -353,7 +353,7 @@ final class Elementwise {
         streams: MTLBuffer, streamsOffset: Int = 0,
         dim: Int, streamCount: Int
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(hcBroadcastPSO)
@@ -384,7 +384,7 @@ final class Elementwise {
         heads: Int, dim: Int, rows: Int = 1
     ) throws {
         let rowElems = heads * dim
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(splitQGatePSO)
@@ -408,7 +408,7 @@ final class Elementwise {
         gate: MTLBuffer, gateOffset: Int = 0,
         count: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(sigmoidGateMulPSO)
@@ -427,7 +427,7 @@ final class Elementwise {
         gate: MTLBuffer, gateOffset: Int = 0,
         count: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(sigmoidScalarMulPSO)
@@ -447,7 +447,7 @@ final class Elementwise {
         gate: MTLBuffer, gateOffset: Int = 0,
         width: Int, rows: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(sigmoidRowsMulPSO)
@@ -468,7 +468,7 @@ final class Elementwise {
         delta: MTLBuffer, deltaOffset: Int = 0,
         count: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(residualAddPSO)
@@ -488,7 +488,7 @@ final class Elementwise {
         rows: Int,
         dim: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(concatRowsPSO)

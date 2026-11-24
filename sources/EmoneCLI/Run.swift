@@ -338,6 +338,12 @@ public func run(
             // the gaps are the problem or the kernels are. The runner has
             // collected both all along and nothing printed them.
             let summary = runner.kernelGPUTimingSummary()
+            // DIAG (local only): EMONE_CLI_TIMELINE=<file> writes every timed
+            // command buffer as role,start,end (host mach seconds).
+            if let path = ProcessInfo.processInfo.environment["EMONE_CLI_TIMELINE"] {
+                try? runner.kernelGPUTimelineCSV().write(
+                    toFile: path, atomically: true, encoding: .utf8)
+            }
             let maxima = runner.kernelGPUTimingMaxima()
             let occupancy = runner.kernelGPUOccupancy()
             var lines = "\n[gpu by role over \(stats.newTokens) tokens]\n"

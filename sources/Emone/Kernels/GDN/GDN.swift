@@ -148,7 +148,7 @@ final class GDN {
             Int(qkv.offset) % 2 == 0 && Int(z.offset) % 2 == 0 && Int(a.offset) % 2 == 0
                 && Int(b.offset) % 2 == 0,
             "gdn_in_proj_gemv_simd needs 2-aligned weights offsets")
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(inProjSpecializedPSO ?? inProjPSO)
@@ -189,7 +189,7 @@ final class GDN {
         convWeight: MTLBuffer, convWeightOffset: Int,
         out: MTLBuffer, outOffset: Int = 0
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(convDecodePSO)
@@ -214,7 +214,7 @@ final class GDN {
         out: MTLBuffer, outOffset: Int = 0,
         rows: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(convPrefillPSO)
@@ -241,7 +241,7 @@ final class GDN {
         qkvRows: MTLBuffer, qkvRowsOffset: Int = 0,
         rows: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(convTailUpdatePSO)
@@ -267,7 +267,7 @@ final class GDN {
         qkvRows: MTLBuffer,
         checkpoint: MTLBuffer, checkpointOffset: Int = 0
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(convTailCheckpointPSO)
@@ -291,7 +291,7 @@ final class GDN {
         convOut: MTLBuffer, convOutOffset: Int = 0,
         rows: Int = 1
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(qkNormPSO)
@@ -325,7 +325,7 @@ final class GDN {
         state: MTLBuffer, stateOffset: Int = 0,
         y: MTLBuffer, yOffset: Int = 0
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(deltaDecodePSO)
@@ -363,7 +363,7 @@ final class GDN {
         y: MTLBuffer, yOffset: Int = 0,
         rows: Int
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         if let chunkPSO = deltaChunkPrefillPSO, checkpointState == nil {
@@ -426,7 +426,7 @@ final class GDN {
         out: MTLBuffer, outOffset: Int = 0,
         rows: Int = 1
     ) throws {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(gatedNormPSO)

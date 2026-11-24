@@ -127,7 +127,7 @@ final class DequantInt4GEMV {
         precondition(
             weightsOffset % 2 == 0,
             "dequant_int4_gemv_simd needs a 2-aligned weightsOffset, got \(weightsOffset)")
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let half = MemoryLayout<Float16>.stride

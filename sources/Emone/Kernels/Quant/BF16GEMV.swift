@@ -57,7 +57,7 @@ final class BF16GEMV {
         precondition(
             n.isMultiple(of: 64),
             "bf16 GEMV expects a column count that is a multiple of 64")
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let half = MemoryLayout<Float16>.stride

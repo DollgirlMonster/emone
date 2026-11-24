@@ -112,7 +112,7 @@ final class PrefillRouter {
             d % UInt32(Quantization.groupSize) == 0,
             "D must be a multiple of \(Quantization.groupSize)")
         precondition(hiddenStrideElements >= d, "hidden stride is too small")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(useRowsKernel ? rowsPSO : pso)
@@ -186,7 +186,7 @@ final class PrefillRouter {
             logits = made
         }
         guard let logits else { return false }
-        guard let gemm = commandBuffer.makeComputeCommandEncoder() else {
+        guard let gemm = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         // Up to 32 rows: 32 x 32 tiles, twice the threadgroups and half the
@@ -210,7 +210,7 @@ final class PrefillRouter {
             MTLSize(width: numExperts / tile, height: (queryCount + tile - 1) / tile, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
         gemm.endEncoding()
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(topKLogitsPSO)

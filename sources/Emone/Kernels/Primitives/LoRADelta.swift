@@ -48,7 +48,7 @@ final class LoRADelta {
                 "LoRA delta: rank \(rank) or scratch \(scratch.length) B "
                     + "does not fit \(tokens) tokens")
         }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         try encode(

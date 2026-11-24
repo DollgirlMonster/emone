@@ -33,7 +33,7 @@ final class EmbedLookupInt4 {
         precondition(
             d % UInt32(Quantization.groupSize) == 0,
             "D must be a multiple of \(Quantization.groupSize)")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)

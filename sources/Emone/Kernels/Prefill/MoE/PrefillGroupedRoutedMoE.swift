@@ -475,7 +475,7 @@ final class PrefillGroupedRoutedMoE {
             p.pairStart = params.pairStart + consumed
             p.pairCount = min(UInt32(pairMicrobatchRows), params.pairCount - consumed)
 
-            guard let enc1 = commandBuffer.makeComputeCommandEncoder() else {
+            guard let enc1 = commandBuffer.timedComputeEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
             enc1.setComputePipelineState(batchedPhase1PSO)
@@ -505,7 +505,7 @@ final class PrefillGroupedRoutedMoE {
                 threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
             enc1.endEncoding()
 
-            guard let enc2 = commandBuffer.makeComputeCommandEncoder() else {
+            guard let enc2 = commandBuffer.timedComputeEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
             enc2.setComputePipelineState(batchedDownPSO)

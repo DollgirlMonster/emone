@@ -407,7 +407,7 @@ final class Attention {
         }
         let tgWidth = min(Self.threadsPerGroup, Int(partialPSO.maxTotalThreadsPerThreadgroup))
 
-        guard let p1 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let p1 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         p1.setComputePipelineState(partialPSO)
@@ -450,7 +450,7 @@ final class Attention {
             threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
         p1.endEncoding()
 
-        guard let p2 = commandBuffer.makeComputeCommandEncoder() else {
+        guard let p2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let combinePSO = combinePipeline(

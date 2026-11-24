@@ -279,7 +279,7 @@ final class PrefillAttention {
             threadCount <= pipeline.maxTotalThreadsPerThreadgroup,
             "tiled prefill attention requires headDim <= maxTotalThreadsPerThreadgroup")
 
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw PrefillAttentionError.commandEncoderFailed
         }
         enc.setComputePipelineState(pipeline)
@@ -407,7 +407,7 @@ final class PrefillAttention {
                 packedBlockCounts?.label = "prefillAttention.qsaFlash.blockCounts"
             }
             guard let lists = packedBlockLists, let counts = packedBlockCounts,
-                let listEnc = commandBuffer.makeComputeCommandEncoder()
+                let listEnc = commandBuffer.timedComputeEncoder()
             else { throw PrefillAttentionError.commandEncoderFailed }
             listStride = UInt32(blocksPerRow)
             let listOffset = firstTile * blocksPerRow * 4
@@ -427,7 +427,7 @@ final class PrefillAttention {
             countsBinding = (counts, countOffset)
             attentionPipeline = packedPSO
         } else if let keepMask {
-            guard let flagEnc = commandBuffer.makeComputeCommandEncoder() else {
+            guard let flagEnc = commandBuffer.timedComputeEncoder() else {
                 throw PrefillAttentionError.commandEncoderFailed
             }
             flagEnc.setComputePipelineState(flagsPipeline)
@@ -452,7 +452,7 @@ final class PrefillAttention {
                     length: halves * 2, options: .storageModePrivate)
                 packedQ?.label = "prefillAttention.qsaFlash.packedQ"
             }
-            guard let packed = packedQ, let packEnc = commandBuffer.makeComputeCommandEncoder()
+            guard let packed = packedQ, let packEnc = commandBuffer.timedComputeEncoder()
             else {
                 throw PrefillAttentionError.commandEncoderFailed
             }
@@ -467,7 +467,7 @@ final class PrefillAttention {
             packEnc.endEncoding()
             packedQBinding = packed
         }
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw PrefillAttentionError.commandEncoderFailed
         }
         enc.setComputePipelineState(attentionPipeline)
@@ -554,7 +554,7 @@ final class PrefillAttention {
         commandBuffer: MTLCommandBuffer, split: KeySplit, out: MTLBuffer, outOffset: Int,
         params: PrefillAttentionParams
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw PrefillAttentionError.commandEncoderFailed
         }
         enc.setComputePipelineState(split.pipeline)

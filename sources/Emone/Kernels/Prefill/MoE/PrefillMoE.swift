@@ -23,7 +23,7 @@ final class PrefillMoE {
         precondition(queryCount > 0, "queryCount must be positive")
         precondition(topK > 0, "topK must be positive")
         precondition(d > 0, "D must be positive")
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(reducePSO)

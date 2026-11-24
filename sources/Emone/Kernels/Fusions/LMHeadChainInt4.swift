@@ -102,7 +102,7 @@ final class LMHeadChainInt4 {
             d: d,
             eps: rmsEps)
 
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let specialized = d == specializedD && vocab == specializedVocab
@@ -126,7 +126,7 @@ final class LMHeadChainInt4 {
             threadsPerThreadgroup: threadgroupSize)
         encoder.endEncoding()
 
-        guard let reducer = commandBuffer.makeComputeCommandEncoder() else {
+        guard let reducer = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         reducer.setComputePipelineState(rowReducer)

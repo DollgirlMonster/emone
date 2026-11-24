@@ -82,7 +82,7 @@ final class RMSNorm {
         d: UInt32,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let pso = d == 2816 ? psoNoScaleD2816 : psoNoScale
@@ -109,7 +109,7 @@ final class RMSNorm {
         headDim: UInt32, numHeads: Int,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let pso = perHeadPipeline(
@@ -149,7 +149,7 @@ final class RMSNorm {
         eps: Float,
         tokens: Int = 1
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(psoBF16Grouped)
@@ -177,7 +177,7 @@ final class RMSNorm {
         headDim: UInt32, numHeads: Int,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         let pso = perHeadPipeline(
@@ -208,7 +208,7 @@ final class RMSNorm {
         d: UInt32,
         eps: Float
     ) throws {
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else {
+        guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         enc.setComputePipelineState(pso)
