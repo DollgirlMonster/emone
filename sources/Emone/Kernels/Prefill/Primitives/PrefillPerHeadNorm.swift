@@ -51,7 +51,7 @@ final class PrefillPerHeadNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: Int(numHeads), height: Int(queryCount), depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     func encodeNoScale(
@@ -92,6 +92,6 @@ final class PrefillPerHeadNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: Int(numHeads), height: Int(queryCount), depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

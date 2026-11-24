@@ -147,7 +147,7 @@ final class MPPPrefillInt4QMM {
                 width: pipeline.threadExecutionWidth * 4,
                 height: 1,
                 depth: 1))
-        if existing == nil { encoder.endEncoding() }
+        if existing == nil { encoder.releaseEncoder() }
         return .affineThreadgroupF16
     }
 

@@ -156,7 +156,7 @@ final class PrefillRoutedExpertGEMM {
         // projection throws traps when the command buffer is released, and the
         // next encoder cannot be made while it is open.
         do {
-            defer { gateUp.endEncoding() }
+            defer { gateUp.releaseEncoder() }
             for group in groups where group.pairCount > 0 {
                 let view = try Self.view(for: group, in: binding)
                 let base = Int(view.offset)
@@ -189,12 +189,12 @@ final class PrefillRoutedExpertGEMM {
             MTLSize(width: pairs * f, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(
                 width: min(activation.maxTotalThreadsPerThreadgroup, 256), height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
 
         guard let down = commandBuffer.timedComputeEncoder(dispatchType: .concurrent)
         else { throw MetalError.commandEncoderFailed }
         do {
-            defer { down.endEncoding() }
+            defer { down.releaseEncoder() }
             for group in groups where group.pairCount > 0 {
                 let view = try Self.view(for: group, in: binding)
                 let row = Int(group.pairStart - tile.pairStart)
@@ -293,7 +293,7 @@ final class PrefillRoutedExpertGEMM {
             enc.dispatchThreadgroups(
                 MTLSize(width: n / edge, height: work.count, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
-            enc.endEncoding()
+            enc.releaseEncoder()
         }
     }
 
@@ -354,6 +354,6 @@ final class PrefillRoutedExpertGEMM {
         encoder.dispatchThreads(
             MTLSize(width: d, height: Int(tile.pairCount), depth: 1),
             threadsPerThreadgroup: MTLSize(width: 64, height: 4, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

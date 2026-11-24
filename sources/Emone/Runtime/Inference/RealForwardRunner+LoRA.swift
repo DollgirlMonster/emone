@@ -143,7 +143,7 @@ extension RealForwardRunner {
         guard let encoder = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
-        defer { encoder.endEncoding() }
+        defer { encoder.releaseEncoder() }
         let first = present[0].0
         if present.count > 1, present.count <= LoRADelta.maximumGroup,
             present.allSatisfy({

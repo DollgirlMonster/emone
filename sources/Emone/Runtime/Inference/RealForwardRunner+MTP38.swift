@@ -102,7 +102,7 @@ extension RealForwardRunner {
             embeddingBlock: embeddingBlock,
             normalizedEmbedding: normalizedEmbedding,
             projected: projected, elementwise: elementwise)
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
         return try await runDraftLayer(
             tokens: tokens,

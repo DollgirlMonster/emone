@@ -448,7 +448,7 @@ final class Attention {
         p1.dispatchThreadgroups(
             MTLSize(width: partialGroups, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
-        p1.endEncoding()
+        p1.releaseEncoder()
 
         guard let p2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
@@ -473,7 +473,7 @@ final class Attention {
         p2.dispatchThreadgroups(
             MTLSize(width: Int(numQHeads), height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: combineTGWidth, height: 1, depth: 1))
-        p2.endEncoding()
+        p2.releaseEncoder()
     }
 
     /// `1 / sqrt(head_dim)` — the classic transformer scaling. Used as the

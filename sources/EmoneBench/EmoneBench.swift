@@ -131,8 +131,8 @@ struct EmoneBench {
                     width: rowsPerThreadgroup * 32,
                     height: 1, depth: 1))
         }
-        enc.endEncoding()
-        cb.commit()
+        enc.releaseEncoder()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
 
         let totalSeconds = cb.gpuEndTime - cb.gpuStartTime

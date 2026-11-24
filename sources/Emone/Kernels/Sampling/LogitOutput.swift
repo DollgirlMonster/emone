@@ -67,7 +67,7 @@ final class LogitSoftcapSoftmax {
         let gridSize = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
         let tgSize = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
         enc.dispatchThreads(gridSize, threadsPerThreadgroup: tgSize)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }
 
@@ -149,7 +149,7 @@ final class LogitSoftcapSoftmaxTiled {
         enc1.dispatchThreadgroups(
             MTLSize(width: tiles, height: 1, depth: 1),
             threadsPerThreadgroup: threads)
-        enc1.endEncoding()
+        enc1.releaseEncoder()
 
         guard let enc2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
@@ -162,7 +162,7 @@ final class LogitSoftcapSoftmaxTiled {
         enc2.dispatchThreadgroups(
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: threads)
-        enc2.endEncoding()
+        enc2.releaseEncoder()
 
         guard let enc3 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
@@ -176,7 +176,7 @@ final class LogitSoftcapSoftmaxTiled {
         enc3.dispatchThreads(
             MTLSize(width: vocab, height: 1, depth: 1),
             threadsPerThreadgroup: threads)
-        enc3.endEncoding()
+        enc3.releaseEncoder()
     }
 }
 
@@ -233,7 +233,7 @@ final class Sample {
         let gridSize = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
         let tgSize = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
         enc.dispatchThreads(gridSize, threadsPerThreadgroup: tgSize)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }
 enum SampleTopK64Error: Error {
@@ -347,7 +347,7 @@ final class SampleTopK64 {
         enc1.dispatchThreadgroups(
             MTLSize(width: stage1Groups, height: 1, depth: 1),
             threadsPerThreadgroup: threads)
-        enc1.endEncoding()
+        enc1.releaseEncoder()
 
         guard let enc2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
@@ -362,7 +362,7 @@ final class SampleTopK64 {
         enc2.dispatchThreadgroups(
             MTLSize(width: stage2Groups, height: 1, depth: 1),
             threadsPerThreadgroup: threads)
-        enc2.endEncoding()
+        enc2.releaseEncoder()
 
         guard let enc3 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
@@ -384,6 +384,6 @@ final class SampleTopK64 {
         enc3.dispatchThreadgroups(
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: threads)
-        enc3.endEncoding()
+        enc3.releaseEncoder()
     }
 }

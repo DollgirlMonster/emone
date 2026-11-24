@@ -94,7 +94,7 @@ public final class SharedExpertInt4 {
         encoder.dispatchThreads(
             MTLSize(width: intermediate, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
 
         try int4.encode(
             commandBuffer: cb,

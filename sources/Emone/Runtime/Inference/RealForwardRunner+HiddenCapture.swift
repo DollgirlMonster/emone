@@ -236,7 +236,7 @@ extension RealForwardRunner {
         let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         let rowBytes = capture.rowBytes
         guard let cb = ctx.queue.makeCommandBuffer(),
-            let blit = cb.makeBlitCommandEncoder()
+            let blit = cb.blitEncoder()
         else {
             throw ModelError.residentBufferWrapFailed
         }
@@ -245,7 +245,7 @@ extension RealForwardRunner {
             to: capture.readback, destinationOffset: index * rowBytes,
             size: rowBytes)
         blit.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         capture.pending.append(cb)
         capture.captured.insert(layer)
         capture.captureNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started

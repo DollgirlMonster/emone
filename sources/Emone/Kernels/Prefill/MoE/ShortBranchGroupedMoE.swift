@@ -131,7 +131,7 @@ final class ShortBranchGroupedMoE {
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(
                 width: min(1024, group.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
-        g.endEncoding()
+        g.releaseEncoder()
         try split(&cb, "prefill_split_grouped_plan")
 
         try encodeRows(
@@ -166,7 +166,7 @@ final class ShortBranchGroupedMoE {
             enc.dispatchThreadgroups(
                 MTLSize(width: n / columns, height: capacity, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
-            enc.endEncoding()
+            enc.releaseEncoder()
             try split(&cb, "prefill_split_grouped_\(role)")
         }
 
@@ -199,6 +199,6 @@ final class ShortBranchGroupedMoE {
         encoder.dispatchThreads(
             MTLSize(width: d, height: pairs, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 64, height: 4, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

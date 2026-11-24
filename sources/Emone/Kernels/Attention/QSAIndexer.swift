@@ -334,7 +334,7 @@ final class QSAIndexer {
         enc.dispatchThreads(
             MTLSize(width: headDim, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// The first block of a chunk may already hold members from the previous
@@ -421,7 +421,7 @@ final class QSAIndexer {
         enc.dispatchThreads(
             MTLSize(width: headDim * blockCount, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// Scores every block against this token's indexer query.
@@ -475,7 +475,7 @@ final class QSAIndexer {
         enc.dispatchThreads(
             MTLSize(width: blocks, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// Scores every block against every query in a prefill chunk.
@@ -547,7 +547,7 @@ final class QSAIndexer {
                 MTLSize(width: blocks * tokens, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
         }
-        enc.endEncoding()
+        enc.releaseEncoder()
         lastScoredBlocks = blocks
     }
 
@@ -843,7 +843,7 @@ final class QSAIndexer {
         enc.dispatchThreadgroups(
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
         return keepBuf
     }
 
@@ -881,7 +881,7 @@ final class QSAIndexer {
             MTLSize(width: tokens, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(
                 width: min(pso.maxTotalThreadsPerThreadgroup, 256), height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
         return QSASelection(
             mask: keepBuf, maskStride: lastVisible,
             indices: nil, indexStride: 0, counts: nil)

@@ -306,7 +306,7 @@ extension EmoneBench {
             }
         }
         enc.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
         if let err = cb.error {
             print("COMMAND BUFFER ERROR: \(err)")
@@ -552,7 +552,7 @@ extension EmoneBench {
             }
         }
         enc.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
         if let err = cb.error {
             print("COMMAND BUFFER ERROR: \(err)")
@@ -648,7 +648,7 @@ extension EmoneBench {
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
         }
         enc.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         cb.waitUntilCompleted()
         let total = cb.gpuEndTime - cb.gpuStartTime
         let per = total / Double(iterations)

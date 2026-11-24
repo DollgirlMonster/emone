@@ -67,7 +67,7 @@ final class SharedExpertAffineQuant {
             MTLSize(width: Int(count), height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(
                 width: min(256, activationPSO.maxTotalThreadsPerThreadgroup), height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
         try project(down, scratchAct, scratchActOffset, y, yOffset)
     }
 }

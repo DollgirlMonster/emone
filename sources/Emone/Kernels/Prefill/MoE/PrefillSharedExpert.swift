@@ -118,7 +118,7 @@ final class PrefillSharedExpert {
         encoder.dispatchThreads(
             MTLSize(width: queryCount * intermediate, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
         guard try project(down, scratchAct, 0, y, yOffset, rows: d, columns: intermediate) else {
             return false
         }

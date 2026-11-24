@@ -100,6 +100,6 @@ final class FusedQKVEpilogue {
         enc.dispatchThreadgroups(
             MTLSize(width: groups, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

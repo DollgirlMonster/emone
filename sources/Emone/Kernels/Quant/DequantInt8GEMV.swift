@@ -121,7 +121,7 @@ final class DequantInt8GEMV {
             enc.dispatchThreadgroups(
                 MTLSize(width: (rows.count + 7) / 8, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            enc.endEncoding()
+            enc.releaseEncoder()
             return
         }
         // Not for a constant-folded shape: fast-math may compile that one
@@ -154,7 +154,7 @@ final class DequantInt8GEMV {
                     width: (Int(m) + 7) / 8,
                     height: (rows.count + Self.manyXBlock - 1) / Self.manyXBlock, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            enc.endEncoding()
+            enc.releaseEncoder()
             return
         }
         guard let enc = commandBuffer.timedComputeEncoder() else {
@@ -179,6 +179,6 @@ final class DequantInt8GEMV {
         rows.dispatch(
             enc, xIndex: 3, yIndex: 4,
             threadgroups: tgCount, threadsPerThreadgroup: tgSize)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

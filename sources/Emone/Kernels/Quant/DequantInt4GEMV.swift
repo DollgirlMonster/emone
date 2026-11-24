@@ -157,7 +157,7 @@ final class DequantInt4GEMV {
                     height: (rows.count + Self.manyXBlock - 1) / Self.manyXBlock, depth: 1),
                 threadsPerThreadgroup: MTLSize(
                     width: 32 * Self.rowsPerThreadgroup, height: 1, depth: 1))
-            encoder.endEncoding()
+            encoder.releaseEncoder()
             return
         }
         encoder.setComputePipelineState(
@@ -183,7 +183,7 @@ final class DequantInt4GEMV {
         rows.dispatch(
             encoder, xIndex: 3, yIndex: 4,
             threadgroups: threadgroupCount, threadsPerThreadgroup: threadgroupSize)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeTwoRows(

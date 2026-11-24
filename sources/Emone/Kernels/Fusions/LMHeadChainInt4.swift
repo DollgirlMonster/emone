@@ -124,7 +124,7 @@ final class LMHeadChainInt4 {
         encoder.dispatchThreadgroups(
             MTLSize(width: rowGroups, height: 1, depth: 1),
             threadsPerThreadgroup: threadgroupSize)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
 
         guard let reducer = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
@@ -137,6 +137,6 @@ final class LMHeadChainInt4 {
 
         let reducerSize = MTLSize(width: 256, height: 1, depth: 1)
         reducer.dispatchThreads(reducerSize, threadsPerThreadgroup: reducerSize)
-        reducer.endEncoding()
+        reducer.releaseEncoder()
     }
 }

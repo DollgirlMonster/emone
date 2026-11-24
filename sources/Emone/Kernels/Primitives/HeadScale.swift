@@ -36,6 +36,6 @@ final class HeadScale {
         encoder.dispatchThreads(
             MTLSize(width: total, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

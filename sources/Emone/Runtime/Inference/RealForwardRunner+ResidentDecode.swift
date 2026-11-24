@@ -258,7 +258,7 @@ extension RealForwardRunner {
             allResident: slots)
         try encodeResidualExitDecode(
             commandBuffer: routedCB, hidden: hidden, delta: h2Buf, sublayer: .mlp, layer: L)
-        routedCB.commit()
+        routedCB.commitEncoded()
         residentTokenBuffers.append(("attn_norm_qkv", attnCB))
         if let softmaxCB { residentTokenBuffers.append(("attn_softmax", softmaxCB)) }
         residentTokenBuffers.append(("tail_router_shared_routed", routedCB))

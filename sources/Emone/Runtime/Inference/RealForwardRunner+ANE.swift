@@ -25,7 +25,7 @@ extension RealForwardRunner {
         selection: QSASelection?
     ) async throws {
         let halfBytes = MemoryLayout<Float16>.stride
-        guard let stage = cb.makeBlitCommandEncoder() else {
+        guard let stage = cb.blitEncoder() else {
             throw ModelError.residentBufferWrapFailed
         }
         stage.copy(
@@ -33,7 +33,7 @@ extension RealForwardRunner {
             to: ane.stagingNormed, destinationOffset: 0,
             size: t * D * halfBytes)
         stage.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
         recordKernelGPU(role: "prefill_ane_stage", cb)
 
@@ -65,7 +65,7 @@ extension RealForwardRunner {
                 valueSource: ane.stagingV,
                 bytesPerToken: kvDim * halfBytes)
         }
-        guard let out = cb.makeBlitCommandEncoder() else {
+        guard let out = cb.blitEncoder() else {
             throw ModelError.residentBufferWrapFailed
         }
         out.copy(

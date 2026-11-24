@@ -145,7 +145,7 @@ final class PrefillRouter {
                 MTLSize(width: Int(queryCount), height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: tgWidth, height: 1, depth: 1))
         }
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// The router as two passes: float logits through the tiled simdgroup
@@ -209,7 +209,7 @@ final class PrefillRouter {
         gemm.dispatchThreadgroups(
             MTLSize(width: numExperts / tile, height: (queryCount + tile - 1) / tile, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
-        gemm.endEncoding()
+        gemm.releaseEncoder()
         guard let enc = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
@@ -226,7 +226,7 @@ final class PrefillRouter {
         enc.dispatchThreadgroups(
             MTLSize(width: (queryCount + width - 1) / width, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
         return true
     }
 

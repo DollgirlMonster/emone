@@ -27,7 +27,7 @@ extension RealForwardRunner {
                 throw ModelError.residentBufferWrapFailed
             }
             try gdnState.encodeSpeculativeRestore(commandBuffer: cb)
-            cb.commit()
+            cb.commitEncoded()
             try waitForCompletion(cb)
         }
         // Row zero was confirmed and is present in the on-GPU checkpoint.
@@ -133,7 +133,7 @@ extension RealForwardRunner {
         let finalNorm = try model.finalNorm()
         let lm = try model.lmHead()
         guard let cb = ctx.queue.makeCommandBuffer(),
-            let blit = cb.makeBlitCommandEncoder()
+            let blit = cb.blitEncoder()
         else {
             throw ModelError.residentBufferWrapFailed
         }
@@ -178,7 +178,7 @@ extension RealForwardRunner {
                     yOffset: row * cfg.vocabSize * MemoryLayout<Float16>.stride,
                     m: UInt32(cfg.vocabSize), n: UInt32(cfg.hiddenSize))
             }
-            cb.commit()
+            cb.commitEncoded()
             try waitForCompletion(cb)
             recordKernelGPU(role: "verify_head", cb)
             return try finishVerifyPair(tBackbone: tBackbone, tHead: tHead)
@@ -201,7 +201,7 @@ extension RealForwardRunner {
             d: UInt32(cfg.hiddenSize),
             vocab: UInt32(cfg.vocabSize),
             rmsEps: 1e-6)
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
         recordKernelGPU(role: "verify_head", cb)
         return try finishVerifyPair(tBackbone: tBackbone, tHead: tHead)
@@ -344,7 +344,7 @@ extension RealForwardRunner {
             t: tokens.count,
             n: D,
             k: 2 * D)
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
 
         let runtime = PrefillRuntimeConfig.production(chunkTokens: 32)
@@ -443,7 +443,7 @@ extension RealForwardRunner {
 
                 let readback = try ensureMTPPrefillReadback(rows: span.tokenCount)
                 guard let cb = ctx.queue.makeCommandBuffer(),
-                    let blit = cb.makeBlitCommandEncoder()
+                    let blit = cb.blitEncoder()
                 else {
                     throw ModelError.residentBufferWrapFailed
                 }
@@ -456,7 +456,7 @@ extension RealForwardRunner {
                     to: readback, destinationOffset: 0,
                     size: span.tokenCount * rowBytes)
                 blit.endEncoding()
-                cb.commit()
+                cb.commitEncoded()
                 try waitForCompletion(cb)
                 let chunkHidden = Data(
                     bytes: readback.contents(),
@@ -564,7 +564,7 @@ extension RealForwardRunner {
             d: UInt32(D),
             topK: topK,
             hiddenStrideElements: UInt32(D))
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
         recordKernelGPU(
             role: cfg.layerIsLinear(L)
@@ -638,7 +638,7 @@ extension RealForwardRunner {
                     count: D)
             }
         }
-        sharedCB.commit()
+        sharedCB.commitEncoded()
 
         let blobs: [TensorView]
         if let plan {
@@ -745,7 +745,7 @@ extension RealForwardRunner {
         // So the per-row outputs are gathered into one contiguous block first
         // and written once, rather than looped over.
         if hyperConnection != nil {
-            guard let blit = routedCB.makeBlitCommandEncoder() else {
+            guard let blit = routedCB.blitEncoder() else {
                 throw ModelError.residentBufferWrapFailed
             }
             for row in 0..<t {
@@ -771,7 +771,7 @@ extension RealForwardRunner {
                     count: D)
             }
         }
-        routedCB.commit()
+        routedCB.commitEncoded()
         try waitForCompletion(routedCB)
         recordKernelGPU(role: "prefill_shared_expert", sharedCB)
         recordKernelGPU(role: "verify_routed_pair", routedCB)

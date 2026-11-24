@@ -107,10 +107,18 @@ final class EncoderTimestamps: @unchecked Sendable {
 }
 
 extension MTLCommandBuffer {
-    /// `makeComputeCommandEncoder()`, timestamped under EMONE_ENCODER_TIMESTAMPS.
+    /// `makeComputeCommandEncoder()`, timestamped under EMONE_ENCODER_TIMESTAMPS,
+    /// or the buffer's shared serial encoder under EMONE_SHARED_ENCODER=1.
+    /// Callers finish with `releaseEncoder()`, never `endEncoding()`.
     func timedComputeEncoder(
         dispatchType: MTLDispatchType = .serial, file: String = #fileID, line: Int = #line
     ) -> MTLComputeCommandEncoder? {
+        if SharedComputeEncoder.enabled {
+            // A concurrent encoder is its own pass: close the shared one first.
+            if dispatchType == .serial { return sharedComputeEncoder() }
+            endSharedEncoder()
+            return makeComputeCommandEncoder(dispatchType: dispatchType)
+        }
         guard EncoderTimestamps.path != nil,
             let (buffer, index) = EncoderTimestamps.shared.attachment(
                 for: device, label: "\(file.split(separator: "/").last ?? ""):\(line)")

@@ -79,7 +79,7 @@ final class BF16GEMV {
             encoder.dispatchThreadgroups(
                 MTLSize(width: (rows.count + 7) / 8, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            encoder.endEncoding()
+            encoder.releaseEncoder()
             return
         }
         let rowsPerThreadgroup = 8
@@ -100,7 +100,7 @@ final class BF16GEMV {
                     width: (Int(m) + rowsPerThreadgroup - 1) / rowsPerThreadgroup,
                     height: rows.count, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 32 * rowsPerThreadgroup, height: 1, depth: 1))
-            encoder.endEncoding()
+            encoder.releaseEncoder()
             return
         }
         encoder.setComputePipelineState(pipeline)
@@ -118,6 +118,6 @@ final class BF16GEMV {
             threadsPerThreadgroup: MTLSize(
                 width: 32 * rowsPerThreadgroup,
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

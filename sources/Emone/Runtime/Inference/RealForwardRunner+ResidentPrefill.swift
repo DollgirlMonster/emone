@@ -152,7 +152,7 @@ extension RealForwardRunner {
             try requireElementwise().encodeResidualAdd(
                 commandBuffer: cb, hidden: scratch.hidden, delta: scratch.h2, count: t * D)
         }
-        cb.commit()
+        cb.commitEncoded()
         residentTokenBuffers.append(("prefill_resident_rows", cb))
         guard L + 1 < cfg.numLayers else {
             // A short branch leaves the last layer unwaited: its head buffer
@@ -184,7 +184,7 @@ extension RealForwardRunner {
             shortBranchRouteStatsLog = ctx.device.makeBuffer(
                 length: cfg.numLayers * stride, options: .storageModeShared)
         }
-        guard let log = shortBranchRouteStatsLog, let blit = cb.makeBlitCommandEncoder() else {
+        guard let log = shortBranchRouteStatsLog, let blit = cb.blitEncoder() else {
             throw MetalError.bufferAllocationFailed("shortBranch.routeStats")
         }
         blit.copy(
@@ -242,7 +242,7 @@ extension RealForwardRunner {
             try requireElementwise().encodeResidualAdd(
                 commandBuffer: cb, hidden: scratch.hidden, delta: scratch.h2, count: t * D)
         }
-        cb.commit()
+        cb.commitEncoded()
         residentTokenBuffers.append(("prefill_resident_grouped", cb))
         residentPrefillRanGrouped = true
         // The short branch's last layer stays unwaited, as on the per-row stage.

@@ -326,7 +326,7 @@ final class MoE {
         encoder.dispatchThreadgroups(
             MTLSize(width: (Int(numExperts) + 3) / 4, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
 
         guard let selector = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
@@ -357,7 +357,7 @@ final class MoE {
         selector.dispatchThreadgroups(
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 32, height: 1, depth: 1))
-        selector.endEncoding()
+        selector.releaseEncoder()
     }
 
     func makeRoutedArgumentBuffer(
@@ -414,7 +414,7 @@ final class MoE {
         encoder.dispatchThreadgroups(
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 32, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Bytes of one routed argument buffer when a kernel writes it
@@ -457,7 +457,7 @@ final class MoE {
         encoder.dispatchThreadgroups(
             MTLSize(width: 1, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Whether `encodeRoutedRows` can run for these dimensions.
@@ -523,7 +523,7 @@ final class MoE {
         first.dispatchThreadgroups(
             MTLSize(width: (8 * Int(f) + 15) / 16, height: rows, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 512, height: 1, depth: 1))
-        first.endEncoding()
+        first.releaseEncoder()
         guard let second = commandBuffer.timedComputeEncoder() else {
             throw MetalError.commandEncoderFailed
         }
@@ -540,7 +540,7 @@ final class MoE {
         second.dispatchThreadgroups(
             MTLSize(width: Int(d), height: rows, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        second.endEncoding()
+        second.releaseEncoder()
     }
 
     /// An argument buffer with no views encoded yet, for callers that
@@ -622,7 +622,7 @@ final class MoE {
         encoder.dispatchThreadgroups(
             MTLSize(width: (Int(topK * f) + 15) / 16, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 512, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeRoutedPersistentPhase1SubsetU16Load(
@@ -676,7 +676,7 @@ final class MoE {
         encoder.dispatchThreadgroups(
             MTLSize(width: (Int(activeCount * f) + 15) / 16, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 512, height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeRoutedPersistentPhase2Reduce(
@@ -736,7 +736,7 @@ final class MoE {
             threadsPerThreadgroup: MTLSize(
                 width: 32 * maxStreamedExperts,
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// Declares what the argument buffer points at: the picks themselves, or

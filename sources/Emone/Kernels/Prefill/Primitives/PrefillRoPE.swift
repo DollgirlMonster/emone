@@ -89,7 +89,7 @@ final class PrefillRoPE {
                 width: min(pairs, psoNeoxSubdim.maxTotalThreadsPerThreadgroup),
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     private func encodeYaRNNeoxSubdim(
@@ -128,7 +128,7 @@ final class PrefillRoPE {
             threadsPerThreadgroup: MTLSize(
                 width: min(pairs, psoYaRNNeoxSubdim.maxTotalThreadsPerThreadgroup),
                 height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     func encodeDefaultNeox(
@@ -170,7 +170,7 @@ final class PrefillRoPE {
                 width: min(pairs, psoDefaultNeox.maxTotalThreadsPerThreadgroup),
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     func encodeProportionalNeox(
@@ -219,6 +219,6 @@ final class PrefillRoPE {
                     psoProportionalNeox.maxTotalThreadsPerThreadgroup),
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

@@ -338,7 +338,7 @@ final class PrefillAttention {
         enc.dispatchThreadgroups(
             groups,
             threadsPerThreadgroup: MTLSize(width: threadCount, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// The selection as masked dense flash tiles: a pass marking which
@@ -422,7 +422,7 @@ final class PrefillAttention {
             listEnc.dispatchThreadgroups(
                 MTLSize(width: rowTiles, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            listEnc.endEncoding()
+            listEnc.releaseEncoder()
             listBinding = (lists, listOffset)
             countsBinding = (counts, countOffset)
             attentionPipeline = packedPSO
@@ -439,7 +439,7 @@ final class PrefillAttention {
             flagEnc.dispatchThreads(
                 MTLSize(width: keyTiles, height: rowTiles, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
-            flagEnc.endEncoding()
+            flagEnc.releaseEncoder()
         }
 
         // Q in fragment order for the kernel's streamed score product.
@@ -464,7 +464,7 @@ final class PrefillAttention {
             packEnc.dispatchThreads(
                 MTLSize(width: halves / 4, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            packEnc.endEncoding()
+            packEnc.releaseEncoder()
             packedQBinding = packed
         }
         guard let enc = commandBuffer.timedComputeEncoder() else {
@@ -504,7 +504,7 @@ final class PrefillAttention {
         enc.dispatchThreadgroups(
             MTLSize(width: rowTiles, height: Int(params.numKVHeads), depth: split?.splits ?? 1),
             threadsPerThreadgroup: MTLSize(width: 32 * max(group, 4), height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
         if let split {
             try encodeSplitMerge(
                 commandBuffer: commandBuffer, split: split, out: out, outOffset: outOffset,
@@ -569,7 +569,7 @@ final class PrefillAttention {
         enc.dispatchThreads(
             MTLSize(width: threads, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// Query rows per command buffer for a chunk whose last query sees
@@ -649,7 +649,7 @@ final class PrefillAttention {
                 path: path)
             first += count
             if first < total {
-                cb.commit()
+                cb.commitEncoded()
                 onCommit?(cb)
                 guard let next = queue.makeCommandBuffer() else {
                     throw PrefillAttentionError.commandEncoderFailed

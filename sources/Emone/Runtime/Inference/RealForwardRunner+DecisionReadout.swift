@@ -201,7 +201,7 @@ extension RealForwardRunner {
         }
         guard !wanted.isEmpty else { return }
         let rowBytes = capture.rowBytes
-        guard let cb = ctx.queue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder()
+        guard let cb = ctx.queue.makeCommandBuffer(), let blit = cb.blitEncoder()
         else { throw MetalError.commandEncoderFailed }
         cb.label = "decisionReadout.block"
         for (index, position) in wanted {
@@ -212,7 +212,7 @@ extension RealForwardRunner {
             capture.blockFilled.insert(row)
         }
         blit.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         capture.pending.append(cb)
     }
 
@@ -235,7 +235,7 @@ extension RealForwardRunner {
             commandBuffer: cb, x: scratch.hidden, weight: norm.buffer,
             weightOffset: Int(norm.offset), out: scratch.normed,
             t: UInt32(t), d: UInt32(cfg.hiddenSize), eps: eps)
-        guard let blit = cb.makeBlitCommandEncoder() else { throw MetalError.commandEncoderFailed }
+        guard let blit = cb.blitEncoder() else { throw MetalError.commandEncoderFailed }
         for (index, position) in wanted {
             blit.copy(
                 from: scratch.normed, sourceOffset: (position - startPosition) * rowBytes,
@@ -243,7 +243,7 @@ extension RealForwardRunner {
             capture.filled.insert(index)
         }
         blit.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         capture.pending.append(cb)
     }
 
@@ -331,7 +331,7 @@ extension RealForwardRunner {
         guard let kv else { throw DecisionReadoutError.unsupported("no KV cache") }
         var states = existing?.states ?? []
         var tails = existing?.tails ?? []
-        guard let cb = ctx.queue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder()
+        guard let cb = ctx.queue.makeCommandBuffer(), let blit = cb.blitEncoder()
         else { throw MetalError.commandEncoderFailed }
         cb.label = saving ? "decisionBranch.save" : "decisionBranch.restore"
         if let gdnState {
@@ -371,7 +371,7 @@ extension RealForwardRunner {
             }
         }
         blit.endEncoding()
-        cb.commit()
+        cb.commitEncoded()
         try waitForCompletion(cb)
         return existing
             ?? DecisionBranchPoint(

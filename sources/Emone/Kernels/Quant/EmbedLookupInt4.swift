@@ -54,6 +54,6 @@ final class EmbedLookupInt4 {
         let gridSize = MTLSize(width: Int(d), height: 1, depth: 1)
         let tgSize = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
         enc.dispatchThreads(gridSize, threadsPerThreadgroup: tgSize)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

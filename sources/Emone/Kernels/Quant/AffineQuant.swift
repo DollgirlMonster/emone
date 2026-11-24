@@ -36,7 +36,7 @@ func encodeTwoRowsShared(
         threadsPerThreadgroup: MTLSize(
             width: 32 * rowsPerThreadgroup,
             height: 1, depth: 1))
-    encoder.endEncoding()
+    encoder.releaseEncoder()
 }
 
 final class AffineQuantGEMV {
@@ -132,7 +132,7 @@ final class AffineQuantGEMV {
                     width: (Int(m) + 7) / 8,
                     height: (rows.count + Self.manyXBlock - 1) / Self.manyXBlock, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-            encoder.endEncoding()
+            encoder.releaseEncoder()
             return
         }
         encoder.setComputePipelineState(pipeline)
@@ -154,7 +154,7 @@ final class AffineQuantGEMV {
             threadsPerThreadgroup: MTLSize(
                 width: 32 * rowsPerThreadgroup,
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeTwoRows(
@@ -229,6 +229,6 @@ final class AffineQuantEmbeddingLookup {
             threadsPerThreadgroup: MTLSize(
                 width: width,
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

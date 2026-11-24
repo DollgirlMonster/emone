@@ -62,6 +62,6 @@ final class KVCacheQuantizer {
             threadsPerThreadgroup: MTLSize(
                 width: KVCacheManager.quantizationGroupSize,
                 height: 1, depth: 1))
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 }

@@ -73,7 +73,7 @@ final class Elementwise {
         enc.dispatchThreads(
             MTLSize(width: count, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// out = sigmoid(x). Standalone, unlike `sigmoid_gate_mul` which folds the
@@ -135,7 +135,7 @@ final class Elementwise {
         enc.dispatchThreads(
             MTLSize(width: dim * tokens, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// The hyper-connection gated write: streams[s,d] += blockOut[d] *
@@ -170,7 +170,7 @@ final class Elementwise {
         enc.dispatchThreads(
             MTLSize(width: total, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// Per-stream score: key . query / sqrt(D), one scalar per stream.
@@ -199,7 +199,7 @@ final class Elementwise {
             threadsPerThreadgroup: MTLSize(
                 width: min(pleScorePSO.maxTotalThreadsPerThreadgroup, 32),
                 height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// gate = sigmoid(signed sqrt of the score), with a magnitude floor.
@@ -224,7 +224,7 @@ final class Elementwise {
             threadsPerThreadgroup: MTLSize(
                 width: min(pleGatePSO.maxTotalThreadsPerThreadgroup, 32),
                 height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// out[s,d] = value[d] * gate[s].
@@ -254,7 +254,7 @@ final class Elementwise {
             threadsPerThreadgroup: MTLSize(
                 width: min(pleBroadcastPSO.maxTotalThreadsPerThreadgroup, 256),
                 height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// Dilated depthwise causal convolution with silu, over `history + T` rows
@@ -288,7 +288,7 @@ final class Elementwise {
             threadsPerThreadgroup: MTLSize(
                 width: min(pleConvPSO.maxTotalThreadsPerThreadgroup, 256),
                 height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// Collapse `[tokens, streams, dim]` to `[tokens, dim]` by a plain mean.
@@ -314,7 +314,7 @@ final class Elementwise {
         enc.dispatchThreads(
             MTLSize(width: dim * tokens, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// Widen a `[tokens, dim]` block into the `[tokens, streams, dim]`
@@ -344,7 +344,7 @@ final class Elementwise {
         enc.dispatchThreads(
             MTLSize(width: total, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// Replicate stream 0 across the remaining residual streams, in place.
@@ -367,7 +367,7 @@ final class Elementwise {
             threadsPerThreadgroup: MTLSize(
                 width: min(hcBroadcastPSO.maxTotalThreadsPerThreadgroup, 256),
                 height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// packed [H, 2D] per-head [query ; gate] → q [H, D], gate [H, D].
@@ -398,7 +398,7 @@ final class Elementwise {
             encoder.setBuffer(gate, offset: gateOffset + row * rowElems * 2, index: 2)
             dispatch(encoder, pipeline: splitQGatePSO, threads: rowElems)
         }
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// out[i] *= sigmoid(gate[i])
@@ -417,7 +417,7 @@ final class Elementwise {
         var elementCount = UInt32(count)
         encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.size, index: 2)
         dispatch(encoder, pipeline: sigmoidGateMulPSO, threads: count)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// y[i] *= sigmoid(gate[0])
@@ -436,7 +436,7 @@ final class Elementwise {
         var elementCount = UInt32(count)
         encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.size, index: 2)
         dispatch(encoder, pipeline: sigmoidScalarMulPSO, threads: count)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// y[r, i] *= sigmoid(gate[r]) over `rows` rows of `width` in one dispatch:
@@ -458,7 +458,7 @@ final class Elementwise {
         encoder.setBytes(&rowWidth, length: MemoryLayout<UInt32>.size, index: 2)
         encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.size, index: 3)
         dispatch(encoder, pipeline: sigmoidRowsMulPSO, threads: width * rows)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     /// hidden[i] += delta[i]
@@ -477,7 +477,7 @@ final class Elementwise {
         var elementCount = UInt32(count)
         encoder.setBytes(&elementCount, length: MemoryLayout<UInt32>.size, index: 2)
         dispatch(encoder, pipeline: residualAddPSO, threads: count)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     func encodeConcatRows(
@@ -500,7 +500,7 @@ final class Elementwise {
         encoder.setBytes(&rowCount, length: MemoryLayout<UInt32>.size, index: 3)
         encoder.setBytes(&dimension, length: MemoryLayout<UInt32>.size, index: 4)
         dispatch(encoder, pipeline: concatRowsPSO, threads: rows * dim)
-        encoder.endEncoding()
+        encoder.releaseEncoder()
     }
 
     private func dispatch(

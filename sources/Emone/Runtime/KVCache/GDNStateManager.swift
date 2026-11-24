@@ -269,7 +269,7 @@ public final class GDNStateManager {
                 throw InferenceStateSnapshotError.invalidLayout
             }
         }
-        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+        guard let blit = commandBuffer.blitEncoder() else {
             throw ModelError.residentBufferWrapFailed
         }
         for layer in 0..<config.numLayers {

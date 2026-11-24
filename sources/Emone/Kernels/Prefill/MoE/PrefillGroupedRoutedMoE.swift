@@ -503,7 +503,7 @@ final class PrefillGroupedRoutedMoE {
                     height: Int(p.pairCount),
                     depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
-            enc1.endEncoding()
+            enc1.releaseEncoder()
 
             guard let enc2 = commandBuffer.timedComputeEncoder() else {
                 throw MetalError.commandEncoderFailed
@@ -537,7 +537,7 @@ final class PrefillGroupedRoutedMoE {
                     height: Int(p.pairCount),
                     depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
-            enc2.endEncoding()
+            enc2.releaseEncoder()
 
             consumed += p.pairCount
             microbatchCount += 1

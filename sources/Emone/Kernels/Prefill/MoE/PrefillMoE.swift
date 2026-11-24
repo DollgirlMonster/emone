@@ -39,7 +39,7 @@ final class PrefillMoE {
         enc.dispatchThreads(
             MTLSize(width: Int(d), height: Int(queryCount), depth: 1),
             threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
 }

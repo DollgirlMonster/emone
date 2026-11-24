@@ -95,6 +95,6 @@ final class FusedQKVGEMV {
                 width: 256,
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

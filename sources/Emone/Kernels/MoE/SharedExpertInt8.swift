@@ -232,6 +232,6 @@ final class SharedExpertInt8 {
                 width: 32 * rowsPerTG,
                 height: 1,
                 depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 }

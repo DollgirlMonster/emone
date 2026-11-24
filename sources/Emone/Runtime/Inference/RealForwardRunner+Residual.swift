@@ -588,7 +588,7 @@ extension RealForwardRunner {
         // The selection is a host computation over the scores, so the chunk's
         // command buffer has to land first. The same barrier the routed MoE
         // already takes for its route readback, one layer earlier.
-        commandBuffer.commit()
+        commandBuffer.commitEncoded()
         try waitForCompletion(commandBuffer)
         recordKernelGPU(role: "prefill_qsa_index", commandBuffer)
         guard let next = ctx.queue.makeCommandBuffer() else {

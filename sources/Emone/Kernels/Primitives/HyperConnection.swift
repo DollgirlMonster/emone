@@ -351,7 +351,7 @@ final class HyperConnection {
         enc1.dispatchThreadgroups(
             MTLSize(width: (lowRank + 7) / 8, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        enc1.endEncoding()
+        enc1.releaseEncoder()
         guard let enc2 = commandBuffer.timedComputeEncoder() else {
             throw MetalError.noDevice
         }
@@ -369,7 +369,7 @@ final class HyperConnection {
         enc2.dispatchThreadgroups(
             MTLSize(width: (dim + dPer - 1) / dPer, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        enc2.endEncoding()
+        enc2.releaseEncoder()
     }
 
     /// Same result as `encodeWrite` in one dispatch.
@@ -397,7 +397,7 @@ final class HyperConnection {
         enc.dispatchThreadgroups(
             MTLSize(width: (dim * streams) / 256, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
 }

@@ -94,7 +94,7 @@ final class RMSNorm {
         enc.setBytes(&dVar, length: MemoryLayout<UInt32>.size, index: 2)
         enc.setBytes(&epsVar, length: MemoryLayout<Float>.size, index: 3)
         dispatchOneRow(enc: enc, pso: pso)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// BF16-weight RMSNorm applied to `numHeads` contiguous heads of width
@@ -129,7 +129,7 @@ final class RMSNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: numHeads, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// RMSNorm over `numGroups` contiguous groups of `groupDim`, each against
@@ -166,7 +166,7 @@ final class RMSNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: numGroups * tokens, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     /// No-scale RMSNorm over `numHeads` contiguous heads (v_norm), one dispatch.
@@ -196,7 +196,7 @@ final class RMSNorm {
         enc.dispatchThreadgroups(
             MTLSize(width: numHeads, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     private func encodeWeighted(
@@ -220,7 +220,7 @@ final class RMSNorm {
         enc.setBytes(&dVar, length: MemoryLayout<UInt32>.size, index: 3)
         enc.setBytes(&epsVar, length: MemoryLayout<Float>.size, index: 4)
         dispatchOneRow(enc: enc, pso: pso)
-        enc.endEncoding()
+        enc.releaseEncoder()
     }
 
     private func dispatchOneRow(
