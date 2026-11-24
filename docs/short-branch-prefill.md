@@ -1,10 +1,10 @@
 # Short-branch prefill (Rev2 System One, DFlash verify)
 
-Status (2026-11-21): **written in a cloud session, unbuilt and untested.** No
-Swift or Metal was compiled; the M1 Max is the only machine that can. The
-lint gates that run without a toolchain (force-cast, func-length, sendable,
-arch-path, shell) pass. Brought across the TinyTitan -> emone rename and
-merged with the renamed `claude/practical-hypatia-o9a22c`. Everything below marked *to measure* is a prediction.
+Status (2026-11-22): **built and measured on the M1 Max.** The per-row stage,
+the grouped stage, the row-count router between them and the measurements are
+in "Measured" and "Grouped stage and router" at the end. Sections before them
+are the original design notes, written in a cloud session before anything was
+compiled; where they predict, the measured sections answer.
 
 ## The problem
 
@@ -141,9 +141,9 @@ Read, not built. The branch-point and decision code is now visible on
   the tile path happened to touch every expert of every layer.
 - **Both harnesses reach this path with no code change.** They call
   `runner.prefillChunked(...)`, which `EMONE_SHORT_BRANCH=1` reroutes for calls
-  of at most 128 tokens. In `fastpath` that is the M = 0 column (and the
-  question row of M > 0 cells, which is its own call); the M new tokens of a
-  512+ cell are longer than 128 and stay on the ordinary path.
+  of at most 128 tokens. In `fastpath` that is the M = 0 column only: an
+  M > 0 cell prefills its new tokens and question row in one call longer than
+  128, which stays on the ordinary path (measured: no trace line there).
 - **The decision readout composes with the deferred wait.** Its per-layer
   blits (`captureDecisionBlockRows`) and its final norm
   (`captureDecisionRows`) are their own command buffers, committed after the
@@ -213,3 +213,77 @@ fixed. Candidates, in the order the profile would point to them:
   readback;
 - one command buffer per branch instead of one per layer;
 - the small-chunk QMM (uncommitted on the Mac) for the dense projections.
+
+## Measured (M1 Max, 2026-11-21)
+
+`main` 4308d406 + `claude/short-branch-on-chai` 92f1394a, local merge b6c2f3e4;
+MacBookPro18,2 64 GB, macOS 27.0.1, Swift 6.4.2, Qwen 3.6 35B-A3B 4-bit,
+corpus `docs/*.md`. Build and `ShortBranchPrefillTests` (6/6) pass; golden
+`qwen36-4` with the switch off is identical; probe logits byte-identical in
+every grid cell, switch on and off. Every short call ran `resident_rows`; the
+first warmed 1,411 experts in 868 ms.
+
+lmw.13 grid, M = 0, 2 options, median of 3 (ms), switch off -> on: 1k
+324.5 -> 223.8, 4k 297.2 -> 226.1, 16k 434.2 -> 250.6, 64k 395.3 -> 313.0.
+M > 0 cells do not take the path and move within noise.
+
+The 30-row decision call: wall 218-225 ms, GPU elapsed within ~2 ms of wall,
+so the host waits are gone and the remainder is GPU work. A 16-row call shows
+30-40 ms of GPU idle between buffers (one command buffer per layer, likely).
+Only two row counts were measured, so the fixed / per-row split is not
+reliable (140 ms + 2.6 ms/row or 60 ms + 5.8 ms/row, depending on the run);
+either way the per-row cost is above the tile path's 1.33 ms/token, which fits
+the routed rows reading each picked expert once per row. Next: a row-count
+sweep (8-128) with per-stage GPU time, then GPU-side grouping of the picks by
+expert and one command buffer per branch.
+
+## Grouped stage and router (M1 Max, 2026-11-21/22)
+
+Same machine and model. All timings below are medians of 5 per process, then
+the median of 3 interleaved, rotated rounds 90 s apart: back-to-back processes
+drifted twice by 20-25 % (same stage and rows, GPU busy 189 vs 223 ms), so
+**time only with interleaved rounds**.
+
+**Grouped stage** (`ShortBranchGroupedMoE`): the router's picks are sorted by
+expert on the GPU (`short_branch_group_pairs`), then the tile path's own tiled
+QMM body runs gate+up and down through wrappers that take the expert from the
+resident address table and skip padded work items, then the tile path's
+gather, scatter, token-major reduce and tail. No readback; the grid is the
+worst case. Every readout row is **byte-identical to the tile path**
+(`EMONE_PREFILL_RESIDENT_ROWS=0`) at 1k and 16k, 8-128 rows, at every tile
+edge, so lmw.15's features (tile path) hold on it. The per-row stage is not:
+median cosine to tiles 0.9994-0.99999, worst row 0.816 (16k, 128 rows).
+
+**Tile edge** (rows per QMM tile; ms, per-row / grouped at edge 16 / 32 / 64):
+
+| rows | N = 1k | N = 16k |
+|---|---|---|
+| 8 | 95.7 / 109.5 / 111.2 / 143.9 | 100.6 / 120.8 / 121.2 / 158.1 |
+| 16 | 137.1 / 138.2 / 137.9 / 185.4 | 148.7 / 164.8 / 163.5 / 220.6 |
+| 24 | 178.2 / 156.4 / 154.1 / 209.3 | 191.5 / 187.7 / 184.8 / 251.9 |
+| 32 | 218.4 / 171.2 / 167.0 / 230.0 | 238.1 / 208.6 / 205.0 / 279.1 |
+| 64 | 393.3 / 244.5 / 233.5 / 322.0 | 430.6 / 327.3 / 313.1 / 428.8 |
+
+Edge 32 is the default; at 96-128 rows it is 100-130 ms faster than 64. At
+8 rows the grouped stage's cost is its two QMM launches (edge 32: 31.7 + 15.9
+ms over 40 layers); the GPU grouping pass is ~2 ms, gather / scatter / reduce
+under 1 ms.
+
+**Router** (`ShortBranchRouting`): per-row up to 15 rows at <= 4k held tokens
+and 21 rows at >= 16k (interpolated in log2 between, not measured), grouped at
+edge 32 above. Overrides: `EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS=<n>` (0 = always
+grouped), `EMONE_SHORT_BRANCH_GROUPED=1` / `=0` (force grouped / per-row),
+`EMONE_SHORT_BRANCH_GROUPED_EDGE=16|32|64`. The trace prints
+`grouped_min_rows=` and `grouped_edge=`; `EMONE_SHORT_BRANCH_ROUTE_STATS=1`
+adds per-layer distinct experts, largest expert and work items.
+`ShortBranchPrefillOptions.maxRows` stays 128.
+
+**Decision column** (lmw.13, M = 0, 2 options = a 30-row branch; ms at
+1k / 4k / 16k / 64k): router 165 / 165 / 188 / 241, per-row 219 / 221 / 231 /
+282. An earlier single run showed 205 at 4k; it did not recur in 3 rounds or
+on another held text and 3k / 5k contexts, and that run's GPU itself ran slow
+(GPU busy ~200 vs 156-164 ms on the same stage): drift, not routing (4k has
+the fewest distinct experts of 1k-16k).
+
+Not measured: 4k below 16 rows, 8k, edges at 4k and 64k, calls over 128 rows.
+
