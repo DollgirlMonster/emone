@@ -118,8 +118,10 @@ extension EmoneBench {
         let residual = try makeBuffer(Int(D) * 2, 0x33)
         let y = try makeBuffer(Int(D) * 2, 0)
 
-        // RoutedBlobs arg buffer: 8 device pointers (shared memory, so the
-        // host address is the GPU address).
+        // RoutedBlobs arg buffer: 8 device pointers. These must be GPU
+        // addresses (`gpuAddress`); the CPU address (`contents()`) is a
+        // different virtual address, and writing it here made every expert
+        // read fault to zeros. The blobs are made resident below.
         guard
             let argBuf = device.makeBuffer(
                 length: Int(topK) * 8,
@@ -127,9 +129,9 @@ extension EmoneBench {
         else {
             fatalError("arg buffer alloc failed")
         }
-        let argPtr = argBuf.contents().assumingMemoryBound(to: UnsafeMutableRawPointer?.self)
+        let argPtr = argBuf.contents().assumingMemoryBound(to: UInt64.self)
         for i in 0..<Int(topK) {
-            argPtr[i] = blobs[i].contents()
+            argPtr[i] = blobs[i].gpuAddress
         }
 
         // DIAG (local only): EMONE_BENCH_MOE_REAL=<packed_experts dir> reads 8
@@ -150,7 +152,7 @@ extension EmoneBench {
                 guard
                     let arg = device.makeBuffer(length: Int(topK) * 8, options: .storageModeShared)
                 else { fatalError("arg buffer alloc failed") }
-                let ptrs = arg.contents().assumingMemoryBound(to: UnsafeMutableRawPointer?.self)
+                let ptrs = arg.contents().assumingMemoryBound(to: UInt64.self)
                 var picked = Set<Int>()
                 while picked.count < Int(topK) {
                     picked.insert(Int.random(in: 0..<experts, using: &rng))
@@ -159,7 +161,7 @@ extension EmoneBench {
                     let dst = set.contents().advanced(by: slot * blobBytes)
                     let got = pread(fd, dst, blobBytes, off_t(expert * blobBytes))
                     guard got == blobBytes else { fatalError("short read \(path)") }
-                    ptrs[slot] = dst
+                    ptrs[slot] = set.gpuAddress + UInt64(slot * blobBytes)
                 }
                 close(fd)
                 realSets.append(set)
@@ -260,6 +262,7 @@ extension EmoneBench {
             byteCount: Int(topK) * MemoryLayout<UInt32>.size)
         var activeCount = topK
         for set in realSets { enc.useResource(set, usage: .read) }
+        for blob in blobs { enc.useResource(blob, usage: .read) }
         for iteration in 0..<iterations {
             let argBuf = argBufs[iteration % argBufs.count]
             if runSubset {

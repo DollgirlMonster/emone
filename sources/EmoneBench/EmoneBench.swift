@@ -44,6 +44,16 @@ struct EmoneBench {
             return
         }
 
+        if kernelName == "p1rows" {
+            try runP1Rows(iterations: iterations, context: context)
+            return
+        }
+
+        if kernelName == "p1" {
+            try runP1(iterations: iterations, context: context)
+            return
+        }
+
         if kernelName.hasPrefix("moe") {
             try runMoE(kernelName: kernelName, iterations: iterations, context: context)
             return
@@ -131,7 +141,7 @@ struct EmoneBench {
                     width: rowsPerThreadgroup * 32,
                     height: 1, depth: 1))
         }
-        enc.releaseEncoder()
+        enc.endEncoding()
         cb.commitEncoded()
         cb.waitUntilCompleted()
 

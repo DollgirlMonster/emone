@@ -1420,3 +1420,242 @@ kernel void moe_phase2_down_reduce_k8_rows(
         y[row * DD + d] = half(acc);
     }
 }
+
+// ---------------------------------------------------------------------------
+// EXPERIMENT (EMONE_MOE_P1_VARIANT): phase-1 gate+up variants for the 4-bit
+// decode path, measured by `EmoneBench p1`. The production kernel above is the
+// default; these are selected only by the env switch, and only where their
+// shape assumptions hold (D a multiple of 1024, F a multiple of R).
+//
+// moe_phase1_p1_coopx: the production kernel with x staged once per
+//   threadgroup by every thread (half4 loads) instead of redundantly by each
+//   of the 16 simdgroups. Same per-row arithmetic: byte-identical output.
+// moe_phase1_p1_wide_r{1,2,4}_{tg,dev}: each lane reads 16 contiguous bytes
+//   (uint4) of the gate row and of the up row per step, so a simdgroup covers
+//   512 bytes of a row per step and a 2048-wide row in two. R rows per
+//   simdgroup share the x chunk held in registers; x comes from threadgroup
+//   memory (tg, staged cooperatively) or straight from device memory (dev).
+//   The per-lane sum order differs from production: rounding-level change.
+// ---------------------------------------------------------------------------
+
+kernel void moe_phase1_p1_coopx(
+    device const RoutedBlobs& routed [[buffer(0)]],
+    constant ExpertOffsets& routed_offsets [[buffer(1)]],
+    device const half* x [[buffer(2)]],
+    device half* acts [[buffer(3)]],
+    constant uint& D [[buffer(4)]],
+    constant uint& F [[buffer(5)]],
+    constant uint& top_k [[buffer(6)]],
+    device const uint* io_status [[buffer(7)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint tg_threads [[threads_per_threadgroup]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint sg_count [[simdgroups_per_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    if (!moe_io_ready(io_status)) return;
+    threadgroup half xt[kMoEXMaxD];
+    const uint DD = moe_fc_d(D);
+    for (uint i = tid * 4u; i < DD; i += tg_threads * 4u) {
+        *(threadgroup half4*)(xt + i) = *(device const half4*)(x + i);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint rowg = tg_idx * sg_count + sg_idx;
+    if (rowg >= moe_fc_top_k(top_k) * moe_fc_f(F)) return;
+    const uint slot = rowg / moe_fc_f(F);
+    const uint f = rowg % moe_fc_f(F);
+
+    device const uint8_t* base = routed.blob[slot];
+    const ExpertOffsets re = routed_offsets;
+    const float2 gu = moe_int4_gate_up_rows_simd_tgmem_u16load(
+        xt, base + re.gate_W_off,
+        (device const bfloat*)(base + re.gate_s_off),
+        (device const bfloat*)(base + re.gate_b_off),
+        base + re.up_W_off,
+        (device const bfloat*)(base + re.up_s_off),
+        (device const bfloat*)(base + re.up_b_off),
+        f, DD, lane);
+    if (lane == 0) acts[slot * moe_fc_f(F) + f] = half(moe_hidden_activation(gu.x) * gu.y);
+}
+
+static inline float moe_p1_dot32(uint4 w, thread const float* e) {
+    float d = 0.0f;
+    for (uint j = 0; j < 4u; ++j) {
+        const uint v = w[j];
+        for (uint k = 0; k < 8u; ++k) {
+            d = fma(float((v >> (4u * k)) & 0x0Fu), e[j * 8u + k], d);
+        }
+    }
+    return d;
+}
+
+template <uint R, bool TG>
+static inline void moe_phase1_p1_wide_body(
+    device const RoutedBlobs& routed,
+    constant ExpertOffsets& routed_offsets,
+    device const half* x,
+    threadgroup half* xt,
+    device half* acts,
+    uint D, uint F, uint top_k,
+    uint tg_idx, uint tid, uint tg_threads,
+    uint sg_idx, uint sg_count, uint lane
+) {
+    if (TG) {
+        for (uint i = tid * 4u; i < D; i += tg_threads * 4u) {
+            *(threadgroup half4*)(xt + i) = *(device const half4*)(x + i);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    const uint row0 = (tg_idx * sg_count + sg_idx) * R;
+    if (row0 >= top_k * F) return;
+    const uint slot = row0 / F;
+    const uint f0 = row0 % F;
+    const uint n_groups = D / kMoEGroupSize;
+    const uint row_bytes = D / 2u;
+
+    device const uint8_t* base = routed.blob[slot];
+    const ExpertOffsets re = routed_offsets;
+    device const uint8_t* gW = base + re.gate_W_off;
+    device const uint8_t* uW = base + re.up_W_off;
+    device const bfloat* gS = (device const bfloat*)(base + re.gate_s_off);
+    device const bfloat* gB = (device const bfloat*)(base + re.gate_b_off);
+    device const bfloat* uS = (device const bfloat*)(base + re.up_s_off);
+    device const bfloat* uB = (device const bfloat*)(base + re.up_b_off);
+
+    float g_acc[R];
+    float u_acc[R];
+    for (uint r = 0; r < R; ++r) { g_acc[r] = 0.0f; u_acc[r] = 0.0f; }
+
+    const uint steps = D / 1024u;
+    for (uint s = 0; s < steps; ++s) {
+        const uint byte_off = s * 512u + lane * 16u;
+        const uint elem = byte_off * 2u;
+        const uint g = byte_off / 32u;
+        float e[32];
+        float sum = 0.0f;
+        for (uint q = 0; q < 8u; ++q) {
+            const half4 h = TG ? *(threadgroup const half4*)(xt + elem + q * 4u)
+                               : *(device const half4*)(x + elem + q * 4u);
+            e[q * 4u + 0u] = float(h.x); e[q * 4u + 1u] = float(h.y);
+            e[q * 4u + 2u] = float(h.z); e[q * 4u + 3u] = float(h.w);
+        }
+        for (uint i = 0; i < 32u; ++i) sum += e[i];
+        uint4 gw[R];
+        uint4 uw[R];
+        for (uint r = 0; r < R; ++r) {
+            const uint rb = (f0 + r) * row_bytes + byte_off;
+            gw[r] = *(device const uint4*)(gW + rb);
+            uw[r] = *(device const uint4*)(uW + rb);
+        }
+        for (uint r = 0; r < R; ++r) {
+            const uint gi = (f0 + r) * n_groups + g;
+            g_acc[r] = fma(float(gS[gi]), moe_p1_dot32(gw[r], e), g_acc[r]);
+            g_acc[r] = fma(float(gB[gi]), sum, g_acc[r]);
+            u_acc[r] = fma(float(uS[gi]), moe_p1_dot32(uw[r], e), u_acc[r]);
+            u_acc[r] = fma(float(uB[gi]), sum, u_acc[r]);
+        }
+    }
+    for (uint r = 0; r < R; ++r) {
+        const float gsum = simd_sum(g_acc[r]);
+        const float usum = simd_sum(u_acc[r]);
+        if (lane == 0) acts[slot * F + f0 + r] = half(moe_hidden_activation(gsum) * usum);
+    }
+}
+
+#define MOE_P1_WIDE(NAME, R, TGX)                                              \
+kernel void NAME(                                                              \
+    device const RoutedBlobs& routed [[buffer(0)]],                            \
+    constant ExpertOffsets& routed_offsets [[buffer(1)]],                      \
+    device const half* x [[buffer(2)]],                                        \
+    device half* acts [[buffer(3)]],                                           \
+    constant uint& D [[buffer(4)]],                                            \
+    constant uint& F [[buffer(5)]],                                            \
+    constant uint& top_k [[buffer(6)]],                                        \
+    device const uint* io_status [[buffer(7)]],                                \
+    uint tg_idx [[threadgroup_position_in_grid]],                              \
+    uint tid [[thread_index_in_threadgroup]],                                  \
+    uint tg_threads [[threads_per_threadgroup]],                               \
+    uint sg_idx [[simdgroup_index_in_threadgroup]],                            \
+    uint sg_count [[simdgroups_per_threadgroup]],                              \
+    uint lane [[thread_index_in_simdgroup]]                                    \
+) {                                                                            \
+    if (!moe_io_ready(io_status)) return;                                      \
+    threadgroup half xt[TGX ? kMoEXMaxD : 4];                                  \
+    moe_phase1_p1_wide_body<R, TGX>(                                           \
+        routed, routed_offsets, x, xt, acts,                                   \
+        moe_fc_d(D), moe_fc_f(F), moe_fc_top_k(top_k),                         \
+        tg_idx, tid, tg_threads, sg_idx, sg_count, lane);                      \
+}
+
+MOE_P1_WIDE(moe_phase1_p1_wide_r1_tg, 1, true)
+MOE_P1_WIDE(moe_phase1_p1_wide_r2_tg, 2, true)
+MOE_P1_WIDE(moe_phase1_p1_wide_r4_tg, 4, true)
+MOE_P1_WIDE(moe_phase1_p1_wide_r1_dev, 1, false)
+MOE_P1_WIDE(moe_phase1_p1_wide_r2_dev, 2, false)
+MOE_P1_WIDE(moe_phase1_p1_wide_r4_dev, 4, false)
+
+// EXPERIMENT (EmoneBench p1rows): moe_phase1_gate_up_act_u16load_rows with
+// each simdgroup reading its token's x from device memory (the dev_vec helper
+// the r16 kernel uses) instead of every simdgroup staging all of x into
+// threadgroup memory. Same per-row arithmetic.
+kernel void moe_phase1_p1_rows_dev(
+    device const RoutedBlobRows& routed [[buffer(0)]],
+    constant ExpertOffsets& routed_offsets [[buffer(1)]],
+    device const half* x [[buffer(2)]],
+    device half* acts [[buffer(3)]],
+    constant uint& D [[buffer(4)]],
+    constant uint& F [[buffer(5)]],
+    constant uint& top_k [[buffer(6)]],
+    uint2 tg [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 16;
+    const uint DD = moe_fc_d(D);
+    const uint FF = moe_fc_f(F);
+    const uint K = moe_fc_top_k(top_k);
+    const uint row = tg.y;
+    const uint rowg = tg.x * rows_per_tg + sg_idx;
+    if (rowg >= K * FF) return;
+    const uint pair = row * K + rowg / FF;
+    const uint f = rowg % FF;
+
+    device const uint8_t* base = routed.blob[pair];
+    const ExpertOffsets re = routed_offsets;
+    const float2 gu = moe_int4_gate_up_rows_simd_dev_vec_u16load(
+        base + re.gate_W_off,
+        (device const bfloat*)(base + re.gate_s_off),
+        (device const bfloat*)(base + re.gate_b_off),
+        base + re.up_W_off,
+        (device const bfloat*)(base + re.up_s_off),
+        (device const bfloat*)(base + re.up_b_off),
+        x + row * DD, f, DD, lane);
+    if (lane == 0) acts[pair * FF + f] = half(moe_hidden_activation(gu.x) * gu.y);
+}
+
+// EXPERIMENT (EMONE_MOE_P1_VARIANT=subset_dev): the partial-residency subset
+// phase 1 with x read from device memory (the existing subset body / dev_vec
+// helper) instead of every simdgroup staging all of x. Same buffers and
+// dispatch as moe_phase1_gate_up_act_subset_u16load; same per-row arithmetic.
+kernel void moe_phase1_p1_subset_dev(
+    device const RoutedBlobs& routed [[buffer(0)]],
+    constant ExpertOffsets& routed_offsets [[buffer(1)]],
+    device const half* x [[buffer(2)]],
+    device half* acts [[buffer(3)]],
+    constant uint& D [[buffer(4)]],
+    constant uint& F [[buffer(5)]],
+    constant uint& top_k [[buffer(6)]],
+    device const uint* active_slots [[buffer(7)]],
+    constant uint& active_count [[buffer(8)]],
+    device const uint* io_status [[buffer(9)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    if (!moe_io_ready(io_status)) return;
+    moe_phase1_gate_up_act_subset_u16load_body(
+        routed, routed_offsets, x, acts, active_slots, active_count,
+        moe_fc_d(D), moe_fc_f(F), moe_fc_top_k(top_k), 16u, tg_idx, sg_idx, lane);
+}
