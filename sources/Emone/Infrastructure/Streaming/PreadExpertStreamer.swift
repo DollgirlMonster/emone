@@ -109,6 +109,12 @@ public final class PreadExpertStreamer: @unchecked Sendable {
     public let poolSlotStride: Int
 
     private let fd: Int32
+    /// F_NOCACHE descriptor for speculative (prefetch ring) reads, or -1 if it
+    /// could not be opened. Speculative reads used to go through the layer's
+    /// batch reader, whose mutex made that layer's demand batch wait for a
+    /// still-running speculative read. Kept apart from `fd`, a page-cache
+    /// descriptor, so it adds no undeclared page-cache footprint.
+    private let speculativeFD: Int32
 
     /// Bounded-footprint reader. On by default; `EMONE_BOUNDED_IO=0` opts out.
     ///
@@ -338,9 +344,18 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         self.slotPinCount = [Int](repeating: 0, count: slotCount)
         self.expertUseCount = [Int](repeating: 0, count: max(1, layout.expertsPerLayer))
         self.expertLoadCount = [Int](repeating: 0, count: max(1, layout.expertsPerLayer))
+        // Opened last, after every throwing step, so no failure path leaks it.
+        let specFD = open(layout.path, O_RDONLY)
+        if specFD >= 0 && fcntl(specFD, F_NOCACHE, 1) != 0 {
+            close(specFD)
+            self.speculativeFD = -1
+        } else {
+            self.speculativeFD = specFD
+        }
     }
 
     deinit {
+        if speculativeFD >= 0 { close(speculativeFD) }
         close(fd)
     }
 
@@ -1233,7 +1248,16 @@ public final class PreadExpertStreamer: @unchecked Sendable {
             [self, operation, safeDestinations] in
             operation.markInFlight()
             do {
-                if let boundedReader {
+                if speculativeFD >= 0 {
+                    // Own F_NOCACHE descriptor: a speculative read here never
+                    // holds the layer's batch reader, so a demand batch for
+                    // this layer cannot queue behind it.
+                    for (offset, destination) in zip(offsets, safeDestinations.values) {
+                        try readFull(
+                            into: destination, fileOffset: offset,
+                            count: Int(layout.expertStride), descriptor: speculativeFD)
+                    }
+                } else if let boundedReader {
                     try boundedReader.fetch(offsets: offsets, into: safeDestinations.values)
                 } else {
                     for (offset, destination) in zip(offsets, safeDestinations.values) {
@@ -1430,12 +1454,14 @@ public final class PreadExpertStreamer: @unchecked Sendable {
     private func readFull(
         into destination: UnsafeMutableRawPointer,
         fileOffset: UInt64,
-        count: Int
+        count: Int,
+        descriptor: Int32? = nil
     ) throws {
+        let readFD = descriptor ?? fd
         var filled = 0
         while filled < count {
             let readCount = pread(
-                fd,
+                readFD,
                 destination.advanced(by: filled),
                 count - filled,
                 off_t(fileOffset) + off_t(filled))
