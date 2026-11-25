@@ -36,6 +36,30 @@ extension RealForwardRunner {
     static let layerTraceFlag =
         ProcessInfo.processInfo.environment["EMONE_LAYER_TRACE"] != nil
 
+    /// `EMONE_DECODE_CB_LAYERS=N` (default off, read once): a resident token
+    /// puts N whole layers into one command buffer -- attention, tail, shared
+    /// and routed stages -- instead of two buffers per layer (~80 a token on
+    /// Qwen 3.6). Same kernels, same encode order, same queue, and the
+    /// buffers' resources are hazard-tracked, so every kernel still sees the
+    /// writes of the ones before it; only the buffer boundaries go. A value
+    /// at or above the layer count makes the whole stack one buffer.
+    static let decodeLayersPerCommandBuffer: Int? = parseDecodeLayersPerCommandBuffer(
+        ProcessInfo.processInfo.environment["EMONE_DECODE_CB_LAYERS"])
+
+    static func parseDecodeLayersPerCommandBuffer(_ raw: String?) -> Int? {
+        guard let raw, let n = Int(raw.trimmingCharacters(in: .whitespaces)), n > 0
+        else { return nil }
+        return n
+    }
+
+    /// Layers per command buffer for a resident token, or nil for the
+    /// per-layer buffers. A sparse-attention entry may commit and replace the
+    /// attention buffer mid-layer, so that family keeps per-layer buffers.
+    var groupedDecodeLayersPerCommandBuffer: Int? {
+        guard let n = Self.decodeLayersPerCommandBuffer, qsaIndexer == nil else { return nil }
+        return n
+    }
+
     /// Why no token can take the resident path under this runner's settings,
     /// whatever the cache holds; nil when the settings allow it. The cache's
     /// own state (every expert resident or not) is `prepareResidentDecode`'s.
@@ -228,8 +252,9 @@ extension RealForwardRunner {
     /// layer's buffers are kept for the end-of-token check.
     func encodeResidentRoutedMoE(
         layer L: Int,
-        attnCB: MTLCommandBuffer, softmaxCB: MTLCommandBuffer?,
-        tailCB routedCB: MTLCommandBuffer
+        attnCB: MTLCommandBuffer?, softmaxCB: MTLCommandBuffer?,
+        tailCB routedCB: MTLCommandBuffer,
+        commit: Bool = true
     ) throws {
         guard L < residentLayers.count, let addresses = residentLayers[L].addresses,
             let argBuffer = residentArgBuffer, let routeLog = residentRouteLog
@@ -258,10 +283,14 @@ extension RealForwardRunner {
             allResident: slots)
         try encodeResidualExitDecode(
             commandBuffer: routedCB, hidden: hidden, delta: h2Buf, sublayer: .mlp, layer: L)
+        // Grouped (`EMONE_DECODE_CB_LAYERS`): the buffer holds several whole
+        // layers and is committed, and later checked, once, after its last.
+        guard commit else { return }
         routedCB.commitEncoded()
-        residentTokenBuffers.append(("attn_norm_qkv", attnCB))
+        if let attnCB { residentTokenBuffers.append(("attn_norm_qkv", attnCB)) }
         if let softmaxCB { residentTokenBuffers.append(("attn_softmax", softmaxCB)) }
-        residentTokenBuffers.append(("tail_router_shared_routed", routedCB))
+        residentTokenBuffers.append(
+            (attnCB == nil ? "decode_layer_group" : "tail_router_shared_routed", routedCB))
     }
 
     /// Once the token's last buffer has landed: surface any command error,
@@ -279,6 +308,9 @@ extension RealForwardRunner {
             }
             recordKernelGPU(role: role, cb)
         }
+        if CommandBufferGapTrace.enabled {
+            CommandBufferGapTrace.record(residentTokenBuffers.map(\.cb))
+        }
         guard let routeLog = residentRouteLog else { return }
         let k = cfg.topKExperts
         let ids = routeLog.contents().bindMemory(to: UInt32.self, capacity: cfg.numLayers * k)
@@ -292,5 +324,77 @@ extension RealForwardRunner {
             #endif
         }
         totalResidentTokens &+= 1
+    }
+}
+
+/// `EMONE_CB_GAP_TRACE=1` (default off, read once): for every resident decode
+/// token, the GPU idle between its layer command buffers, and how much of
+/// that idle is the GPU waiting for the CPU to hand it the next buffer. One
+/// line goes to stderr at exit.
+///
+/// For consecutive buffers a then b, the gap is `b.gpuStartTime -
+/// a.gpuEndTime`. The CPU-late part is how far `b.kernelStartTime` (when the
+/// host began scheduling b, i.e. just after its commit) lies past
+/// `a.gpuEndTime`, capped at the gap: idle the GPU spent with nothing queued.
+/// The rest is the cost of crossing a buffer boundary with b already queued.
+enum CommandBufferGapTrace {
+    static let enabled: Bool = {
+        let on = ProcessInfo.processInfo.environment["EMONE_CB_GAP_TRACE"] == "1"
+        if on { atexit { CommandBufferGapTrace.report() } }
+        return on
+    }()
+
+    nonisolated(unsafe) static var tokens = 0
+    nonisolated(unsafe) static var buffers = 0
+    nonisolated(unsafe) static var gapSeconds = 0.0
+    nonisolated(unsafe) static var cpuLateSeconds = 0.0
+    nonisolated(unsafe) static var busySeconds = 0.0
+    nonisolated(unsafe) static var spanSeconds = 0.0
+
+    /// The token's buffers in commit order; a buffer listed twice counts once.
+    static func record(_ list: [MTLCommandBuffer]) {
+        var seen = Set<ObjectIdentifier>()
+        let cbs = list.filter { seen.insert(ObjectIdentifier($0)).inserted }
+        guard let first = cbs.first, let last = cbs.last, first.gpuEndTime > 0 else { return }
+        let summary = summarize(
+            cbs.map { (schedule: $0.kernelStartTime, start: $0.gpuStartTime, end: $0.gpuEndTime) })
+        tokens += 1
+        buffers += cbs.count
+        gapSeconds += summary.gap
+        cpuLateSeconds += summary.cpuLate
+        busySeconds += summary.busy
+        spanSeconds += last.gpuEndTime - first.gpuStartTime
+    }
+
+    /// Pure arithmetic over (scheduled, start, end) host times, for tests.
+    static func summarize(
+        _ spans: [(schedule: Double, start: Double, end: Double)]
+    ) -> (gap: Double, cpuLate: Double, busy: Double) {
+        var gap = 0.0
+        var late = 0.0
+        var busy = 0.0
+        for (i, s) in spans.enumerated() {
+            busy += max(0, s.end - s.start)
+            guard i > 0 else { continue }
+            let g = max(0, s.start - spans[i - 1].end)
+            gap += g
+            late += min(g, max(0, s.schedule - spans[i - 1].end))
+        }
+        return (gap, late, busy)
+    }
+
+    static func report() {
+        guard tokens > 0 else {
+            FileHandle.standardError.write(Data("cb gaps: no resident tokens\n".utf8))
+            return
+        }
+        let t = Double(tokens)
+        let line = String(
+            format: "cb gaps: %d tokens, %.1f buffers/token, layer span %.3f ms/token, "
+                + "busy %.3f, idle %.3f (cpu-late %.3f, boundary %.3f) ms/token\n",
+            tokens, Double(buffers) / t, spanSeconds / t * 1e3, busySeconds / t * 1e3,
+            gapSeconds / t * 1e3, cpuLateSeconds / t * 1e3,
+            (gapSeconds - cpuLateSeconds) / t * 1e3)
+        FileHandle.standardError.write(Data(line.utf8))
     }
 }
