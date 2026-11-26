@@ -218,6 +218,11 @@ extension RealForwardRunner {
         // Every expert resident and no diagnostic that needs the picks
         // mid-token: the layers are encoded with no router readback.
         let residentToken = try prepareResidentDecode()
+        // A resident token encodes N whole layers into one command buffer
+        // instead of two buffers per layer (EMONE_DECODE_CB_LAYERS, default 4;
+        // see `groupedDecodeLayersPerCommandBuffer`). nil: per-layer buffers.
+        let layersPerCB = residentToken ? groupedDecodeLayersPerCommandBuffer : nil
+        var groupCB: MTLCommandBuffer?
         for L in 0..<cfg.numLayers {
             // Dumping drains the previous layer's routed command first. The
             // residual is only settled once that has landed, and a dump taken
@@ -276,9 +281,10 @@ extension RealForwardRunner {
             // attention pass on full layers, tailCB = O-proj + residual +
             // post-norm + router. Same queue, same order, one wait on the
             // last CB; only the router readback forces the barrier.
-            guard var attnCB = ctx.queue.makeCommandBuffer() else {
+            guard var attnCB = groupCB ?? ctx.queue.makeCommandBuffer() else {
                 throw ModelError.residentBufferWrapFailed
             }
+            if layersPerCB != nil { groupCB = attnCB }
             // The PLE block rewrites the wide residual before the attention
             // read gate sees it, so it is encoded ahead of the entry.
             try encodePLEDecode(
@@ -316,7 +322,11 @@ extension RealForwardRunner {
                 try rotate(&attnCB, role: "glue.entry_attn")
             }
             var softmaxCB: MTLCommandBuffer?
-            guard var tailCB = ctx.queue.makeCommandBuffer() else {
+            // Grouped: the tail (and the softmax pass) go into the attention's
+            // own buffer, in the same encode order, so the kernels run in the
+            // order they would across separate buffers on this queue.
+            guard var tailCB = layersPerCB != nil ? attnCB : ctx.queue.makeCommandBuffer()
+            else {
                 throw ModelError.residentBufferWrapFailed
             }
 
@@ -326,7 +336,8 @@ extension RealForwardRunner {
                 layer: L, position: position,
                 slot: slot,
                 isLinear: isLinear, rmsEps: eps,
-                keepMask: keepMask)
+                keepMask: keepMask,
+                softmaxInAttentionBuffer: layersPerCB != nil)
             try encodeResidualExitDecode(
                 commandBuffer: tailCB,
                 hidden: hidden, delta: oOut,
@@ -404,6 +415,21 @@ extension RealForwardRunner {
                         topK: UInt32(cfg.topKExperts),
                         numExperts: UInt32(cfg.numExperts))
                 }
+            }
+            if let layersPerCB {
+                // One buffer carries attention, tail, shared and routed stages
+                // of this layer and the ones before it in the group; it is
+                // committed after the group's last layer.
+                try encodeSharedExpert(commandBuffer: tailCB, layer: L)
+                let closesGroup = (L + 1) % layersPerCB == 0 || L + 1 == cfg.numLayers
+                try encodeResidentRoutedMoE(
+                    layer: L, attnCB: nil, softmaxCB: nil, tailCB: tailCB,
+                    commit: closesGroup)
+                if closesGroup { groupCB = nil }
+                let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                totalCb1Nanos &+= now - tCb1Start
+                totalBodyNanos &+= now - tBodyStart
+                continue
             }
             attnCB.commitEncoded()
             if let attentionCB = softmaxCB {
@@ -893,7 +919,8 @@ extension RealForwardRunner {
         slot: Int = 0,
         isLinear: Bool,
         rmsEps eps: Float,
-        keepMask: MTLBuffer? = nil
+        keepMask: MTLBuffer? = nil,
+        softmaxInAttentionBuffer: Bool = false
     ) throws {
         let D = UInt32(cfg.hiddenSize)
         let isFull = cfg.fullAttentionLayerMask[L] == 1
@@ -1015,10 +1042,13 @@ extension RealForwardRunner {
             }
             let keyView = kv.keyView(layer: L, slot: slot, validTokenCount: Int(seqLen))
             let valueView = kv.valueView(layer: L, slot: slot, validTokenCount: Int(seqLen))
-            guard let attentionCB = ctx.queue.makeCommandBuffer() else {
+            guard
+                let attentionCB = softmaxInAttentionBuffer
+                    ? attnCB : ctx.queue.makeCommandBuffer()
+            else {
                 throw ModelError.residentBufferWrapFailed
             }
-            softmaxCB = attentionCB
+            if !softmaxInAttentionBuffer { softmaxCB = attentionCB }
             if isFull {
                 try attention.encodeFull(
                     commandBuffer: attentionCB,
