@@ -1247,6 +1247,22 @@ extension RealForwardRunner {
         let residentBeforePlan =
             prefetchTraceFD >= 0
             ? try model.routedExpertResidentIDs(layer: L) : []
+        if let pending = predictivePrefetch?.pendingOperations(layer: L, experts: experts),
+            !pending.isEmpty
+        {
+            // The ring guessed this expert and its read is still under way.
+            // Reading it again would queue a second full read behind the first
+            // (same bytes), so await the first and let the plan adopt it. A
+            // failed speculative read is not adopted (`readyBuffers` needs
+            // `.completed`), and the demand path covers it as before.
+            // 125B 4-bit, M1 Max, Chai, two interleaved rounds after a warmup:
+            // 6.30 -> 6.64 tok/s together with the ring's own descriptor,
+            // adopted 12.0 -> 17.7 reads/token, output byte-identical.
+            let tJoin = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+            for op in pending.values { try? await op.completion() }
+            totalPrefetchJoinNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tJoin
+            totalPrefetchJoined &+= UInt64(pending.count)
+        }
         let readyPrefetches = predictivePrefetch?.readyBuffers(layer: L, experts: experts) ?? [:]
         let cachePlanStarted = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         let plannedFetch =
@@ -1554,7 +1570,10 @@ extension RealForwardRunner {
             // beside it (-1.4%), the probe-weight margin gate (-4.2%) and a
             // lower disk tier (-0.6%). Each is recorded in
             // docs/qwen38-prefetch-predictor-study.md and Lever 5/8 of
-            // benchmark/internal-speeds/v2-qwen38-4bit-telemetry.txt.
+            // benchmark/internal-speeds/v2-qwen38-4bit-telemetry.txt. Rechecked
+            // on the M1 Max 125B with late reads awaited (2026-11-25): depth 2
+            // 6.36 and depth 3 6.04 tok/s against 6.64 at depth 1; issuing it
+            // before this layer's demand reads finish, -13.5%.
             let target = L + 1
             let prediction = predictedNextLayer
             let resident = Set(try model.routedExpertResidentIDs(layer: target))

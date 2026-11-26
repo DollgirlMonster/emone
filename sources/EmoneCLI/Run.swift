@@ -395,6 +395,20 @@ public func run(
             }
             stderr.write(Data((line + "\n").utf8))
         }
+        if runner.totalPrefetchIssued > 0, stats.newTokens > 0 {
+            // Per-token ring accounting. Covers prefill too when the ring ran
+            // there; decode dominates a short prompt.
+            let n = Double(stats.newTokens)
+            var line = "[prefetch]"
+            line += String(
+                format: " issued/tok=%.2f adopted/tok=%.2f joined/tok=%.2f join_ms/tok=%.2f",
+                Double(runner.totalPrefetchIssued) / n,
+                Double(runner.totalPrefetchAdopted) / n,
+                Double(runner.totalPrefetchJoined) / n,
+                Double(runner.totalPrefetchJoinNanos) / 1e6 / n)
+            if let ring = runner.prefetchRingSummary { line += " " + ring }
+            stderr.write(Data((line + "\n").utf8))
+        }
         if !args.quiet {
             let tokensPerSecond =
                 stats.decodeSeconds > 0

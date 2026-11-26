@@ -125,8 +125,10 @@ final class ExpertPrefetchRing: @unchecked Sendable {
         }
     }
 
-    /// Completed raw bytes for one exact route. In-flight reads are not
-    /// awaited: a demand miss remains authoritative and may start immediately.
+    /// Completed raw bytes for one exact route. The decode path first awaits
+    /// any read for a selected expert that is still running
+    /// (`pendingOperations`), so a right-but-late prediction is adopted rather
+    /// than read a second time.
     /// Marks a token boundary: every finished read in the ring belongs to
     /// the token that just ended, so its slot is free. Without this, a
     /// wrong prediction for one of the last layers kept its slot until the
@@ -159,6 +161,22 @@ final class ExpertPrefetchRing: @unchecked Sendable {
         for slot in slots where slot.layer == layer && requested.contains(slot.expert) {
             if slot.operation?.state == .completed {
                 result[slot.expert] = slot.buffer
+            }
+        }
+        return result
+    }
+
+    /// Reads for this exact route that are still queued or in flight. The
+    /// decode path awaits these instead of reading the same expert again: the
+    /// bytes are identical, and the speculative read has a head start.
+    func pendingOperations(layer: Int, experts: [Int]) -> [Int: ExpertLoadOperation] {
+        let requested = Set(experts)
+        lock.lock()
+        defer { lock.unlock() }
+        var result: [Int: ExpertLoadOperation] = [:]
+        for slot in slots where slot.layer == layer && requested.contains(slot.expert) {
+            if let op = slot.operation, op.state == .submitted || op.state == .inFlight {
+                result[slot.expert] = op
             }
         }
         return result

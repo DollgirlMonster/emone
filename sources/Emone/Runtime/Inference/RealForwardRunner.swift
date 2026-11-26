@@ -1514,6 +1514,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     public var totalPrefetchIssued: UInt64 { UInt64(predictivePrefetch?.issuedReads ?? 0) }
     public var prefetchRingSummary: String? { predictivePrefetch?.summary }
     public internal(set) var totalPrefetchAdopted: UInt64 = 0
+    /// Speculative reads for a selected expert that were still running when
+    /// their layer was planned, awaited instead of re-read, and the wall spent
+    /// awaiting them.
+    public internal(set) var totalPrefetchJoined: UInt64 = 0
+    public internal(set) var totalPrefetchJoinNanos: UInt64 = 0
     public internal(set) var totalPreambleNanos: UInt64 = 0
     public internal(set) var totalPreambleReleaseNanos: UInt64 = 0
     public internal(set) var totalPreamblePinNanos: UInt64 = 0
