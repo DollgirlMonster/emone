@@ -6,12 +6,13 @@ import Testing
 /// `EMONE_CB_GAP_TRACE` arithmetic. The grouped path itself needs a GPU and a
 /// model: it is checked on the M1 Max with the golden baseline, not here.
 @Suite struct DecodeCommandBufferGroupingTests {
-    @Test func layersPerBufferIsOffUnlessAPositiveCount() {
-        #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer(nil) == nil)
-        #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer("") == nil)
+    @Test func layersPerBufferDefaultsToFourAndZeroTurnsItOff() {
+        #expect(RealForwardRunner.defaultDecodeLayersPerCommandBuffer == 4)
+        #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer(nil) == 4)
+        #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer("") == 4)
+        #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer("four") == 4)
         #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer("0") == nil)
         #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer("-4") == nil)
-        #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer("four") == nil)
         #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer("1") == 1)
         #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer(" 10 ") == 10)
         #expect(RealForwardRunner.parseDecodeLayersPerCommandBuffer("40") == 40)

@@ -218,9 +218,9 @@ extension RealForwardRunner {
         // Every expert resident and no diagnostic that needs the picks
         // mid-token: the layers are encoded with no router readback.
         let residentToken = try prepareResidentDecode()
-        // EMONE_DECODE_CB_LAYERS=N: a resident token encodes N whole layers
-        // into one command buffer instead of two buffers per layer (see
-        // `groupedDecodeLayersPerCommandBuffer`). nil keeps today's buffers.
+        // A resident token encodes N whole layers into one command buffer
+        // instead of two buffers per layer (EMONE_DECODE_CB_LAYERS, default 4;
+        // see `groupedDecodeLayersPerCommandBuffer`). nil: per-layer buffers.
         let layersPerCB = residentToken ? groupedDecodeLayersPerCommandBuffer : nil
         var groupCB: MTLCommandBuffer?
         for L in 0..<cfg.numLayers {

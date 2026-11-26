@@ -36,20 +36,32 @@ extension RealForwardRunner {
     static let layerTraceFlag =
         ProcessInfo.processInfo.environment["EMONE_LAYER_TRACE"] != nil
 
-    /// `EMONE_DECODE_CB_LAYERS=N` (default off, read once): a resident token
-    /// puts N whole layers into one command buffer -- attention, tail, shared
-    /// and routed stages -- instead of two buffers per layer (~80 a token on
-    /// Qwen 3.6). Same kernels, same encode order, same queue, and the
-    /// buffers' resources are hazard-tracked, so every kernel still sees the
-    /// writes of the ones before it; only the buffer boundaries go. A value
-    /// at or above the layer count makes the whole stack one buffer.
+    /// `EMONE_DECODE_CB_LAYERS=N` (default 4, read once; 0 turns it off): a
+    /// resident token puts N whole layers into one command buffer --
+    /// attention, tail, shared and routed stages -- instead of two buffers per
+    /// layer (~80 a token on Qwen 3.6). Same kernels, same encode order, same
+    /// queue, and the buffers' resources are hazard-tracked, so every kernel
+    /// still sees the writes of the ones before it; only the buffer boundaries
+    /// go. A value at or above the layer count makes the whole stack one buffer.
+    ///
+    /// Measured 2026-11-25 (M1 Max 64 GB, Qwen 3.6 35B-A3B 4-bit, warm, 256
+    /// tokens, median of 5 interleaved rounds, output byte-identical): off /
+    /// 4 / 10 / 40 gave 64.3 / 72.1 / 69.0 / 56.3 tok/s at short context,
+    /// 57.8 / 63.1 / 60.3 / 50.0 at 8k and 44.2 / 47.0 / 45.7 / 38.8 at 32k.
+    /// In-token GPU idle fell from 2.04 to 0.29 ms at 4. One buffer per token
+    /// is slower than none grouped -- probably (not yet tested) because the
+    /// GPU then cannot start until the whole token has been encoded.
     static let decodeLayersPerCommandBuffer: Int? = parseDecodeLayersPerCommandBuffer(
         ProcessInfo.processInfo.environment["EMONE_DECODE_CB_LAYERS"])
 
+    static let defaultDecodeLayersPerCommandBuffer = 4
+
+    /// Unset or unparseable: the default. 0 or negative: off (per-layer
+    /// buffers, as before the switch existed).
     static func parseDecodeLayersPerCommandBuffer(_ raw: String?) -> Int? {
-        guard let raw, let n = Int(raw.trimmingCharacters(in: .whitespaces)), n > 0
-        else { return nil }
-        return n
+        guard let raw, let n = Int(raw.trimmingCharacters(in: .whitespaces))
+        else { return defaultDecodeLayersPerCommandBuffer }
+        return n > 0 ? n : nil
     }
 
     /// Layers per command buffer for a resident token, or nil for the
