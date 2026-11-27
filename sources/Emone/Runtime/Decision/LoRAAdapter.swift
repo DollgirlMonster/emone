@@ -69,6 +69,16 @@ public final class LoRAAdapter: @unchecked Sendable {
 
     func entry(layer: Int, target: LoRATarget) -> Entry? { entries[layer]?[target] }
 
+    /// Every adapted projection with its shape, for `LoRAAdapterFit`.
+    public var declared: [LoRAAdapterFit.Declared] {
+        entries.flatMap { layer, targets in
+            targets.map { target, entry in
+                LoRAAdapterFit.Declared(
+                    layer: layer, target: target, rows: entry.rows, columns: entry.columns)
+            }
+        }
+    }
+
     /// Reads and checks a package. `baseModelID` is the install the adapter
     /// is to run over; a package naming another base is refused.
     public init(

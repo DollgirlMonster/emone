@@ -176,6 +176,16 @@ extension RealForwardRunner {
     /// Prefills a short branch of `tokens` at `startPosition` of `slot`,
     /// holding the forward gate for the call. See the type comment above for
     /// what it changes and what it assumes.
+    ///
+    /// `adapter` (Emone-lmw.14) is System One's LoRA, laid over this call's
+    /// prefill projections only and removed before the call returns, thrown
+    /// or not: the held context before `startPosition` was computed without
+    /// it and is never touched, and the next prefill or decode runs on the
+    /// base weights again. The KV and GDN rows the branch writes do carry it,
+    /// which is why the caller rewinds them. Nil (the default) adds nothing:
+    /// no check, no kernel, no delta encoded. Refused before any GPU work when
+    /// the adapter does not fit this model, and when a standing adapter
+    /// (`setLoRAAdapter`) is already set, since the two would not compose.
     public func prefillShortBranch(
         tokens: ArraySlice<Int32>,
         startPosition: Int,
@@ -183,20 +193,51 @@ extension RealForwardRunner {
         outputMode: PrefillOutputMode,
         config: PrefillRuntimeConfig,
         into logits: MTLBuffer,
-        options: ShortBranchPrefillOptions = ShortBranchPrefillOptions()
+        options: ShortBranchPrefillOptions = ShortBranchPrefillOptions(),
+        adapter: LoRAAdapter? = nil
     ) async throws -> ShortBranchPrefillReport {
         try await forwardStepGate.acquire()
         forwardActivityCount &+= 1
         do {
-            let report = try await runShortBranchPrefill(
-                tokens: tokens, startPosition: startPosition, slot: slot,
-                outputMode: outputMode, config: config, into: logits, options: options)
+            let report: ShortBranchPrefillReport
+            if let adapter {
+                report = try await withBranchAdapter(
+                    adapter, rows: min(tokens.count, config.chunkTokens)
+                ) {
+                    try await runShortBranchPrefill(
+                        tokens: tokens, startPosition: startPosition, slot: slot,
+                        outputMode: outputMode, config: config, into: logits, options: options)
+                }
+            } else {
+                report = try await runShortBranchPrefill(
+                    tokens: tokens, startPosition: startPosition, slot: slot,
+                    outputMode: outputMode, config: config, into: logits, options: options)
+            }
             await forwardStepGate.release()
             return report
         } catch {
             await forwardStepGate.release()
             throw error
         }
+    }
+
+    /// Runs `body` with `adapter` laid over prefill, and removes it after
+    /// whether `body` returns or throws. The caller holds the forward gate, so
+    /// no other prefill or decode can see the adapter while it is set.
+    func withBranchAdapter<T>(
+        _ adapter: LoRAAdapter, rows: Int, _ body: () async throws -> T
+    ) async throws -> T {
+        guard loraAdapter == nil else {
+            throw ModelError.internalInconsistency(
+                detail: "a branch adapter cannot be laid over a runner with a standing adapter")
+        }
+        if let refusal = loraAdapterRefusal(adapter, chunkRows: rows) {
+            throw ModelError.internalInconsistency(detail: refusal)
+        }
+        try ensureLoRADeltaKernel()
+        loraAdapter = adapter
+        defer { loraAdapter = nil }
+        return try await body()
     }
 
     /// `prefillShortBranch` for a caller that already holds the forward gate.

@@ -189,6 +189,12 @@ extension RealForwardRunner {
         // unusably slow -- every token pays a full pass over the routed
         // experts, where a chunk amortizes them -- so it is not the default.
         if cfg.hyperConnections.enabled && Self.sequentialHyperConnectionPrefill {
+            // That oracle runs decode, which no adapter or patch reaches:
+            // refuse rather than answer from the base weights alone.
+            guard !hasLowRankDeltas else {
+                throw PrefillError.chunkedUnsupported(
+                    "the sequential hyper-connection prefill carries no runtime LoRA")
+            }
             return try await prefillSequentialHyperConnection(
                 tokens: tokens, startPosition: startPosition, slot: slot,
                 outputMode: outputMode, into: logits, onProgress: onProgress)
@@ -443,7 +449,11 @@ extension RealForwardRunner {
             // the ANE: its chunk bookkeeping (`finishChunk`) cannot represent a
             // stop, so that readout reads the GPU path's residual. A capture
             // riding an ordinary prefill keeps the path it would have taken.
+            // The ANE attention has no low-rank delta seams: with an adapter
+            // or patch laid over prefill, those layers stay on the GPU, which
+            // carries the q/k/v/o deltas (Emone-lmw.14).
             guard let ane = anePrefill,
+                !hasLowRankDeltas,
                 readout?.earlyStop != true,
                 slot == 0,
                 !snapshotGDNAfterFirstToken,
