@@ -17,6 +17,11 @@ public enum LoRATarget: String, CaseIterable, Sendable {
     case gate = "mlp.gate_proj"
     case up = "mlp.up_proj"
     case down = "mlp.down_proj"
+    /// An MoE layer's shared expert: the one MLP every token runs, beside the
+    /// routed experts (Emone-lmw.14). The routed experts are not targets.
+    case sharedGate = "mlp.shared_expert.gate_proj"
+    case sharedUp = "mlp.shared_expert.up_proj"
+    case sharedDown = "mlp.shared_expert.down_proj"
 }
 
 /// A decision adapter applied at request time over a base install's weights

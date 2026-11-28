@@ -35,10 +35,13 @@ import Testing
         // A layer has one kind of attention, never both.
         #expect(Self.shape(.q, 0, cfg) == nil)
         #expect(Self.shape(.gdnQKV, 3, cfg) == nil)
-        // The MoE MLP is not adapted.
-        for t in [LoRATarget.gate, .up, .down] {
-            #expect(Self.shape(t, 0, cfg) == nil)
-            #expect(Self.shape(t, 3, cfg) == nil)
+        // The MoE MLP: the shared expert (512 wide) on every layer, under its
+        // own names; the dense names do not exist here.
+        for layer in [0, 3] {
+            #expect(Self.shape(.sharedGate, layer, cfg) == [512, 2048])
+            #expect(Self.shape(.sharedUp, layer, cfg) == [512, 2048])
+            #expect(Self.shape(.sharedDown, layer, cfg) == [2048, 512])
+            for t in [LoRATarget.gate, .up, .down] { #expect(Self.shape(t, layer, cfg) == nil) }
         }
         #expect(Self.shape(.q, 40, cfg) == nil)
     }
@@ -57,6 +60,8 @@ import Testing
         #expect(Self.shape(.k, attention, cfg) == [512, 2560])
         #expect(Self.shape(.o, attention, cfg) == [2560, 6144])
         #expect(Self.shape(.down, linear, cfg) == nil)
+        #expect(Self.shape(.sharedUp, linear, cfg) == [640, 2560])
+        #expect(Self.shape(.sharedDown, attention, cfg) == [2560, 640])
     }
 
     @Test func denseFamilyKeepsItsMLPTargets() {
@@ -64,6 +69,9 @@ import Testing
         #expect(Self.shape(.gate, 0, dense) == [96, 32])
         #expect(Self.shape(.up, 1, dense) == [96, 32])
         #expect(Self.shape(.down, 1, dense) == [32, 96])
+        for t in [LoRATarget.sharedGate, .sharedUp, .sharedDown] {
+            #expect(Self.shape(t, 0, dense) == nil)
+        }
     }
 
     @Test func refusesWhatAnMoEModelCannotCarry() {
@@ -71,6 +79,7 @@ import Testing
         let fits = [
             LoRAAdapterFit.Declared(layer: 0, target: .gdnQKV, rows: 8192, columns: 2048),
             LoRAAdapterFit.Declared(layer: 3, target: .q, rows: 8192, columns: 2048),
+            LoRAAdapterFit.Declared(layer: 0, target: .sharedUp, rows: 512, columns: 2048),
         ]
         #expect(LoRAAdapterFit.refusal(entries: fits, config: cfg) == nil)
         #expect(LoRAAdapterFit.refusal(entries: [], config: cfg) == nil)
@@ -78,7 +87,7 @@ import Testing
         let mlp = LoRAAdapterFit.refusal(
             entries: fits + [.init(layer: 0, target: .up, rows: 512, columns: 2048)], config: cfg)
         #expect(mlp?.contains("mlp.up_proj") == true)
-        #expect(mlp?.contains("MoE") == true)
+        #expect(mlp?.contains("shared_expert") == true)
 
         let wrongKind = LoRAAdapterFit.refusal(
             entries: [.init(layer: 0, target: .q, rows: 8192, columns: 2048)], config: cfg)
@@ -105,8 +114,8 @@ import Testing
         let device = try #require(MTLCreateSystemDefaultDevice())
         let adapter = try LoRAAdapter(
             directory: dir, baseModelID: "qwen36-test", device: device, maxTokens: 8)
-        // 30 GDN layers x 5 + 10 attention layers x 4.
-        #expect(adapter.targetCount == 30 * 5 + 10 * 4)
+        // 30 GDN layers x 5 + 10 attention layers x 4 + 40 shared experts x 3.
+        #expect(adapter.targetCount == 30 * 5 + 10 * 4 + 40 * 3)
         #expect(adapter.rank == 4 && adapter.scale == 2)
         #expect(LoRAAdapterFit.refusal(entries: adapter.declared, config: cfg) == nil)
     }

@@ -777,7 +777,7 @@ extension RealForwardRunner {
             // GEMVs and the activation, so it cannot carry the delta: refuse
             // rather than answer from the base weights alone.
             throw ModelError.internalInconsistency(
-                detail: "a runtime-LoRA adapter needs the batched dense FFN, "
+                detail: "a runtime-LoRA MLP adapter needs the batched FFN, "
                     + "which this chunk could not take")
         }
         try prefillSharedExpert.encodeBlock(
@@ -1257,9 +1257,11 @@ extension RealForwardRunner {
         scratch: PrefillChunkScratchBuffers, tokenCount t: Int, hiddenSize D: Int
     ) throws {
         let sharedProj = sharedExpertProjections[L]
+        // `layer` opens the shared expert's LoRA seams (Emone-lmw.14); with
+        // no delta set for this layer they encode nothing.
         try encodePrefillSharedExpertBlock(
             commandBuffer: sharedCB, projections: sharedProj,
-            scratch: scratch, tokenCount: t, hiddenSize: D)
+            scratch: scratch, tokenCount: t, hiddenSize: D, layer: L)
         if cfg.sharedExpertGated {
             // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX),
             // per chunk row.

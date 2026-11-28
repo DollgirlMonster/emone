@@ -6,12 +6,13 @@ import Foundation
 /// Every family runs its prefill attention through the same seams
 /// (`encodeLinearAttentionPrefill` / `encodeFullAttentionPrefill`), so the
 /// attention and Gated-DeltaNet projections can be adapted on the dense Qwen
-/// 3.5, the Qwen 3.6 MoE and the 125B alike. The MLP is different: only the
-/// dense family's `mlp.{gate,up,down}_proj` is one batched FFN with a seam
-/// before its activation. An MoE layer's MLP is the routed experts plus a
-/// shared expert under other names, and nothing here adapts either, so an
-/// adapter that names an `mlp.*` target on an MoE model is refused rather
-/// than run with that part silently dropped.
+/// 3.5, the Qwen 3.6 MoE and the 125B alike. The MLP differs by family: the
+/// dense family's is `mlp.{gate,up,down}_proj`; an MoE layer's is the routed
+/// experts plus `mlp.shared_expert.{gate,up,down}_proj`. Both of those run as
+/// the same batched FFN with a seam before its activation, so the dense MLP
+/// and the MoE shared expert are adapted. The routed experts are not, and an
+/// adapter naming the other family's MLP is refused rather than run with that
+/// part silently dropped.
 ///
 /// The check is pure (config in, refusal out), so it runs before any GPU
 /// work: a mismatch found mid-prefill would leave a half-written branch.
@@ -30,6 +31,7 @@ public enum LoRAAdapterFit {
         let kvHeads = full ? cfg.numFullKVHeads : cfg.numKVHeads
         let qDim = cfg.numHeads * headDim
         let kvDim = kvHeads * headDim
+        let dense = cfg.family == .qwen35Dense
         switch target {
         case .q: return linear ? nil : (cfg.attnOutputGate ? 2 * qDim : qDim, d)
         case .k: return linear ? nil : (kvDim, d)
@@ -40,9 +42,13 @@ public enum LoRAAdapterFit {
         case .gdnA, .gdnB: return linear ? (la.numVHeads, d) : nil
         case .gdnOut: return linear ? (d, la.valueDim) : nil
         case .gate, .up:
-            return cfg.family == .qwen35Dense ? (cfg.intermediateSize, d) : nil
+            return dense ? (cfg.intermediateSize, d) : nil
         case .down:
-            return cfg.family == .qwen35Dense ? (d, cfg.intermediateSize) : nil
+            return dense ? (d, cfg.intermediateSize) : nil
+        case .sharedGate, .sharedUp:
+            return dense ? nil : (cfg.intermediateSize, d)
+        case .sharedDown:
+            return dense ? nil : (d, cfg.intermediateSize)
         }
     }
 
@@ -89,8 +95,10 @@ public enum LoRAAdapterFit {
     private static func whyMissing(_ entry: Declared, _ cfg: ArchConfig) -> String {
         switch entry.target {
         case .gate, .up, .down:
-            return "does not adapt (MoE MLPs are routed and shared experts; "
-                + "only attention and Gated-DeltaNet projections are adapted)"
+            return "does not have (an MoE layer's MLP is routed experts plus "
+                + "mlp.shared_expert.*; only the shared expert is adapted)"
+        case .sharedGate, .sharedUp, .sharedDown:
+            return "does not have (a dense layer's MLP is mlp.{gate,up,down}_proj)"
         case .gdnQKV, .gdnZ, .gdnA, .gdnB, .gdnOut:
             return "has no Gated-DeltaNet projection on (it is an attention layer)"
         case .q, .k, .v, .o:

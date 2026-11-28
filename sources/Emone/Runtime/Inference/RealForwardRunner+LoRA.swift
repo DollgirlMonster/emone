@@ -6,8 +6,9 @@ import Metal
 /// base weights instead of a merged copy. Every adapted projection gets
 /// `y += (alpha / r) * (x A^T) B^T` after its base GEMM: q/k/v/o, the
 /// Gated-DeltaNet in_proj_qkv/z/a/b and out_proj in
-/// `encodeAffineProjection`, and -- dense family only -- the MLP's gate/up
-/// (before the activation) and down inside the batched dense FFN. Decode is
+/// `encodeAffineProjection`, and the MLP's gate/up (before the activation)
+/// and down inside the batched FFN: the dense family's MLP, or an MoE layer's
+/// shared expert (never its routed experts). Decode is
 /// never adapted: a decision only prefills.
 ///
 /// Two ways to lay one on (Emone-lmw.14):
@@ -55,7 +56,7 @@ extension RealForwardRunner {
         if let rows = chunkRows, adapter.maxTokens < rows {
             return "adapter scratch holds \(adapter.maxTokens) tokens; this call's chunk is \(rows)"
         }
-        let ffn: [LoRATarget] = [.gate, .up, .down]
+        let ffn: [LoRATarget] = [.gate, .up, .down, .sharedGate, .sharedUp, .sharedDown]
         if !prefillBatchedSharedExpert,
             adapter.declared.contains(where: { ffn.contains($0.target) })
         {
@@ -226,7 +227,10 @@ extension RealForwardRunner {
     ) -> (gateUp: (MTLCommandBuffer) throws -> Void, down: (MTLCommandBuffer) throws -> Void)? {
         // Only a delta set that carries an FFN delta for this layer needs the
         // seams; a head-scale-only patch leaves the FFN exactly as it was.
-        let ffn: [LoRATarget] = [.gate, .up, .down]
+        let (gateTarget, upTarget, downTarget): (LoRATarget, LoRATarget, LoRATarget) =
+            cfg.family == .qwen35Dense
+            ? (.gate, .up, .down) : (.sharedGate, .sharedUp, .sharedDown)
+        let ffn = [gateTarget, upTarget, downTarget]
         guard
             lowRankDeltaSources.contains(where: { source in
                 ffn.contains { source.entry(L, $0) != nil }
@@ -238,11 +242,11 @@ extension RealForwardRunner {
                 commandBuffer: cb, layer: L,
                 items: [
                     LoRADeltaItem(
-                        target: .gate, x: scratch.routedX, xStrideElements: D,
+                        target: gateTarget, x: scratch.routedX, xStrideElements: D,
                         y: scratch.sharedGateScratch, yStrideElements: intermediate,
                         rows: intermediate, columns: D),
                     LoRADeltaItem(
-                        target: .up, x: scratch.routedX, xStrideElements: D,
+                        target: upTarget, x: scratch.routedX, xStrideElements: D,
                         y: scratch.sharedUpScratch, yStrideElements: intermediate,
                         rows: intermediate, columns: D),
                 ],
@@ -250,7 +254,7 @@ extension RealForwardRunner {
         }
         let down: (MTLCommandBuffer) throws -> Void = { cb in
             try self.encodeLoRADelta(
-                commandBuffer: cb, layer: L, target: .down,
+                commandBuffer: cb, layer: L, target: downTarget,
                 x: scratch.sharedActScratch, xStrideElements: intermediate,
                 y: scratch.h1, yStrideElements: D,
                 rows: D, columns: intermediate, tokenCount: t)
