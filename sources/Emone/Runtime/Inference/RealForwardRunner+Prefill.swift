@@ -189,6 +189,12 @@ extension RealForwardRunner {
         // unusably slow -- every token pays a full pass over the routed
         // experts, where a chunk amortizes them -- so it is not the default.
         if cfg.hyperConnections.enabled && Self.sequentialHyperConnectionPrefill {
+            // That oracle runs decode, which no adapter or patch reaches:
+            // refuse rather than answer from the base weights alone.
+            guard !hasLowRankDeltas else {
+                throw PrefillError.chunkedUnsupported(
+                    "the sequential hyper-connection prefill carries no runtime LoRA")
+            }
             return try await prefillSequentialHyperConnection(
                 tokens: tokens, startPosition: startPosition, slot: slot,
                 outputMode: outputMode, into: logits, onProgress: onProgress)
@@ -443,7 +449,11 @@ extension RealForwardRunner {
             // the ANE: its chunk bookkeeping (`finishChunk`) cannot represent a
             // stop, so that readout reads the GPU path's residual. A capture
             // riding an ordinary prefill keeps the path it would have taken.
+            // The ANE attention has no low-rank delta seams: with an adapter
+            // or patch laid over prefill, those layers stay on the GPU, which
+            // carries the q/k/v/o deltas (Emone-lmw.14).
             guard let ane = anePrefill,
+                !hasLowRankDeltas,
                 readout?.earlyStop != true,
                 slot == 0,
                 !snapshotGDNAfterFirstToken,
@@ -767,7 +777,7 @@ extension RealForwardRunner {
             // GEMVs and the activation, so it cannot carry the delta: refuse
             // rather than answer from the base weights alone.
             throw ModelError.internalInconsistency(
-                detail: "a runtime-LoRA adapter needs the batched dense FFN, "
+                detail: "a runtime-LoRA MLP adapter needs the batched FFN, "
                     + "which this chunk could not take")
         }
         try prefillSharedExpert.encodeBlock(
@@ -1247,9 +1257,11 @@ extension RealForwardRunner {
         scratch: PrefillChunkScratchBuffers, tokenCount t: Int, hiddenSize D: Int
     ) throws {
         let sharedProj = sharedExpertProjections[L]
+        // `layer` opens the shared expert's LoRA seams (Emone-lmw.14); with
+        // no delta set for this layer they encode nothing.
         try encodePrefillSharedExpertBlock(
             commandBuffer: sharedCB, projections: sharedProj,
-            scratch: scratch, tokenCount: t, hiddenSize: D)
+            scratch: scratch, tokenCount: t, hiddenSize: D, layer: L)
         if cfg.sharedExpertGated {
             // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX),
             // per chunk row.

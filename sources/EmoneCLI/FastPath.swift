@@ -24,10 +24,22 @@ import Emone
 /// of Kev's shape: timing only, the probabilities mean nothing. Correctness
 /// for the MoE arm: the logits System 2 sees for a fixed probe after the point
 /// must be byte-identical before and after the decisions.
+///
+/// `--adapter` on the MoE arm (Emone-lmw.14) runs every timed branch through
+/// `prefillShortBranch(adapter:)`, System One's LoRA on the branch rows only:
+/// a package directory, or `random` / `zero` for a seeded synthetic one over
+/// every adaptable projection (`SyntheticLoRAPackage`), or `none` for the same
+/// short-branch path with no adapter (the timing baseline; without --adapter
+/// the branches take `prefillChunked`, a different path). Per N it also reads
+/// one k=2 decision branch with and without the adapter: a `zero` adapter must
+/// leave the rows bit-identical, any other must change them, and the probe
+/// check above is what shows the held context never saw it. With M > 0 the M
+/// rows ride the same adapted call, so use `--m 0` for the System One shape.
 public enum FastPathCommand {
     public static let usage = """
         usage: EmoneCLI fastpath --arm rev --model <base> --adapter <package> --corpus <text> [grid]
                EmoneCLI fastpath --arm moe --model <install> --corpus <text> [grid]
+                 [--adapter <package>|random|zero|none]
           grid: --n 1024,4096 --m 0,512 --k 2,8,16 --reps 5 --chunk <tokens>
         """
 
@@ -69,7 +81,7 @@ public enum FastPathCommand {
             index += 2
         }
         guard ["rev", "moe"].contains(options.arm), !options.model.isEmpty,
-            !options.corpus.isEmpty, (options.arm == "rev") == (options.adapter != nil),
+            !options.corpus.isEmpty, options.arm != "rev" || options.adapter != nil,
             options.ns.first ?? 0 > 0
         else { return nil }
         return options
@@ -227,6 +239,18 @@ public enum FastPathCommand {
         say(
             "# loaded \(identity.family.rawValue) in \(f1(ms(now() - loadStarted))) ms; "
                 + "slots=\(slots) chunk=\(chunk) maxContext=\(maxContext)")
+        // Any --adapter sends every branch through `prefillShortBranch`, so
+        // `none` is the like-for-like baseline: the same path, no adapter.
+        let shortBranch = o.adapter != nil
+        var adapter: LoRAAdapter?
+        if let spec = o.adapter, spec != "none" {
+            adapter = try branchAdapter(spec, model: model, context: context, chunk: chunk)
+        }
+        if let adapter {
+            say(
+                "# branch adapter \(adapter.modelID): rank \(adapter.rank), "
+                    + "\(adapter.targetCount) projections, on branch rows only")
+        }
         let ids = try await tokens(text, model: url, need: needed(o))
         let hidden = model.config.hiddenSize
         let head = RandomPointerHead(hiddenSize: hidden)
@@ -237,14 +261,22 @@ public enum FastPathCommand {
         else { throw DecisionReadoutError.unsupported("logits buffer allocation failed") }
 
         // Readout prefill: rows at `offsets` past `from`, LM head skipped.
-        func readout(_ tokens: ArraySlice<Int32>, from: Int, offsets: [Int]) async throws
-            -> [[Float]]
-        {
+        // `short` makes it a short branch, carrying `branch` when set.
+        func readout(
+            _ tokens: ArraySlice<Int32>, from: Int, offsets: [Int], short: Bool = false,
+            branch: LoRAAdapter? = nil
+        ) async throws -> [[Float]] {
             try runner.armDecisionReadout(positions: offsets.map { from + $0 })
             do {
-                _ = try await runner.prefillChunked(
-                    tokens: tokens, startPosition: from, outputMode: .logits, config: config,
-                    into: logits, onProgress: { _ in })
+                if short {
+                    _ = try await runner.prefillShortBranch(
+                        tokens: tokens, startPosition: from, outputMode: .logits,
+                        config: config, into: logits, adapter: branch)
+                } else {
+                    _ = try await runner.prefillChunked(
+                        tokens: tokens, startPosition: from, outputMode: .logits, config: config,
+                        into: logits, onProgress: { _ in })
+                }
                 return try runner.finishDecisionReadout()
             } catch {
                 runner.disarmDecisionReadout()
@@ -278,7 +310,32 @@ public enum FastPathCommand {
             )
             position = n
             let point = try await runner.makeDecisionBranchPoint()
+            let decision = branchRow(question(k: 2, pool: questionPool), marker: questionPool[0])
+            // The first short branch fills the expert cache, and a full cache
+            // moves the probe's routed stage off the tiles, which rounds
+            // differently. Warm before the probe so before and after compare
+            // like with like.
+            var plain: [[Float]] = []
+            if shortBranch {
+                plain = try await readout(
+                    ArraySlice(decision.ids), from: n, offsets: decision.readouts, short: true)
+                try await runner.restoreDecisionBranchPoint(point)
+            }
             let before = try await probeLogits(at: point)
+            if let adapter {
+                let adapted = try await readout(
+                    ArraySlice(decision.ids), from: n, offsets: decision.readouts, short: true,
+                    branch: adapter)
+                try await runner.restoreDecisionBranchPoint(point)
+                let identical = plain == adapted
+                let expectIdentical = o.adapter == "zero"
+                if identical != expectIdentical { mismatches += 1 }
+                let delta = zip(plain.joined(), adapted.joined()).map { abs($0 - $1) }.max() ?? 0
+                say(
+                    "# N=\(n): adapted branch rows \(identical ? "bit-identical to" : "differ from") "
+                        + "the base (max |d| \(delta)); expected "
+                        + (expectIdentical ? "identical" : "different"))
+            }
             // DIAG (local only): EMONE_FASTPATH_ROWS=8,16,... times a readout
             // prefill of exactly R new corpus tokens at the held point per R,
             // then restores; with EMONE_KERNEL_STATS it prints per-role GPU sums.
@@ -309,7 +366,8 @@ public enum FastPathCommand {
                     for rep in 0...o.reps {
                         runner.resetKernelGPUTimings()
                         let started = now()
-                        let got = try await readout(row, from: n, offsets: offsets)
+                        let got = try await readout(
+                            row, from: n, offsets: offsets, short: shortBranch, branch: adapter)
                         if let timeline, rep == 1 {
                             try runner.kernelGPUTimelineCSV().write(
                                 toFile: "\(timeline)/\(n)-\(label).csv", atomically: true,
@@ -352,7 +410,8 @@ public enum FastPathCommand {
                         for rep in 0...o.reps {
                             let started = now()
                             let rows = try await readout(
-                                row[...], from: n, offsets: branch.readouts.map { m + $0 })
+                                row[...], from: n, offsets: branch.readouts.map { m + $0 },
+                                short: shortBranch, branch: adapter)
                             let decided = now()
                             _ = head.logits(decide: rows[0], options: Array(rows.dropFirst()))
                             let headDone = now()
@@ -382,6 +441,26 @@ public enum FastPathCommand {
         }
         say("# probe mismatches: \(mismatches)")
         return mismatches == 0 ? 0 : 3
+    }
+}
+
+extension FastPathCommand {
+    /// `random` / `zero` write a synthetic package for this model to a fresh
+    /// temporary directory; anything else is a package directory.
+    static func branchAdapter(
+        _ spec: String, model: Model, context: MetalContext, chunk: Int
+    ) throws -> LoRAAdapter {
+        var directory = URL(fileURLWithPath: spec)
+        if spec == "random" || spec == "zero" {
+            directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("emone-branch-adapter-\(UUID().uuidString)")
+            try SyntheticLoRAPackage.write(
+                to: directory, config: model.config, baseModelID: model.modelID,
+                zeroB: spec == "zero")
+        }
+        return try LoRAAdapter(
+            directory: directory, baseModelID: model.modelID, device: context.device,
+            maxTokens: chunk)
     }
 }
 

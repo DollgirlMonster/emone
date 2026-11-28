@@ -7,7 +7,7 @@ import XCTest
 /// and branch-row layout the MoE arm prefills, and the summary statistic.
 /// None of this loads a model.
 final class FastPathCommandTests: XCTestCase {
-    func testParsesBothArmsAndRejectsMismatchedAdapter() {
+    func testParsesBothArmsAndRequiresRevAdapter() {
         let rev = FastPathCommand.parse([
             "--arm", "rev", "--model", "b", "--adapter", "a", "--corpus", "c", "--n", "4096,1024",
             "--m", "0", "--k", "2", "--reps", "3",
@@ -17,11 +17,11 @@ final class FastPathCommandTests: XCTestCase {
         XCTAssertEqual(rev?.ms, [0])
         XCTAssertEqual(rev?.reps, 3)
         XCTAssertNotNil(FastPathCommand.parse(["--arm", "moe", "--model", "m", "--corpus", "c"]))
-        XCTAssertNil(
+        XCTAssertEqual(
             FastPathCommand.parse([
-                "--arm", "moe", "--model", "m", "--adapter", "a", "--corpus", "c",
-            ]),
-            "an adapter belongs to the rev arm only")
+                "--arm", "moe", "--model", "m", "--adapter", "zero", "--corpus", "c",
+            ])?.adapter, "zero",
+            "the MoE arm takes a branch adapter (Emone-lmw.14)")
         XCTAssertNil(FastPathCommand.parse(["--arm", "rev", "--model", "b", "--corpus", "c"]))
         XCTAssertNil(
             FastPathCommand.parse(["--arm", "moe", "--model", "m", "--corpus", "c", "--k", "0"]))

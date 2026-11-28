@@ -7,12 +7,23 @@ import Metal
 /// `y += (alpha / r) * (x A^T) B^T` after its base GEMM: q/k/v/o, the
 /// Gated-DeltaNet in_proj_qkv/z/a/b and out_proj in
 /// `encodeAffineProjection`, and the MLP's gate/up (before the activation)
-/// and down inside the batched dense FFN. Decode is never adapted: a
-/// decision model only prefills.
+/// and down inside the batched FFN: the dense family's MLP, or an MoE layer's
+/// shared expert (never its routed experts). Decode is
+/// never adapted: a decision only prefills.
+///
+/// Two ways to lay one on (Emone-lmw.14):
+/// - `setLoRAAdapter`: for every prefill this runner does, until removed. Only
+///   for a runner that is nothing but a decision model (Rev on dense Qwen 3.5,
+///   `DecisionModel`), because it adapts the context too.
+/// - `prefillShortBranch(adapter:)`: for that one branch and nothing else, on
+///   any family. This is System One on System Two's runner: the held context
+///   was computed without the adapter and stays that way; only the branch
+///   rows (and the KV / GDN rows they write, which the caller rewinds) see it.
 extension RealForwardRunner {
     /// Lays `adapter` over this runner's prefills, or removes it with nil.
-    /// Refused for anything but the dense Qwen 3.5 family, whose prefill this
-    /// covers, and when the adapter's shapes do not match this model.
+    /// Refused for anything but the dense Qwen 3.5 family -- on any other the
+    /// adapter belongs on a branch (`prefillShortBranch(adapter:)`) -- and when
+    /// the adapter does not fit this model.
     public func setLoRAAdapter(_ adapter: LoRAAdapter?) throws {
         guard let adapter else {
             loraAdapter = nil
@@ -21,16 +32,47 @@ extension RealForwardRunner {
         guard cfg.family == .qwen35Dense else {
             throw ModelError.internalInconsistency(
                 detail:
-                    "runtime LoRA covers the dense Qwen 3.5 prefill; this is \(cfg.family.rawValue)"
+                    "a standing runtime LoRA is for a dense Qwen 3.5 decision runner; on "
+                    + "\(cfg.family.rawValue) lay it on a branch with prefillShortBranch(adapter:)"
             )
         }
-        guard prefillBatchedSharedExpert else {
-            throw ModelError.internalInconsistency(
-                detail: "runtime LoRA needs the batched dense FFN (the profile's dense QMM switch)")
+        if let refusal = loraAdapterRefusal(adapter) {
+            throw ModelError.internalInconsistency(detail: refusal)
         }
-        if loraDeltaKernel == nil { loraDeltaKernel = try LoRADelta(context: ctx) }
+        try ensureLoRADeltaKernel()
         loraAdapter = adapter
     }
+
+    /// Why `adapter` cannot run over this runner's prefills, or nil. Checked
+    /// before any GPU work: the base, every target's shape and, given the
+    /// largest chunk a call will encode, the adapter's scratch.
+    public func loraAdapterRefusal(_ adapter: LoRAAdapter, chunkRows: Int? = nil) -> String? {
+        guard adapter.baseModelID == model.modelID else {
+            return "adapter \(adapter.modelID) is for \(adapter.baseModelID), not \(model.modelID)"
+        }
+        if let refusal = LoRAAdapterFit.refusal(entries: adapter.declared, config: cfg) {
+            return refusal
+        }
+        if let rows = chunkRows, adapter.maxTokens < rows {
+            return "adapter scratch holds \(adapter.maxTokens) tokens; this call's chunk is \(rows)"
+        }
+        let ffn: [LoRATarget] = [.gate, .up, .down, .sharedGate, .sharedUp, .sharedDown]
+        if !prefillBatchedSharedExpert,
+            adapter.declared.contains(where: { ffn.contains($0.target) })
+        {
+            return "an MLP adapter needs the batched dense FFN (the profile's dense QMM switch)"
+        }
+        return nil
+    }
+
+    func ensureLoRADeltaKernel() throws {
+        if loraDeltaKernel == nil { loraDeltaKernel = try LoRADelta(context: ctx) }
+    }
+
+    /// True when any low-rank delta (adapter or patch) is laid over prefill.
+    /// Paths with no delta seams (the ANE attention sidecar, the sequential
+    /// hyper-connection oracle) must not run while this holds.
+    var hasLowRankDeltas: Bool { loraAdapter != nil || weightPatch != nil }
 
     /// One adapted projection's delta: where it reads x and accumulates y.
     struct LoRADeltaItem {
@@ -107,6 +149,7 @@ extension RealForwardRunner {
     func encodeLoRADeltas(
         commandBuffer: MTLCommandBuffer, layer: Int, items: [LoRADeltaItem], tokenCount: Int
     ) throws {
+        guard hasLowRankDeltas else { return }
         for source in lowRankDeltaSources {
             try encodeLowRankDeltas(
                 source, commandBuffer: commandBuffer, layer: layer, items: items,
@@ -184,7 +227,10 @@ extension RealForwardRunner {
     ) -> (gateUp: (MTLCommandBuffer) throws -> Void, down: (MTLCommandBuffer) throws -> Void)? {
         // Only a delta set that carries an FFN delta for this layer needs the
         // seams; a head-scale-only patch leaves the FFN exactly as it was.
-        let ffn: [LoRATarget] = [.gate, .up, .down]
+        let (gateTarget, upTarget, downTarget): (LoRATarget, LoRATarget, LoRATarget) =
+            cfg.family == .qwen35Dense
+            ? (.gate, .up, .down) : (.sharedGate, .sharedUp, .sharedDown)
+        let ffn = [gateTarget, upTarget, downTarget]
         guard
             lowRankDeltaSources.contains(where: { source in
                 ffn.contains { source.entry(L, $0) != nil }
@@ -196,11 +242,11 @@ extension RealForwardRunner {
                 commandBuffer: cb, layer: L,
                 items: [
                     LoRADeltaItem(
-                        target: .gate, x: scratch.routedX, xStrideElements: D,
+                        target: gateTarget, x: scratch.routedX, xStrideElements: D,
                         y: scratch.sharedGateScratch, yStrideElements: intermediate,
                         rows: intermediate, columns: D),
                     LoRADeltaItem(
-                        target: .up, x: scratch.routedX, xStrideElements: D,
+                        target: upTarget, x: scratch.routedX, xStrideElements: D,
                         y: scratch.sharedUpScratch, yStrideElements: intermediate,
                         rows: intermediate, columns: D),
                 ],
@@ -208,7 +254,7 @@ extension RealForwardRunner {
         }
         let down: (MTLCommandBuffer) throws -> Void = { cb in
             try self.encodeLoRADelta(
-                commandBuffer: cb, layer: L, target: .down,
+                commandBuffer: cb, layer: L, target: downTarget,
                 x: scratch.sharedActScratch, xStrideElements: intermediate,
                 y: scratch.h1, yStrideElements: D,
                 rows: D, columns: intermediate, tokenCount: t)

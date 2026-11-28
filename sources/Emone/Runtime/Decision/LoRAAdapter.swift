@@ -17,6 +17,11 @@ public enum LoRATarget: String, CaseIterable, Sendable {
     case gate = "mlp.gate_proj"
     case up = "mlp.up_proj"
     case down = "mlp.down_proj"
+    /// An MoE layer's shared expert: the one MLP every token runs, beside the
+    /// routed experts (Emone-lmw.14). The routed experts are not targets.
+    case sharedGate = "mlp.shared_expert.gate_proj"
+    case sharedUp = "mlp.shared_expert.up_proj"
+    case sharedDown = "mlp.shared_expert.down_proj"
 }
 
 /// A decision adapter applied at request time over a base install's weights
@@ -68,6 +73,16 @@ public final class LoRAAdapter: @unchecked Sendable {
     public var targetCount: Int { entries.values.reduce(0) { $0 + $1.count } }
 
     func entry(layer: Int, target: LoRATarget) -> Entry? { entries[layer]?[target] }
+
+    /// Every adapted projection with its shape, for `LoRAAdapterFit`.
+    public var declared: [LoRAAdapterFit.Declared] {
+        entries.flatMap { layer, targets in
+            targets.map { target, entry in
+                LoRAAdapterFit.Declared(
+                    layer: layer, target: target, rows: entry.rows, columns: entry.columns)
+            }
+        }
+    }
 
     /// Reads and checks a package. `baseModelID` is the install the adapter
     /// is to run over; a package naming another base is refused.
