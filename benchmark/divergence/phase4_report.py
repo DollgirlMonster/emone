@@ -24,8 +24,11 @@ def load(d: Path):
     out = {}
     for r in res:
         t = BY_ID[r["id"]]
-        out[r["id"]] = (math_ok(r["text"], t["answer"]) if t["kind"] == "math"
-                        else code_ok(r["text"], t["tests"]))
+        out[r["id"]] = (
+            math_ok(r["text"], t["answer"])
+            if t["kind"] == "math"
+            else code_ok(r["text"], t["tests"])
+        )
     return res, tr, out
 
 
@@ -34,15 +37,21 @@ def main() -> None:
         if not (OUT / m / "base" / "done").exists():
             continue
         bres, btr, bout = load(OUT / m / "base")
-        rows = [r["usage2"]["prompt_tokens"] - r["usage2"]["prompt_tokens_details"]["cached_tokens"]
-                for r in bres]
+        rows = [
+            r["usage2"]["prompt_tokens"] - r["usage2"]["prompt_tokens_details"]["cached_tokens"]
+            for r in bres
+        ]
         ctx = [r["usage2"]["prompt_tokens"] for r in bres]
         print(f"\n## {m}\n")
-        print(f"Turn 2 prefilled {min(rows)}-{max(rows)} uncached rows against {min(ctx)}-{max(ctx)} "
-              f"tokens of context; turn 1 replies other than Ready: "
-              f"{sum(r['ready'].strip(' .') != 'Ready' for r in bres)}/{len(bres)}.\n")
-        print("| arm | math pass | code pass | answer tokens identical | first flip step (median) | "
-              "outcome same | same outcome where text moved | base-only / arm-only | sign-test p |")
+        print(
+            f"Turn 2 prefilled {min(rows)}-{max(rows)} uncached rows against {min(ctx)}-{max(ctx)} "
+            f"tokens of context; turn 1 replies other than Ready: "
+            f"{sum(r['ready'].strip(' .') != 'Ready' for r in bres)}/{len(bres)}.\n"
+        )
+        print(
+            "| arm | math pass | code pass | answer tokens identical | first flip step (median) | "
+            "outcome same | same outcome where text moved | base-only / arm-only | sign-test p |"
+        )
         print("|---|---|---|---|---|---|---|---|---|")
         for arm in ARMS:
             d = OUT / m / arm
@@ -59,18 +68,24 @@ def main() -> None:
                 if a == b:
                     same += 1
                 else:
-                    steps.append(next((k for k, (x, y) in enumerate(zip(a, b)) if x != y),
-                                      min(len(a), len(b))))
+                    steps.append(
+                        next(
+                            (k for k, (x, y) in enumerate(zip(a, b, strict=False)) if x != y),
+                            min(len(a), len(b)),
+                        )
+                    )
             moved = [k for i, k in enumerate(ids) if res[i]["text"] != bres[i]["text"]]
             maths = sum(v for k, v in out.items() if k.startswith("math"))
             codes = sum(v for k, v in out.items() if k.startswith("code"))
             agree = sum(out[k] == bout[k] for k in ids)
             bo = sum(bout[k] and not out[k] for k in ids)
             ao = sum(out[k] and not bout[k] for k in ids)
-            print(f"| {arm} | {maths}/60 | {codes}/15 | {same}/{len(res)} | "
-                  f"{st.median(steps) if steps else '-'} | {agree}/{len(ids)} | "
-                  f"{sum(out[k] == bout[k] for k in moved)}/{len(moved)} | {bo} / {ao} | "
-                  f"{sign_p(bo, ao):.2f} |")
+            print(
+                f"| {arm} | {maths}/60 | {codes}/15 | {same}/{len(res)} | "
+                f"{st.median(steps) if steps else '-'} | {agree}/{len(ids)} | "
+                f"{sum(out[k] == bout[k] for k in moved)}/{len(moved)} | {bo} / {ao} | "
+                f"{sign_p(bo, ao):.2f} |"
+            )
 
 
 if __name__ == "__main__":

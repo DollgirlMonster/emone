@@ -178,7 +178,7 @@ final class PrefillRouter {
             d % Quantization.groupSize == 0, queryCount > 0
         else { return false }
         let bytes = queryCount * numExperts * MemoryLayout<Float>.stride
-        if logits == nil || logits!.length < bytes {
+        if logits.map({ $0.length < bytes }) ?? true {
             guard let made = device.makeBuffer(length: bytes, options: .storageModePrivate) else {
                 throw MetalError.commandEncoderFailed
             }

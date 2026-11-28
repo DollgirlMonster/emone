@@ -23,8 +23,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import phase23_sets as sets  # noqa: E402
-from phase23_run import (CODE_TOKENS, MATH_TOKENS, MODELS, ROOT, arm_server,  # noqa: E402
-                         post)
+from phase23_run import (
+    CODE_TOKENS,
+    MATH_TOKENS,
+    MODELS,
+    ROOT,
+    arm_server,  # noqa: E402
+    post,
+)
 
 OUT = Path(__file__).resolve().parent / "phase4-20261120"
 ARMS = ["base", "on_small_qmm", "on_flash_split", "cand"]
@@ -36,8 +42,13 @@ def tasks() -> list[dict]:
     docs = sets.doc_slices(12)
     out = []
     for i, t in enumerate(sets.math_tasks(60) + sets.code_tasks()):
-        out.append({**t, "doc": i % len(docs), "setup": f"{docs[i % len(docs)]}\n\n---\n\n{SETUP}"
-                    f"\n\n{t['prompt']}"})
+        out.append(
+            {
+                **t,
+                "doc": i % len(docs),
+                "setup": f"{docs[i % len(docs)]}\n\n---\n\n{SETUP}\n\n{t['prompt']}",
+            }
+        )
     # Same document back to back, so the prompt cache can reuse its prefix.
     return sorted(out, key=lambda t: t["doc"])
 
@@ -54,9 +65,19 @@ def run_arm(model_key: str, arm: str) -> None:
             msgs += [{"role": "assistant", "content": ready}, {"role": "user", "content": ASK}]
             r2 = post(model_id, msgs, MATH_TOKENS if t["kind"] == "math" else CODE_TOKENS)
             text = r2["choices"][0]["message"].get("content") or ""
-            results.write(json.dumps({"id": t["id"], "ready": ready, "text": text,
-                                      "usage1": r1.get("usage"), "usage2": r2.get("usage"),
-                                      "wall_s": r1["_wall_s"] + r2["_wall_s"]}) + "\n")
+            results.write(
+                json.dumps(
+                    {
+                        "id": t["id"],
+                        "ready": ready,
+                        "text": text,
+                        "usage1": r1.get("usage"),
+                        "usage2": r2.get("usage"),
+                        "wall_s": r1["_wall_s"] + r2["_wall_s"],
+                    }
+                )
+                + "\n"
+            )
             results.flush()
         (d / "done").write_text(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")
         print(f"{time.strftime('%H:%M:%S')} {model_key}/{arm}: done", flush=True)
@@ -71,7 +92,7 @@ def main() -> None:
     if args.limit:
         global tasks
         full = tasks
-        tasks = lambda: full()[:args.limit]  # noqa: E731
+        tasks = lambda: full()[: args.limit]  # noqa: E731
     for m in args.models.split(","):
         if not (ROOT / MODELS[m][0] / "verified-install.json").exists():
             print(f"{m}: not installed, not checked", flush=True)

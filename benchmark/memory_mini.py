@@ -134,9 +134,7 @@ def complete(system: str, user: str, max_tokens: int = 400) -> tuple[str, dict, 
             # before the answer starts. The memory keeper is an extraction job;
             # it does not need to deliberate, and a shadow agent that costs a
             # thousand tokens of reasoning per turn is not a shadow agent.
-            "chat_template_kwargs": {
-                "enable_thinking": os.environ.get("EMONE_MINI_THINK") == "1"
-            },
+            "chat_template_kwargs": {"enable_thinking": os.environ.get("EMONE_MINI_THINK") == "1"},
         }
     ).encode()
     request = urllib.request.Request(

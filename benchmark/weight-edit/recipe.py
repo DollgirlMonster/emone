@@ -57,7 +57,9 @@ def texts():
             branches["repetitive"] = last * 3
         for kind in ("productive", "repetitive"):
             ids = tok.encode(head + branches[kind], add_special_tokens=False).ids
-            shared = next((j for j, (a, b) in enumerate(zip(base, ids)) if a != b), len(base))
+            shared = next(
+                (j for j, (a, b) in enumerate(zip(base, ids, strict=False)) if a != b), len(base)
+            )
             yield i, kind, head + branches[kind], len(ids) - shared
 
 
@@ -66,17 +68,31 @@ def score(out, patch=None):
     out.mkdir(parents=True, exist_ok=True)
     for i, kind, text, n in texts():
         stem = out / f"p{i}_{kind}"
-        env = dict(os.environ, EMONE_MLP_CAPTURE=f"{stem}.mlp",
-                   EMONE_MLP_CAPTURE_LAYERS=",".join(map(str, LAYERS)))
-        cmd = [CLI, "--model", MODEL, "--prompt", text, "--score", str(n),
-               "--score-out", f"{stem}.nll"]
+        env = dict(
+            os.environ,
+            EMONE_MLP_CAPTURE=f"{stem}.mlp",
+            EMONE_MLP_CAPTURE_LAYERS=",".join(map(str, LAYERS)),
+        )
+        cmd = [
+            CLI,
+            "--model",
+            MODEL,
+            "--prompt",
+            text,
+            "--score",
+            str(n),
+            "--score-out",
+            f"{stem}.nll",
+        ]
         if patch:
             cmd += ["--weight-patch", patch]
         run = subprocess.run(cmd, capture_output=True, text=True, env=env)
         if run.returncode != 0:
             sys.exit(f"{stem}: {run.stderr[-400:]}")
-        print(f"p{i} {kind:10s} {n:3d} tokens  mean NLL {np.loadtxt(f'{stem}.nll').mean():.4f}",
-              flush=True)
+        print(
+            f"p{i} {kind:10s} {n:3d} tokens  mean NLL {np.loadtxt(f'{stem}.nll').mean():.4f}",
+            flush=True,
+        )
 
 
 def load(path, rec):
@@ -98,8 +114,9 @@ def direction(score_dir, out, pairs):
                 h, raw = load(d / f"p{i}_{kind}.mlp.resid", RES_REC)
                 rs.append(raw[h[:, 1] == L, 12:].copy().view(np.float16).astype(np.float32))
                 h, raw = load(d / f"p{i}_{kind}.mlp", MLP_REC)
-                ac.append(raw[h[:, 1] == L, 12 + 2 * HIDDEN:].copy().view(np.float16)
-                          .astype(np.float32))
+                ac.append(
+                    raw[h[:, 1] == L, 12 + 2 * HIDDEN :].copy().view(np.float16).astype(np.float32)
+                )
             res[kind], act[kind] = np.concatenate(rs), np.concatenate(ac)
         u = res["repetitive"].mean(0) - res["productive"].mean(0)
         u /= np.linalg.norm(u)
@@ -110,8 +127,10 @@ def direction(score_dir, out, pairs):
         result[f"u{L}"], result[f"v{L}"], result[f"c{L}"] = u, v, contrib
         sep = (res["repetitive"] @ u).mean() - (res["productive"] @ u).mean()
         top = np.argsort(-contrib)[:5]
-        print(f"L{L}: projection gap {sep:.3f}; top writers {top.tolist()} "
-              f"({', '.join(f'{contrib[j]:+.3f}' for j in top)})")
+        print(
+            f"L{L}: projection gap {sep:.3f}; top writers {top.tolist()} "
+            f"({', '.join(f'{contrib[j]:+.3f}' for j in top)})"
+        )
     np.savez(out, **result)
 
 
@@ -120,8 +139,11 @@ def patch(dirs_path, out, alpha, k):
     tensors, report = {}, {}
     for L in LAYERS:
         u, v, c = dirs[f"u{L}"], dirs[f"v{L}"], dirs[f"c{L}"]
-        mask = np.ones_like(v, bool) if k == "all" else np.isin(np.arange(v.size),
-                                                                np.argsort(-c)[: int(k)])
+        mask = (
+            np.ones_like(v, bool)
+            if k == "all"
+            else np.isin(np.arange(v.size), np.argsort(-c)[: int(k)])
+        )
         tensors[f"layers.{L}.mlp.down_proj.lora_A"] = np.where(mask, v, 0)[None, :]
         tensors[f"layers.{L}.mlp.down_proj.lora_B"] = (-alpha * u)[:, None]
         report[str(L)] = {"columns": int(mask.sum()), "weights": int(mask.sum()) * HIDDEN}
@@ -130,12 +152,18 @@ def patch(dirs_path, out, alpha, k):
     blob = safetensors(tensors)
     (out / "weight_patch.safetensors").write_bytes(blob)
     manifest = {
-        "format": FORMAT, "base": {"model_id": "qwen3.5-0.8b"}, "rank": 1,
+        "format": FORMAT,
+        "base": {"model_id": "qwen3.5-0.8b"},
+        "rank": 1,
         "description": f"MIT CSAIL Exp 8 recipe: W - {alpha} u (mask . u^T W) on mlp.down_proj of "
-                       f"layers 15 and 19, top-{k} writers (Emone-bbm.3).",
-        "provenance": {"method": "u = residual after the layer, repetitive minus productive "
-                                 "matched branches (matched_pairs.json), teacher-forced",
-                       "alpha": alpha, "columns": k, "layers": report},
+        f"layers 15 and 19, top-{k} writers (Emone-bbm.3).",
+        "provenance": {
+            "method": "u = residual after the layer, repetitive minus productive "
+            "matched branches (matched_pairs.json), teacher-forced",
+            "alpha": alpha,
+            "columns": k,
+            "layers": report,
+        },
         "files": {"weight_patch.safetensors": hashlib.sha256(blob).hexdigest()},
     }
     (out / "weight_patch.json").write_text(json.dumps(manifest, indent=1) + "\n")
@@ -149,11 +177,14 @@ def compare(base, edited):
         kind = f.stem.split("_")[1]
         delta = np.loadtxt(edited / f.name).mean() - np.loadtxt(f).mean()
         rows[kind].append(delta)
-        print(f"{f.stem:16s} NLL {np.loadtxt(f).mean():.4f} -> "
-              f"{np.loadtxt(edited / f.name).mean():.4f}  ({delta:+.4f})")
+        print(
+            f"{f.stem:16s} NLL {np.loadtxt(f).mean():.4f} -> "
+            f"{np.loadtxt(edited / f.name).mean():.4f}  ({delta:+.4f})"
+        )
     for kind, v in rows.items():
-        print(f"{kind:10s} mean NLL change {np.mean(v):+.4f} nats/token "
-              f"(log-prob {-np.mean(v):+.4f})")
+        print(
+            f"{kind:10s} mean NLL change {np.mean(v):+.4f} nats/token (log-prob {-np.mean(v):+.4f})"
+        )
 
 
 if __name__ == "__main__":

@@ -33,7 +33,9 @@ def main():
             for cls in (0, 1):
                 m = np.nonzero((head[:, 1] == L) & (y == cls))[0]
                 a = np.asarray(raw[m, 12 + 2 * HIDDEN :]).copy().view(np.float16).astype(np.float64)
-                s = stats.setdefault((int(L), cls), [0, np.zeros(INTER), np.zeros(INTER), np.zeros(INTER)])
+                s = stats.setdefault(
+                    (int(L), cls), [0, np.zeros(INTER), np.zeros(INTER), np.zeros(INTER)]
+                )
                 s[0] += len(m)
                 s[1] += a.sum(0)
                 s[2] += (a * a).sum(0)
@@ -49,8 +51,12 @@ def main():
         leak = (b0 / n0) / (b1 / n1 + 1e-12)
         result[f"d{L}"], result[f"m1_{L}"], result[f"m0_{L}"], result[f"leak{L}"] = d, m1, m0, leak
         order = np.argsort(-np.abs(d))[:6]
-        print(f"L{L:2d} best |d'| " + "  ".join(
-            f"u{j}:{d[j]:+.2f} (loop {m1[j]:+.3f}, normal {m0[j]:+.3f})" for j in order[:3]))
+        print(
+            f"L{L:2d} best |d'| "
+            + "  ".join(
+                f"u{j}:{d[j]:+.2f} (loop {m1[j]:+.3f}, normal {m0[j]:+.3f})" for j in order[:3]
+            )
+        )
     np.savez(out, **result)
 
 

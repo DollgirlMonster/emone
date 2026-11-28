@@ -32,8 +32,10 @@ def main():
         layer, head = (int(x) for x in where.split(":"))
         n = HEADS if layer in FULL else VHEADS
         scales.setdefault(layer, np.ones(n, np.float32))[head] = float(factor)
-    tensors = {f"layers.{L}.{'self_attn' if L in FULL else 'linear_attn'}.head_scale": v
-               for L, v in sorted(scales.items())}
+    tensors = {
+        f"layers.{L}.{'self_attn' if L in FULL else 'linear_attn'}.head_scale": v
+        for L, v in sorted(scales.items())
+    }
     blob = safetensors(tensors)
     out.mkdir(parents=True, exist_ok=True)
     (out / "weight_patch.safetensors").write_bytes(blob)
@@ -42,9 +44,11 @@ def main():
         "base": {"model_id": "qwen3.5-0.8b"},
         "rank": 1,
         "description": description,
-        "provenance": {"method": "per-head output scale chosen from W_O W_V eigenvalue sign "
-                                 "(benchmark/weight-edit/read_heads.py)",
-                       "scales": {str(L): v.tolist() for L, v in sorted(scales.items())}},
+        "provenance": {
+            "method": "per-head output scale chosen from W_O W_V eigenvalue sign "
+            "(benchmark/weight-edit/read_heads.py)",
+            "scales": {str(L): v.tolist() for L, v in sorted(scales.items())},
+        },
         "files": {"weight_patch.safetensors": hashlib.sha256(blob).hexdigest()},
     }
     (out / "weight_patch.json").write_text(json.dumps(manifest, indent=1) + "\n")

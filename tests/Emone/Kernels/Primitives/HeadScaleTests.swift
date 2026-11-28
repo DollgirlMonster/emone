@@ -16,14 +16,18 @@ import Testing
         // Two leading floats, so the offset is exercised, then one factor per head.
         let scales: [Float] = [9, 9] + (0..<heads).map { 0.5 + Float($0) * 0.25 }
         let x = try #require(
-            x0.withUnsafeBytes {
-                ctx.device.makeBuffer(
-                    bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+            x0.withUnsafeBytes { raw in
+                raw.baseAddress.flatMap {
+                    ctx.device.makeBuffer(
+                        bytes: $0, length: raw.count, options: .storageModeShared)
+                }
             })
         let s = try #require(
-            scales.withUnsafeBytes {
-                ctx.device.makeBuffer(
-                    bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+            scales.withUnsafeBytes { raw in
+                raw.baseAddress.flatMap {
+                    ctx.device.makeBuffer(
+                        bytes: $0, length: raw.count, options: .storageModeShared)
+                }
             })
         let cb = try #require(ctx.queue.makeCommandBuffer())
         try kernel.encode(

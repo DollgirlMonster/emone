@@ -32,9 +32,7 @@ from emone_profile import benchmark_log_path, server_command, server_environment
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / ".build/release/EmoneServer"
-MODEL = os.environ.get(
-    "EMONE_BENCH_MODEL", str(ROOT / "models/qwen3.8-flash-next_125B_A6B_4Bit")
-)
+MODEL = os.environ.get("EMONE_BENCH_MODEL", str(ROOT / "models/qwen3.8-flash-next_125B_A6B_4Bit"))
 PORT = 8131
 MAX_TOKENS = int(os.environ.get("SWEEP_TOKENS", "256"))
 PROMPT = "Write a detailed essay about the history of computing."

@@ -3,6 +3,19 @@ import Testing
 
 @testable import Emone
 
+/// Kev's head and hidden-state fixtures are safetensors, which `.gitignore`
+/// keeps out of the repository, so a fresh checkout (CI) does not have them.
+/// The comparison against them is skipped there, and the skip is recorded.
+private let kevTensorsPresent: Bool = {
+    let kev = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().appendingPathComponent("benchmark/kev")
+    return ["kev08b_head.safetensors", "kev08b_hidden.safetensors"].allSatisfy {
+        FileManager.default.fileExists(atPath: kev.appendingPathComponent($0).path)
+    }
+}()
+
 /// The decision model's host-side pieces, without a model: the pointer head's
 /// arithmetic against Kev's own numbers, the head file's validation, the
 /// delimiter lookup and the row layout the readout offsets come from.
@@ -36,7 +49,8 @@ struct DecisionModelTests {
     /// Kev's head on Kev's own fp32 final-normed rows (the reference fixture):
     /// the Swift arithmetic must reproduce its logits, so any gap the engine
     /// shows is the backbone's and never the head's.
-    @Test func theHeadReproducesKevsLogitsFromItsHiddenStates() throws {
+    @Test(.enabled(if: kevTensorsPresent, "Needs benchmark/kev/kev08b_{head,hidden}.safetensors"))
+    func theHeadReproducesKevsLogitsFromItsHiddenStates() throws {
         let head = try Self.readSafetensors(
             Self.kev.appendingPathComponent("kev08b_head.safetensors"))
         let hidden = try Self.readSafetensors(

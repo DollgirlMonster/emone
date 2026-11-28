@@ -8,28 +8,28 @@ import Emone
 /// Opens a pseudo-terminal of a given size, so the TTY paths are exercised
 /// against a real one rather than a stub.
 struct PseudoTerminal {
-    let master: Int32
-    let slave: Int32
+    let primary: Int32
+    let secondary: Int32
 
     init?(cols: UInt16 = 100, rows: UInt16 = 40) {
-        var master: Int32 = -1
-        var slave: Int32 = -1
+        var primary: Int32 = -1
+        var secondary: Int32 = -1
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        guard openpty(&master, &slave, nil, nil, &size) == 0 else { return nil }
-        // No output processing, so the master reads back exactly the bytes
-        // written to the slave (a real terminal turns "\n" into "\r\n").
+        guard openpty(&primary, &secondary, nil, nil, &size) == 0 else { return nil }
+        // No output processing, so the primary reads back exactly the bytes
+        // written to the secondary (a real terminal turns "\n" into "\r\n").
         var attributes = termios()
-        if tcgetattr(slave, &attributes) == 0 {
+        if tcgetattr(secondary, &attributes) == 0 {
             attributes.c_oflag &= ~tcflag_t(OPOST)
-            _ = tcsetattr(slave, TCSANOW, &attributes)
+            _ = tcsetattr(secondary, TCSANOW, &attributes)
         }
-        self.master = master
-        self.slave = slave
+        self.primary = primary
+        self.secondary = secondary
     }
 
     func close() {
-        Darwin.close(master)
-        Darwin.close(slave)
+        Darwin.close(primary)
+        Darwin.close(secondary)
     }
 }
 
@@ -125,7 +125,7 @@ struct PseudoTerminal {
         let pty = try #require(PseudoTerminal(cols: 123, rows: 45))
         defer { pty.close() }
         let probe = TerminalProbe.current(
-            stdoutFD: pty.slave, environment: ["TERM": "xterm-256color", "NO_COLOR": "1"])
+            stdoutFD: pty.secondary, environment: ["TERM": "xterm-256color", "NO_COLOR": "1"])
         #expect(probe.stdoutIsTTY)
         #expect((probe.cols, probe.rows) == (123, 45))
         #expect(probe.noColor)
@@ -133,9 +133,9 @@ struct PseudoTerminal {
         #expect(
             LiveTraceGate.decide(requested: true, probe: probe, shape: Self.routed)
                 == .run(plan: .full(width: 78, height: 30), depth: .none))
-        #expect(!TerminalProbe.current(stdoutFD: pty.slave, environment: [:]).noColor)
+        #expect(!TerminalProbe.current(stdoutFD: pty.secondary, environment: [:]).noColor)
         #expect(
-            TerminalProbe.current(stdoutFD: pty.slave, environment: ["NO_COLOR": ""]).noColor
+            TerminalProbe.current(stdoutFD: pty.secondary, environment: ["NO_COLOR": ""]).noColor
                 == false)
     }
 
@@ -178,7 +178,7 @@ struct PseudoTerminal {
             if count <= 0 { break }
             out.append(contentsOf: buffer[0..<count])
         }
-        return String(decoding: out, as: UTF8.self)
+        return out.lossyUTF8String
     }
 
     @Test func captureTeesToANonTerminalSinkUnchangedAndFeedsTheLog() throws {
@@ -203,11 +203,11 @@ struct PseudoTerminal {
         let pty = try #require(PseudoTerminal())
         defer { pty.close() }
         let log = LiveTraceLogTail()
-        let capture = try #require(LiveTraceStderrCapture.start(targetFD: pty.slave, log: log))
+        let capture = try #require(LiveTraceStderrCapture.start(targetFD: pty.secondary, log: log))
         let text = "[stop=eos new=3tok]\n"
-        _ = text.withCString { write(pty.slave, $0, strlen($0)) }
+        _ = text.withCString { write(pty.secondary, $0, strlen($0)) }
         let stopped = capture.stop()
-        #expect(String(decoding: stopped.held.flatMap { $0 }, as: UTF8.self) == text)
+        #expect(stopped.held.flatMap { $0 }.lossyUTF8String == text)
         #expect(log.recent() == ["[stop=eos new=3tok]"])
     }
 

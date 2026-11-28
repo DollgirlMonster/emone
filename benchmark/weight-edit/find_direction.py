@@ -47,7 +47,7 @@ def labels(positions, tokens):
         seen.add(key)
     stop = (first if first is not None else pos.size) - MARGIN
     lab[: max(stop, 0)] = np.where(lab[: max(stop, 0)] == -1, 0, lab[: max(stop, 0)])
-    return dict(zip(pos.tolist(), lab.tolist()))
+    return dict(zip(pos.tolist(), lab.tolist(), strict=True))
 
 
 def main():
@@ -59,8 +59,10 @@ def main():
         ref = head[:, 1] == layers[0]
         lab = labels(head[ref, 0], head[ref, 2])
         y = np.array([lab[p] for p in head[:, 0]])
-        print(f"{path}: {ref.sum()} positions, {int((y[ref] == 1).sum())} looping, "
-              f"{int((y[ref] == 0).sum())} normal")
+        print(
+            f"{path}: {ref.sum()} positions, {int((y[ref] == 1).sum())} looping, "
+            f"{int((y[ref] == 0).sum())} normal"
+        )
         for L in layers:
             m = head[:, 1] == L
             d = per_layer.setdefault(int(L), {"o1": [], "o0": [], "a1": [], "p0": []})
@@ -92,8 +94,10 @@ def main():
         result[f"u{L}"] = u
         result[f"d{L}"] = score
         result[f"a{L}"] = np.abs(np.concatenate(d["a1"])).mean(0)
-        print(f"L{L:2d}  d'={score:6.2f}  |mean gap|={gap:7.3f}  "
-              f"loop proj {p1.mean():7.3f}  normal proj {p0.mean():7.3f}  cos(u,pos drift)={cos_pos:5.2f}")
+        print(
+            f"L{L:2d}  d'={score:6.2f}  |mean gap|={gap:7.3f}  "
+            f"loop proj {p1.mean():7.3f}  normal proj {p0.mean():7.3f}  cos(u,pos drift)={cos_pos:5.2f}"
+        )
     np.savez(out_path, **result)
 
 

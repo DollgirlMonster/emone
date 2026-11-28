@@ -1,4 +1,3 @@
-from pathlib import Path
 """Greedy GSM8K slice through EmoneCLI, one process per problem.
 
 usage: run_gsm8k.py <out.jsonl> <start> <count> <max_new> [extra CLI args...]
@@ -14,11 +13,14 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 REPO = str(Path(__file__).resolve().parents[2])
 CLI = os.environ.get("TT_CLI", f"{REPO}/.build/release/EmoneCLI")
 MODEL = f"{REPO}/models/qwen3.5_0.8B_8Bit"
-DATA = os.environ.get("GSM8K_JSONL", os.path.join(os.path.dirname(__file__), "data/gsm8k_test.jsonl"))
+DATA = os.environ.get(
+    "GSM8K_JSONL", os.path.join(os.path.dirname(__file__), "data/gsm8k_test.jsonl")
+)
 SUFFIX = "\nPlease reason step by step, and put your final answer within \\boxed{}."
 
 
@@ -42,17 +44,27 @@ def decoding(problem_id):
     original and an edited run draw from the same stream."""
     if os.environ.get("TT_SAMPLE") != "1":
         return ["--temperature", "0"]
-    return ["--temperature", "0.6", "--top-p", "0.95", "--top-k", "20",
-            "--presence-penalty", "1.5", "--seed", str(problem_id)]
+    return [
+        "--temperature",
+        "0.6",
+        "--top-p",
+        "0.95",
+        "--top-k",
+        "20",
+        "--presence-penalty",
+        "1.5",
+        "--seed",
+        str(problem_id),
+    ]
 
 
 def main():
     out, start, count, max_new = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
     extra = sys.argv[5:]
-    rows = [json.loads(l) for l in open(DATA)][start : start + count]
+    rows = [json.loads(line) for line in open(DATA)][start : start + count]
     done = set()
     if os.path.exists(out):
-        done = {json.loads(l)["id"] for l in open(out)}
+        done = {json.loads(line)["id"] for line in open(out)}
     with open(out, "a") as sink:
         for i, row in enumerate(rows, start):
             if i in done:
@@ -66,20 +78,40 @@ def main():
             if "TT_CAPTURE_DIR" in env:
                 env["EMONE_MLP_CAPTURE"] = f"{env['TT_CAPTURE_DIR']}/cap_{i}.bin"
             p = subprocess.run(
-                [CLI, "--model", MODEL, "--messages-file", msgs, "--thinking", "on",
-                 *decoding(i), "--max-new", max_new, *extra],
-                capture_output=True, text=True, env=env)
+                [
+                    CLI,
+                    "--model",
+                    MODEL,
+                    "--messages-file",
+                    msgs,
+                    "--thinking",
+                    "on",
+                    *decoding(i),
+                    "--max-new",
+                    max_new,
+                    *extra,
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
             os.unlink(msgs)
             text = p.stdout
             m = re.search(r"stop=(\w+) .*new=(\d+)tok", p.stderr)
             stop, tokens = (m.group(1), int(m.group(2))) if m else (None, None)
             pred = extract(text)
             rec = {
-                "id": i, "gold": gold, "pred": pred,
+                "id": i,
+                "gold": gold,
+                "pred": pred,
                 "correct": pred is not None and gold is not None and abs(pred - gold) < 1e-6,
-                "tokens": tokens, "stop": stop, "capped": stop == "maxTokens",
-                "seconds": round(time.time() - t0, 1), "rc": p.returncode,
-                "stderr_tail": p.stderr[-400:], "text": text,
+                "tokens": tokens,
+                "stop": stop,
+                "capped": stop == "maxTokens",
+                "seconds": round(time.time() - t0, 1),
+                "rc": p.returncode,
+                "stderr_tail": p.stderr[-400:],
+                "text": text,
             }
             sink.write(json.dumps(rec) + "\n")
             sink.flush()

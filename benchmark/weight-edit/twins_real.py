@@ -24,14 +24,17 @@ per_layer = int(sys.argv[3]) if len(sys.argv) > 3 else 12
 arch = json.loads((model / "manifest.json").read_text())["arch"]
 NE, K, D = arch["numExperts"], arch["topKExperts"], arch["hiddenSize"]
 w, packed = GTurboWeights(model), PackedExperts(model)
-P = next(p for p in ("model.language_model.", "language_model.model.")
-         if f"{p}layers.0.mlp.gate.weight" in w.entries)
+P = next(
+    p
+    for p in ("model.language_model.", "language_model.model.")
+    if f"{p}layers.0.mlp.gate.weight" in w.entries
+)
 
 rec = 4 * (2 + K) + 2 * D
 raw = np.fromfile(cap, dtype=np.uint8)
 raw = raw[: raw.size // rec * rec].reshape(-1, rec)
 head = raw[:, : 4 * (2 + K)].copy().view(np.int32).reshape(-1, 2 + K)
-X_all = raw[:, 4 * (2 + K):].copy().view(np.float16).astype(np.float32)
+X_all = raw[:, 4 * (2 + K) :].copy().view(np.float16).astype(np.float32)
 
 
 def run(L, e, X):
@@ -44,7 +47,11 @@ def compare(L, pairs, X, chosen):
     cs, gaps, joint = [], [], []
     for a, b in pairs:
         ya, yb = run(L, a, X), run(L, b, X)
-        cs.append(np.mean((ya * yb).sum(1) / (np.linalg.norm(ya, axis=1) * np.linalg.norm(yb, axis=1) + 1e-9)))
+        cs.append(
+            np.mean(
+                (ya * yb).sum(1) / (np.linalg.norm(ya, axis=1) * np.linalg.norm(yb, axis=1) + 1e-9)
+            )
+        )
         gaps.append(np.linalg.norm(ya - yb) / (np.linalg.norm(ya) + 1e-9))
         either = chosen[:, a] | chosen[:, b]
         joint.append((chosen[:, a] & chosen[:, b]).sum() / max(1, either.sum()))
@@ -73,5 +80,8 @@ for L in sorted(set(head[:, 1].tolist())):
     for label, pairs in (("router twins", twins), ("co-firing", cofire), ("random", rand)):
         c, gap, joint, seen = compare(L, pairs, X, chosen)
         rc = np.mean([C[a, b] for a, b in pairs])
-        print(f"L{L:2d} {label:12s} router cos {rc:.2f} | output cos {c:+.2f} gap {gap:.2f} | "
-              f"chosen together {joint:.2f} of the time ({seen}/{len(pairs)} pairs ever)", flush=True)
+        print(
+            f"L{L:2d} {label:12s} router cos {rc:.2f} | output cos {c:+.2f} gap {gap:.2f} | "
+            f"chosen together {joint:.2f} of the time ({seen}/{len(pairs)} pairs ever)",
+            flush=True,
+        )

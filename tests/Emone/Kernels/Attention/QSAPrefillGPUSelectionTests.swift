@@ -34,22 +34,13 @@ import Testing
         var hostKeep = [UInt8](repeating: 0xEE, count: tokens * stride)
         var indices = [UInt32](repeating: 0, count: tokens * width)
         var counts = [UInt32](repeating: 0, count: tokens)
-        scores.withUnsafeBufferPointer { sp in
-            hostKeep.withUnsafeMutableBufferPointer { kp in
-                indices.withUnsafeMutableBufferPointer { ip in
-                    counts.withUnsafeMutableBufferPointer { cp in
-                        QSAIndexer.selectPrefillRows(
-                            .init(
-                                startPosition: startPosition, tokens: tokens, stride: stride,
-                                indexWidth: width, selectionWidth: width,
-                                compressRatio: ratio, scoredBlocks: scoredBlocks),
-                            keep: kp.baseAddress!, indices: ip.baseAddress!,
-                            counts: cp.baseAddress!, scores: sp.baseAddress!,
-                            concurrent: false)
-                    }
-                }
-            }
-        }
+        QSAIndexer.selectPrefillRows(
+            .init(
+                startPosition: startPosition, tokens: tokens, stride: stride,
+                indexWidth: width, selectionWidth: width,
+                compressRatio: ratio, scoredBlocks: scoredBlocks),
+            keep: &hostKeep, indices: &indices, counts: &counts, scores: scores,
+            concurrent: false)
 
         guard
             let scoreBuf = ctx.device.makeBuffer(

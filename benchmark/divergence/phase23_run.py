@@ -80,10 +80,19 @@ def busy() -> str:
 
 
 def post(model_id: str, messages: list, max_tokens: int, timeout: int = 1800) -> dict:
-    body = json.dumps({"model": model_id, "messages": messages, "max_tokens": max_tokens,
-                       "temperature": 0, "seed": 0, "stream": False}).encode()
-    req = urllib.request.Request(f"http://127.0.0.1:{PORT}/v1/chat/completions", body,
-                                 {"Content-Type": "application/json"})
+    body = json.dumps(
+        {
+            "model": model_id,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0,
+            "seed": 0,
+            "stream": False,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{PORT}/v1/chat/completions", body, {"Content-Type": "application/json"}
+    )
     t0 = time.monotonic()
     with urllib.request.urlopen(req, timeout=timeout) as r:
         out = json.load(r)
@@ -109,7 +118,7 @@ def arm_server(out: Path, model_key: str, arm: str):
     install, model_id = MODELS[model_key]
     env_over, extra = ARMS[arm]
     d = out / model_key / arm
-    if (b := busy()):
+    if b := busy():
         sys.exit(f"model process already running, stopping:\n{b}")
     d.mkdir(parents=True, exist_ok=True)
     cache = out / "_cache" / f"{model_key}-{arm}"
@@ -118,13 +127,33 @@ def arm_server(out: Path, model_key: str, arm: str):
     env = dict(os.environ)
     env.update(env_over)
     env.update({"EMONE_LOGIT_TRACE": "1", "EMONE_PROMPT_CACHE_ROOT": str(cache)})
-    cmd = ["script", "-q", "/dev/null", "tools/serve.sh", install, "--reasoning", "off",
-           "--no-live-trace", "--no-catalog", "--idle", "7200", "--port", str(PORT)]
+    cmd = [
+        "script",
+        "-q",
+        "/dev/null",
+        "tools/serve.sh",
+        install,
+        "--reasoning",
+        "off",
+        "--no-live-trace",
+        "--no-catalog",
+        "--idle",
+        "7200",
+        "--port",
+        str(PORT),
+    ]
     if extra:
         cmd += ["--", *extra]
     log = open(d / "server.log", "wb")
-    proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=log,
-                            stderr=subprocess.STDOUT, start_new_session=True)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=ROOT,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
     try:
         wait_health()
         # Warm-up: load the model, touch the expert set, then give the
@@ -136,8 +165,9 @@ def arm_server(out: Path, model_key: str, arm: str):
         print(f"{time.strftime('%H:%M:%S')} {model_key}/{arm}: warm", flush=True)
         yield model_id
     finally:
-        pids = subprocess.run(["pgrep", "-f", "Release/EmoneServer"], capture_output=True,
-                              text=True).stdout.split()
+        pids = subprocess.run(
+            ["pgrep", "-f", "Release/EmoneServer"], capture_output=True, text=True
+        ).stdout.split()
         for pid in pids:
             os.kill(int(pid), signal.SIGTERM)
         try:
@@ -168,16 +198,38 @@ def run_arm(model_key: str, arm: str) -> None:
                 r = post(model_id, msgs, TURN_TOKENS)
                 text = r["choices"][0]["message"].get("content") or ""
                 msgs.append({"role": "assistant", "content": text})
-                results.write(json.dumps({"phase": 2, "id": conv["id"], "turn": ti, "text": text,
-                                          "usage": r.get("usage"), "wall_s": r["_wall_s"]}) + "\n")
+                results.write(
+                    json.dumps(
+                        {
+                            "phase": 2,
+                            "id": conv["id"],
+                            "turn": ti,
+                            "text": text,
+                            "usage": r.get("usage"),
+                            "wall_s": r["_wall_s"],
+                        }
+                    )
+                    + "\n"
+                )
                 results.flush()
         print(f"{time.strftime('%H:%M:%S')} {model_key}/{arm}: phase 2 done", flush=True)
         for task in tasks:
             budget = MATH_TOKENS if task["kind"] == "math" else CODE_TOKENS
             r = post(model_id, [{"role": "user", "content": task["prompt"]}], budget)
             text = r["choices"][0]["message"].get("content") or ""
-            results.write(json.dumps({"phase": 3, "id": task["id"], "turn": 0, "text": text,
-                                      "usage": r.get("usage"), "wall_s": r["_wall_s"]}) + "\n")
+            results.write(
+                json.dumps(
+                    {
+                        "phase": 3,
+                        "id": task["id"],
+                        "turn": 0,
+                        "text": text,
+                        "usage": r.get("usage"),
+                        "wall_s": r["_wall_s"],
+                    }
+                )
+                + "\n"
+            )
             results.flush()
         (d / "done").write_text(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")
         print(f"{time.strftime('%H:%M:%S')} {model_key}/{arm}: phase 3 done", flush=True)

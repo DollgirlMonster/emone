@@ -4,6 +4,11 @@ import Testing
 
 @testable import Emone
 
+private let mppAvailableForDenseQMM: Bool = {
+    guard let context = try? MetalContext() else { return false }
+    return MPPPrefillInt4QMM(context: context, weightBits: 4).isAvailable
+}()
+
 /// `prefill_routed_qmm_gate_up` and `prefill_routed_qmm` against a host
 /// reference: a tile of experts with uneven row counts (one below a 32-row work
 /// item, one spanning several), 4- and 8-bit weights in Emone's affine
@@ -332,7 +337,9 @@ import Testing
     /// weights: agreement, and with EMONE_ROUTED_QMM_BENCH=1 GPU times at
     /// Qwen3.8's GDN input (N 16,384, K 2,560) and output (N 2,560, K 6,144)
     /// projections, each kernel run alone.
-    @Test(arguments: [(96, 256, 512), (4_096, 16_384, 2_560), (4_096, 2_560, 6_144)])
+    @Test(
+        .enabled(if: mppAvailableForDenseQMM, "Requires runtime MPP TensorOps support"),
+        arguments: [(96, 256, 512), (4_096, 16_384, 2_560), (4_096, 2_560, 6_144)])
     func denseMatchesMPP(m: Int, n: Int, k: Int) throws {
         let bench = ProcessInfo.processInfo.environment["EMONE_ROUTED_QMM_BENCH"] == "1"
         if m > 96 && !bench { return }

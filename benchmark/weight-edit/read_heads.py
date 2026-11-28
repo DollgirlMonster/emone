@@ -37,7 +37,9 @@ def g(name):
 
 
 print("== full attention ==")
-print("head  rot-share  fast-rot-share  qk-rot-energy  |  ov: eig+ eig-  copy(sum re/sum |l|)  top eig")
+print(
+    "head  rot-share  fast-rot-share  qk-rot-energy  |  ov: eig+ eig-  copy(sum re/sum |l|)  top eig"
+)
 for L in FULL:
     a = f"{P}{L}."
     gin = g(a + "input_layernorm.weight")
@@ -62,8 +64,11 @@ for L in FULL:
         neg = -lam.real[lam.real < 0].sum()
         copy = lam.real.sum() / np.abs(lam).sum()
         top = lam[np.argmax(np.abs(lam))]
-        print(f"L{L:2d}h{h}  {rot_share:9.2f}  {fast_share:14.2f}  {e_rot / e_all:13.2f}  |  "
-              f"{pos:5.2f} {neg:5.2f}  {copy:+18.2f}  {top.real:+.2f}{top.imag:+.2f}i", flush=True)
+        print(
+            f"L{L:2d}h{h}  {rot_share:9.2f}  {fast_share:14.2f}  {e_rot / e_all:13.2f}  |  "
+            f"{pos:5.2f} {neg:5.2f}  {copy:+18.2f}  {top.real:+.2f}{top.imag:+.2f}i",
+            flush=True,
+        )
 
 print("\n== gated deltanet ==")
 print("layer  half-life (tokens) per head, sorted                     prev-token conv channels")
@@ -77,10 +82,14 @@ for L in range(24):
     half = np.log(0.5) / np.log(np.clip(decay, 1e-9, 1 - 1e-9))
     conv = w.get(a + "conv1d.weight")[:, 0, :]  # [channels x 4], last tap = current position
     prev = np.abs(conv[:, 2]) > 2 * np.abs(conv[:, [0, 1, 3]]).max(1)
-    print(f"L{L:2d}   {' '.join(f'{x:6.1f}' for x in np.sort(half))}   {int(prev.sum()):4d}/{len(prev)}")
+    print(
+        f"L{L:2d}   {' '.join(f'{x:6.1f}' for x in np.sort(half))}   {int(prev.sum()):4d}/{len(prev)}"
+    )
 
 print("\n== gated deltanet OV: out_proj . diag(norm) . W_v, per value head ==")
-print("layer  (half-life, copy) for heads with half-life > 100 tokens; then the strongest copier and suppressor")
+print(
+    "layer  (half-life, copy) for heads with half-life > 100 tokens; then the strongest copier and suppressor"
+)
 VH, VD, KH, KD = 16, 128, 16, 128
 for L in range(24):
     if L in FULL:
@@ -88,7 +97,7 @@ for L in range(24):
     a = f"{P}{L}.linear_attn."
     gin = g(f"{P}{L}.input_layernorm.weight")
     qkv = w.get(a + "in_proj_qkv.weight")  # [q (KH*KD) ; k (KH*KD) ; v (VH*VD)] x hidden
-    Wv = qkv[2 * KH * KD:].reshape(VH, VD, -1)
+    Wv = qkv[2 * KH * KD :].reshape(VH, VD, -1)
     Wo = w.get(a + "out_proj.weight").reshape(-1, VH, VD)
     nw = g(a + "norm.weight")
     A = np.exp(w.get(a + "A_log"))
@@ -101,5 +110,7 @@ for L in range(24):
         cs.append(lam.real.sum() / np.abs(lam).sum())
     cs = np.array(cs)
     longs = " ".join(f"({half[h]:.0f},{cs[h]:+.2f})" for h in np.argsort(-half) if half[h] > 100)
-    print(f"L{L:2d}  {longs}   | max {cs.max():+.2f} h{int(cs.argmax())} (hl {half[cs.argmax()]:.0f})  "
-          f"min {cs.min():+.2f} h{int(cs.argmin())} (hl {half[cs.argmin()]:.0f})")
+    print(
+        f"L{L:2d}  {longs}   | max {cs.max():+.2f} h{int(cs.argmax())} (hl {half[cs.argmax()]:.0f})  "
+        f"min {cs.min():+.2f} h{int(cs.argmin())} (hl {half[cs.argmin()]:.0f})"
+    )

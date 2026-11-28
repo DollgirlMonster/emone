@@ -23,9 +23,11 @@ import Testing
         let inject = (0..<(tokens * streams)).map { _ in Float16(next() * 4) }
         func buffer<T>(_ v: [T]) throws -> MTLBuffer {
             guard
-                let b = v.withUnsafeBytes({
-                    ctx.device.makeBuffer(
-                        bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+                let b = v.withUnsafeBytes({ raw in
+                    raw.baseAddress.flatMap {
+                        ctx.device.makeBuffer(
+                            bytes: $0, length: raw.count, options: .storageModeShared)
+                    }
                 })
             else { throw MetalError.commandEncoderFailed }
             return b

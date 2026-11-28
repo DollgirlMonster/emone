@@ -47,9 +47,7 @@ LOGS = ROOT / ".build/benchmark-logs"
 def journal_for(label: str, run: str) -> Path | None:
     paths = [
         Path(p)
-        for p in glob.glob(
-            str(LOGS / f"memval-scratch-{label}/book-auto-r{run}/emone/*/*.ndjson")
-        )
+        for p in glob.glob(str(LOGS / f"memval-scratch-{label}/book-auto-r{run}/emone/*/*.ndjson"))
     ]
     real = [p for p in paths if "_global" not in p.name and p.stat().st_size > 0]
     return real[0] if real else None

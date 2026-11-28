@@ -37,8 +37,7 @@ os.environ.setdefault("EMONE_PORT", PORT)
 os.environ.setdefault(
     "EMONE_MEMVAL_RESULTS",
     str(
-        ROOT
-        / f".build/benchmark-logs/memory-small-{os.environ.get('EMONE_SMALL_LABEL', 'qwen2b')}"
+        ROOT / f".build/benchmark-logs/memory-small-{os.environ.get('EMONE_SMALL_LABEL', 'qwen2b')}"
     ),
 )
 

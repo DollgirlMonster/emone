@@ -150,7 +150,7 @@ public indirect enum OrderedJSON: Equatable, Sendable {
         mutating func hex4() throws -> UInt32 {
             guard index + 4 <= bytes.count,
                 let v = UInt32(
-                    String(decoding: bytes[index..<(index + 4)], as: UTF8.self), radix: 16)
+                    bytes[index..<(index + 4)].lossyUTF8String, radix: 16)
             else { throw fail("bad \\u escape") }
             index += 4
             return v
@@ -200,7 +200,7 @@ public indirect enum OrderedJSON: Equatable, Sendable {
                 default: throw fail("bad escape")
                 }
             }
-            return String(decoding: out, as: UTF8.self)
+            return out.lossyUTF8String
         }
 
         mutating func number() throws -> OrderedJSON {
@@ -230,7 +230,7 @@ public indirect enum OrderedJSON: Equatable, Sendable {
                 }
                 guard digits() > 0 else { throw fail("expected exponent digits") }
             }
-            let text = String(decoding: bytes[start..<index], as: UTF8.self)
+            let text = bytes[start..<index].lossyUTF8String
             if isInteger { return .integer(text == "-0" ? "0" : text) }
             guard let v = Double(text), v.isFinite else { throw fail("number out of range") }
             return .number(v)
@@ -274,7 +274,7 @@ public enum KevRender {
             return sign + digits[..<cut] + "." + digits[cut...]
         }
         let e = decpt - 1
-        let mantissa = digits.count == 1 ? digits : "\(digits.first!).\(digits.dropFirst())"
+        let mantissa = digits.count == 1 ? digits : "\(digits.prefix(1)).\(digits.dropFirst())"
         let magnitude = abs(e)
         return sign + mantissa + "e" + (e < 0 ? "-" : "+") + (magnitude < 10 ? "0" : "")
             + "\(magnitude)"
