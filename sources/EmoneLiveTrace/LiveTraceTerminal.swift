@@ -402,7 +402,7 @@ final class LiveTraceStderrCapture: @unchecked Sendable {
 
     private func emit(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
-        log.append(LiveTraceText.sanitize(String(decoding: bytes, as: UTF8.self)))
+        log.append(LiveTraceText.sanitize(bytes.lossyUTF8String))
     }
 
     private func writeLoop() {

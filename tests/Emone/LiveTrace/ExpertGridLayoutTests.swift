@@ -78,12 +78,12 @@ import Emone
                 == .full(width: 78, height: 30))
     }
 
-    @Test func topKAndExpertCountFollowTheModel() {
+    @Test func topKAndExpertCountFollowTheModel() throws {
         // top-8 and 256 experts: same footprint as the shipped 35B models.
         #expect(LiveTraceViewPlan.fullHeight(shape: Self.shape(experts: 256, topK: 8)) == 30)
         // A 64-expert model has a short grid, so the router panel sets the height.
         let small = Self.shape(experts: 64, topK: 6)
-        let grid = ExpertGridLayout.make(numExperts: 64)!
+        let grid = try #require(ExpertGridLayout.make(numExperts: 64))
         #expect(LiveTraceViewPlan.gridBlockHeight(grid: grid, topK: 6) == 10 + 3)
         #expect(LiveTraceViewPlan.fullHeight(shape: small) == 1 + 1 + 13 + 1 + 1 + 1 + 2 + 1 + 4)
         // More picks than the panel lists are capped, not allowed to grow it.

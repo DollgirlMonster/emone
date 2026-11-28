@@ -155,9 +155,7 @@ def run_quant(model, label, mtp_model=None, engine="gpu"):
     rates, cts = [], []
     with open(log_path) as f:
         for line in f:
-            if (
-                "Emone generation" in line or "Emone mtp " in line
-            ) and "decode_tok_s=" in line:
+            if ("Emone generation" in line or "Emone mtp " in line) and "decode_tok_s=" in line:
                 rates.append(float(line.split("decode_tok_s=")[1].split()[0]))
             if "completed in" in line and "completion=" in line:
                 cts.append(int(line.split("completion=")[1].split()[0]))

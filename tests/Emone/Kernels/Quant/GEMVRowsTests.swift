@@ -249,9 +249,11 @@ import Testing
         func bf16(_ v: Float) -> UInt16 { UInt16(truncatingIfNeeded: v.bitPattern >> 16) }
         func buffer<T>(_ values: [T]) throws -> MTLBuffer {
             try #require(
-                values.withUnsafeBytes {
-                    ctx.device.makeBuffer(
-                        bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+                values.withUnsafeBytes { raw in
+                    raw.baseAddress.flatMap {
+                        ctx.device.makeBuffer(
+                            bytes: $0, length: raw.count, options: .storageModeShared)
+                    }
                 })
         }
         let groups = n * k / Quantization.groupSize
@@ -292,9 +294,11 @@ import Testing
         func bf16(_ v: Float) -> UInt16 { UInt16(truncatingIfNeeded: v.bitPattern >> 16) }
         func buffer<T>(_ values: [T]) throws -> MTLBuffer {
             try #require(
-                values.withUnsafeBytes {
-                    ctx.device.makeBuffer(
-                        bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+                values.withUnsafeBytes { raw in
+                    raw.baseAddress.flatMap {
+                        ctx.device.makeBuffer(
+                            bytes: $0, length: raw.count, options: .storageModeShared)
+                    }
                 })
         }
         let groups = m * n / Quantization.groupSize
@@ -345,9 +349,11 @@ import Testing
         func bf16(_ v: Float) -> UInt16 { UInt16(truncatingIfNeeded: v.bitPattern >> 16) }
         func buffer<T>(_ values: [T]) throws -> MTLBuffer {
             try #require(
-                values.withUnsafeBytes {
-                    ctx.device.makeBuffer(
-                        bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+                values.withUnsafeBytes { raw in
+                    raw.baseAddress.flatMap {
+                        ctx.device.makeBuffer(
+                            bytes: $0, length: raw.count, options: .storageModeShared)
+                    }
                 })
         }
         let groups = m * n / Quantization.groupSize

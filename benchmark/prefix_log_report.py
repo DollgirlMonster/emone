@@ -83,14 +83,15 @@ def main():
     print(f"cached by server    {cached_total}  ({100 * cached_total / prompt_total:.1f}%)")
     print(f"reusable (ideal)    {reusable_total}  ({100 * reusable_total / prompt_total:.1f}%)")
     lost = sum(missed)
-    print(f"missed reuse        {lost} tokens, "
-          f"~{lost * args.dense_ms_per_token / 1000:.0f} s of dense prefill "
-          f"(at {args.dense_ms_per_token} ms/token)")
+    print(
+        f"missed reuse        {lost} tokens, "
+        f"~{lost * args.dense_ms_per_token / 1000:.0f} s of dense prefill "
+        f"(at {args.dense_ms_per_token} ms/token)"
+    )
     print(f"requests missing >1K reusable tokens: {sum(1 for m in missed if m > 1024)}")
 
     print()
-    print(f"divergence points   {len(divergences)} "
-          f"({len(hits_at)} distinct prefixes)")
+    print(f"divergence points   {len(divergences)} ({len(hits_at)} distinct prefixes)")
     hot = [(k, c) for k, c in hits_at.items() if c >= 2]
     print(f"prefixes diverged from 2+ times (pin candidates): {len(hot)}")
 
@@ -105,10 +106,11 @@ def main():
             boundary += 1
     if divergences:
         gaps = sorted(t % c if c > 0 else t for t, c, _ in divergences)
-        print(f"gap past last chunk boundary: median {gaps[len(gaps) // 2]} tokens, "
-              f"max {gaps[-1]}")
-        print(f"placement rule: boundary snapshot {boundary}, exact cut {cut} "
-              f"(cut when gap x {args.dense_ms_per_token} ms x reuses > {args.cut_cost_s} s)")
+        print(f"gap past last chunk boundary: median {gaps[len(gaps) // 2]} tokens, max {gaps[-1]}")
+        print(
+            f"placement rule: boundary snapshot {boundary}, exact cut {cut} "
+            f"(cut when gap x {args.dense_ms_per_token} ms x reuses > {args.cut_cost_s} s)"
+        )
 
 
 if __name__ == "__main__":

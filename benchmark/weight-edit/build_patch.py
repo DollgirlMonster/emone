@@ -20,7 +20,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from gturbo_reader import GTurboWeights  # noqa: E402
 
-MODEL = os.environ.get("TT_MODEL", str(Path(__file__).resolve().parents[2] / "models/qwen3.5_0.8B_8Bit"))
+MODEL = os.environ.get(
+    "TT_MODEL", str(Path(__file__).resolve().parents[2] / "models/qwen3.5_0.8B_8Bit")
+)
 FORMAT = "emone-patch-v1"
 
 
@@ -28,8 +30,11 @@ def safetensors(tensors):
     header, body = {"__metadata__": {"format": FORMAT}}, b""
     for name, arr in tensors.items():
         data = np.ascontiguousarray(arr, dtype=np.float32).tobytes()
-        header[name] = {"dtype": "F32", "shape": list(arr.shape),
-                        "data_offsets": [len(body), len(body) + len(data)]}
+        header[name] = {
+            "dtype": "F32",
+            "shape": list(arr.shape),
+            "data_offsets": [len(body), len(body) + len(data)],
+        }
         body += data
     js = json.dumps(header, sort_keys=True).encode()
     js += b" " * (-len(js) % 8)
@@ -58,8 +63,11 @@ def main():
         b = -u[:, None]
         tensors[f"layers.{L}.mlp.down_proj.lora_A"] = a
         tensors[f"layers.{L}.mlp.down_proj.lora_B"] = b
-        chosen[str(L)] = {"columns": int(mask.sum()), "d_prime": float(dirs[f"d{L}"]),
-                          "weights_changed": int(mask.sum()) * W.shape[0]}
+        chosen[str(L)] = {
+            "columns": int(mask.sum()),
+            "d_prime": float(dirs[f"d{L}"]),
+            "weights_changed": int(mask.sum()) * W.shape[0],
+        }
     out.mkdir(parents=True, exist_ok=True)
     blob = safetensors(tensors)
     (out / "weight_patch.safetensors").write_bytes(blob)
@@ -68,12 +76,14 @@ def main():
         "base": {"model_id": "qwen3.5-0.8b"},
         "rank": 1,
         "description": "Projects a looping direction out of mlp.down_proj columns "
-                       f"in layers {layers} (Emone-a37 spike).",
+        f"in layers {layers} (Emone-a37 spike).",
         "provenance": {
             "method": "difference of class means of dense-MLP outputs on decode positions "
-                      "inside vs. before exact 24-gram repeats, greedy GSM8K generations; "
-                      "columns ranked by |u.W_j| * mean|act_j| on looping positions",
-            "columns": k, "direction": key, "layers": chosen,
+            "inside vs. before exact 24-gram repeats, greedy GSM8K generations; "
+            "columns ranked by |u.W_j| * mean|act_j| on looping positions",
+            "columns": k,
+            "direction": key,
+            "layers": chosen,
         },
         "files": {"weight_patch.safetensors": hashlib.sha256(blob).hexdigest()},
     }

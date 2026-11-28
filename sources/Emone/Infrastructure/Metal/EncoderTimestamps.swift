@@ -1,13 +1,13 @@
 import Foundation
 import Metal
 
+// unchecked-invariant: every field is read and written under `lock`.
 /// DIAG (local only): `EMONE_ENCODER_TIMESTAMPS=<file>` samples the GPU
 /// timestamp at the start and end of every compute encoder (stage-boundary
 /// counter sampling, the only kind an M1 Max offers) and, at process exit,
 /// writes one `label,start,end` line per encoder in GPU ticks converted to
 /// seconds on the CPU clock. Off: `timedComputeEncoder()` is
 /// `makeComputeCommandEncoder()`, nothing else changes.
-// unchecked-invariant: every field is read and written under `lock`.
 final class EncoderTimestamps: @unchecked Sendable {
     static let shared = EncoderTimestamps()
     static let path = ProcessInfo.processInfo.environment["EMONE_ENCODER_TIMESTAMPS"]
@@ -81,7 +81,7 @@ final class EncoderTimestamps: @unchecked Sendable {
             }
             guard let data = resolved else {
                 FileHandle.standardError.write(
-                    Data("resolve returned nil for \(count) samples\n".utf8));
+                    Data("resolve returned nil for \(count) samples\n".utf8))
                 continue
             }
             data.withUnsafeBytes { raw in

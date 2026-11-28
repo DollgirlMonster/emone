@@ -28,8 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import phase23_sets as sets  # noqa: E402
 from phase23_run import ARMS, OUT  # noqa: E402
 
-LOGIT = re.compile(r"\[logit\] pos=(\d+) chosen=(\d+) top1=\d+:(-?[\d.]+) top2=\d+:(-?[\d.]+) "
-                   r"margin=(-?[\d.]+)")
+LOGIT = re.compile(
+    r"\[logit\] pos=(\d+) chosen=(\d+) top1=\d+:(-?[\d.]+) top2=\d+:(-?[\d.]+) "
+    r"margin=(-?[\d.]+)"
+)
 ACCEPT = re.compile(r"request chatcmpl-\S+ accepted")
 
 
@@ -67,8 +69,13 @@ def code_ok(text: str, tests: list[str]) -> bool:
         p = Path(tmp) / "t.py"
         p.write_text(src)
         try:
-            r = subprocess.run([sys.executable, "-I", str(p)], cwd=tmp, capture_output=True,
-                               timeout=10, stdin=subprocess.DEVNULL)
+            r = subprocess.run(
+                [sys.executable, "-I", str(p)],
+                cwd=tmp,
+                capture_output=True,
+                timeout=10,
+                stdin=subprocess.DEVNULL,
+            )
         except subprocess.TimeoutExpired:
             return False
     return r.returncode == 0
@@ -79,7 +86,7 @@ def sign_p(a: int, b: int) -> float:
     if n == 0:
         return 1.0
     k = min(a, b)
-    return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
+    return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2**n)
 
 
 def phase2_row(base_tr, arm_tr, base_res, arm_res) -> str:
@@ -89,7 +96,7 @@ def phase2_row(base_tr, arm_tr, base_res, arm_res) -> str:
     margins = []
     for i in idx:
         a, b = base_tr[i], arm_tr[i]
-        k = next((s for s, (x, y) in enumerate(zip(a, b)) if x[0] != y[0]), None)
+        k = next((s for s, (x, y) in enumerate(zip(a, b, strict=False)) if x[0] != y[0]), None)
         if k is None and len(a) != len(b):
             k = min(len(a), len(b))
         cid = base_res[i]["id"]
@@ -106,8 +113,10 @@ def phase2_row(base_tr, arm_tr, base_res, arm_res) -> str:
     same_convs = sum(1 for v in convs.values() if v)
     med_step = f"{st.median(steps):.0f}" if steps else "-"
     med_m = f"{st.median(margins):.2f}" if margins else "-"
-    return (f"{same_turns}/{len(idx)} | {same_convs}/{len(convs)} | {med_step} | "
-            f"{near}/{flips} | {med_m}")
+    return (
+        f"{same_turns}/{len(idx)} | {same_convs}/{len(convs)} | {med_step} | "
+        f"{near}/{flips} | {med_m}"
+    )
 
 
 def outcomes(res: list[dict]) -> dict[str, bool]:
@@ -117,8 +126,11 @@ def outcomes(res: list[dict]) -> dict[str, bool]:
         if r["phase"] != 3:
             continue
         t = by_id[r["id"]]
-        out[r["id"]] = (math_ok(r["text"], t["answer"]) if t["kind"] == "math"
-                        else code_ok(r["text"], t["tests"]))
+        out[r["id"]] = (
+            math_ok(r["text"], t["answer"])
+            if t["kind"] == "math"
+            else code_ok(r["text"], t["tests"])
+        )
     return out
 
 
@@ -132,8 +144,10 @@ def main() -> None:
         base_text = {r["id"]: r["text"] for r in base_res if r["phase"] == 3}
         print(f"\n## {m}\n")
         print("Phase 2, token flips against base (72 turns in 24 three-turn conversations).\n")
-        print("| arm | turns identical | conversations identical | median first-flip step | "
-              "flips at base gap < 0.5 | median base gap at flip |")
+        print(
+            "| arm | turns identical | conversations identical | median first-flip step | "
+            "flips at base gap < 0.5 | median base gap at flip |"
+        )
         print("|---|---|---|---|---|---|")
         rows3 = []
         for arm in ARMS:
@@ -156,12 +170,16 @@ def main() -> None:
             moved = len(out) - same_text
             bo = sum(base_out[k] and not out[k] for k in out)
             ao = sum(out[k] and not base_out[k] for k in out)
-            rows3.append(f"| {arm} | {maths}/30 | {codes}/15 | {same_text}/{len(out)} | "
-                         f"{agree}/{len(out)} | {moved_agree}/{moved} | {bo} / {ao} | "
-                         f"{sign_p(bo, ao):.2f} |")
+            rows3.append(
+                f"| {arm} | {maths}/30 | {codes}/15 | {same_text}/{len(out)} | "
+                f"{agree}/{len(out)} | {moved_agree}/{moved} | {bo} / {ao} | "
+                f"{sign_p(bo, ao):.2f} |"
+            )
         print("\nPhase 3, task outcomes (30 arithmetic, 15 code).\n")
-        print("| arm | math pass | code pass | text identical to base | outcome same as base | "
-              "same outcome where text moved | base-only / arm-only pass | sign-test p |")
+        print(
+            "| arm | math pass | code pass | text identical to base | outcome same as base | "
+            "same outcome where text moved | base-only / arm-only pass | sign-test p |"
+        )
         print("|---|---|---|---|---|---|---|---|")
         print("\n".join(rows3))
 

@@ -83,9 +83,7 @@ DENSE_FAMILIES = frozenset({"qwen35-2b", "qwen35-4b", "qwen35-9b"})
 MTP_PATHS = {
     "ornith": ROOT / "models/ornith-1.5_35B_A3B_MTP_4Bit",
 }
-PROCESS_PATTERN = (
-    "EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
-)
+PROCESS_PATTERN = "EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
 DEFAULT_TEMPERATURE = 0.6
 DEFAULT_TOP_P = 0.95
 DEFAULT_TOP_K = 20

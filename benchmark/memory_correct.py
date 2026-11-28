@@ -52,9 +52,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ARMS = ("control", "auto")
-OUT = Path(
-    os.environ.get("EMONE_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-correct")
-)
+OUT = Path(os.environ.get("EMONE_MEMVAL_RESULTS", ROOT / ".build/benchmark-logs/memory-correct"))
 PORT = int(os.environ.get("EMONE_PORT", "8096"))
 BASE = f"http://127.0.0.1:{PORT}/v1"
 # Which run of the arm this is; results are kept per run so repeats can be

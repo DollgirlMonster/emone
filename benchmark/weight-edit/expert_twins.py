@@ -31,10 +31,16 @@ w = GTurboWeights(model)
 packed = PackedExperts(model)
 arch = json.loads((model / "manifest.json").read_text())["arch"]
 NL, NE = arch["numLayers"], arch["numExperts"]
-chosen = ([int(x) for x in sys.argv[3].split(",")] if len(sys.argv) > 3
-          else [NL // 4, NL // 2, NL - 6, NL - 3, NL - 1])
-P = next(p for p in ("model.language_model.", "language_model.model.")
-         if f"{p}layers.0.mlp.gate.weight" in w.entries)
+chosen = (
+    [int(x) for x in sys.argv[3].split(",")]
+    if len(sys.argv) > 3
+    else [NL // 4, NL // 2, NL - 6, NL - 3, NL - 1]
+)
+P = next(
+    p
+    for p in ("model.language_model.", "language_model.model.")
+    if f"{p}layers.0.mlp.gate.weight" in w.entries
+)
 
 
 def gain(L):
@@ -70,7 +76,7 @@ def expert(L, e, X):
 E = w.get(f"{P}embed_tokens.weight")
 rng = np.random.default_rng(0)
 X0 = E[rng.choice(np.arange(1000, 150000), 512, replace=False)]
-X0 = X0 / np.sqrt((X0 ** 2).mean(1, keepdims=True))
+X0 = X0 / np.sqrt((X0**2).mean(1, keepdims=True))
 
 print(f"{NL} layers, {NE} experts, top-{arch['topKExperts']}, prefix {P}")
 print("layer  pairs>0.8  pairs>0.9  clusters@0.9  max-cos")
@@ -81,8 +87,11 @@ for L in range(NL):
     C = Rn @ Rn.T
     np.fill_diagonal(C, -1)
     rows[L] = C
-    print(f"L{L:2d}   {int((C > 0.8).sum() // 2):7d}   {int((C > 0.9).sum() // 2):7d}   "
-          f"{components(C > 0.9):8d}      {C.max():.3f}", flush=True)
+    print(
+        f"L{L:2d}   {int((C > 0.8).sum() // 2):7d}   {int((C > 0.9).sum() // 2):7d}   "
+        f"{components(C > 0.9):8d}      {C.max():.3f}",
+        flush=True,
+    )
 
 print("\nexpert twins: output similarity on shared inputs (cos, relative gap)")
 for L in chosen:
@@ -96,8 +105,19 @@ for L in chosen:
         cs, gaps = [], []
         for a, b in pairs:
             ya, yb = expert(L, a, X), expert(L, b, X)
-            cs.append(float(np.mean((ya * yb).sum(1) / (np.linalg.norm(ya, axis=1) * np.linalg.norm(yb, axis=1) + 1e-9))))
+            cs.append(
+                float(
+                    np.mean(
+                        (ya * yb).sum(1)
+                        / (np.linalg.norm(ya, axis=1) * np.linalg.norm(yb, axis=1) + 1e-9)
+                    )
+                )
+            )
             gaps.append(float(np.linalg.norm(ya - yb) / (np.linalg.norm(ya) + 1e-9)))
-        desc = ", ".join(f"{a}/{b} r{C[a, b]:.2f} y{c:+.2f}" for (a, b), c in zip(pairs, cs))
-        print(f"L{L:2d} {label:12s} output cos mean {np.mean(cs):+.2f}, gap {np.mean(gaps):.2f}   [{desc}]",
-              flush=True)
+        desc = ", ".join(
+            f"{a}/{b} r{C[a, b]:.2f} y{c:+.2f}" for (a, b), c in zip(pairs, cs, strict=True)
+        )
+        print(
+            f"L{L:2d} {label:12s} output cos mean {np.mean(cs):+.2f}, gap {np.mean(gaps):.2f}   [{desc}]",
+            flush=True,
+        )

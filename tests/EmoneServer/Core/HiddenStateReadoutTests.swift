@@ -385,7 +385,7 @@ struct HiddenStateReadoutTests {
                  "x_hidden_states":{"layers":[12,3],"prefill_only":false}}
                 """#)
             #expect(response.statusCode == 200)
-            let body = String(decoding: data, as: UTF8.self)
+            let body = data.lossyUTF8String
             #expect(body.hasSuffix("data: [DONE]\n\n"))
             let chunks = try dataChunks(body)
             let withRows = chunks.indices.filter { chunks[$0]["hidden_states"] != nil }
@@ -410,7 +410,7 @@ struct HiddenStateReadoutTests {
                  "x_hidden_states":{"layers":[3],"prefill_only":false}}
                 """#)
             #expect(response.statusCode == 200)
-            let chunks = try dataChunks(String(decoding: data, as: UTF8.self))
+            let chunks = try dataChunks(data.lossyUTF8String)
             let last = try #require(chunks.last)
             #expect((last["choices"] as? [Any])?.isEmpty == true)
             #expect(last["usage"] != nil)

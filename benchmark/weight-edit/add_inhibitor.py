@@ -4,9 +4,14 @@ usage: add_inhibitor.py <in_dir> <out_dir> <rep_means.npy> <layer> <unit>...
 Each inhibitor unit j gets A_j = 1/|mean_rep_j| with the sign that makes its
 contribution -1 on the repeat positions it was found on (Emone-bbm.3).
 """
-import hashlib, json, struct, sys
+
+import hashlib
+import json
+import struct
+import sys
 from pathlib import Path
 import numpy as np
+
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from build_patch import safetensors
 
@@ -14,13 +19,17 @@ src, dst, means, L = Path(sys.argv[1]), Path(sys.argv[2]), np.load(sys.argv[3]),
 units = [int(x) for x in sys.argv[5:]]
 b = (src / "weight_patch.safetensors").read_bytes()
 hl = struct.unpack("<Q", b[:8])[0]
-h = json.loads(b[8:8 + hl])
+h = json.loads(b[8 : 8 + hl])
+
+
 def get(name):
     o, shape = h[name]["data_offsets"], h[name]["shape"]
-    return np.frombuffer(b[8 + hl + o[0]:8 + hl + o[1]], dtype=np.float32).reshape(shape).copy()
+    return np.frombuffer(b[8 + hl + o[0] : 8 + hl + o[1]], dtype=np.float32).reshape(shape).copy()
+
+
 a, bb = get(f"layers.{L}.mlp.down_proj.lora_A"), get(f"layers.{L}.mlp.down_proj.lora_B")
 for j in units:
-    a[0, j] = -1.0 / means[j]   # mean_rep * A_j = -1
+    a[0, j] = -1.0 / means[j]  # mean_rep * A_j = -1
 blob = safetensors({f"layers.{L}.mlp.down_proj.lora_A": a, f"layers.{L}.mlp.down_proj.lora_B": bb})
 dst.mkdir(parents=True, exist_ok=True)
 (dst / "weight_patch.safetensors").write_bytes(blob)

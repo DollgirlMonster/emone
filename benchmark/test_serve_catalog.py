@@ -43,7 +43,11 @@ class ServeCatalogTests(unittest.TestCase):
         full_env.update(env)
         return subprocess.run(
             ["/bin/bash", str(SERVE), *args, "--dry-run", "--no-live-trace"],
-            capture_output=True, text=True, env=full_env, timeout=30)
+            capture_output=True,
+            text=True,
+            env=full_env,
+            timeout=30,
+        )
 
     def served(self, result: subprocess.CompletedProcess[str]) -> tuple[str, str]:
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -61,13 +65,13 @@ class ServeCatalogTests(unittest.TestCase):
         self.assertEqual(model, str(self.models / "qwen3.6_35B_A3B_4Bit"))
 
     def test_default_model_by_name(self) -> None:
-        model, _ = self.served(self.serve(
-            str(self.models), EMONE_DEFAULT_MODEL="qwen38flash.gturbo"))
+        model, _ = self.served(
+            self.serve(str(self.models), EMONE_DEFAULT_MODEL="qwen38flash.gturbo")
+        )
         self.assertEqual(model, str(self.models / "qwen38flash.gturbo"))
 
     def test_missing_default_falls_back_to_first_install(self) -> None:
-        model, _ = self.served(self.serve(
-            str(self.models), EMONE_DEFAULT_MODEL="qwen3.5_9B_4Bit"))
+        model, _ = self.served(self.serve(str(self.models), EMONE_DEFAULT_MODEL="qwen3.5_9B_4Bit"))
         self.assertEqual(model, str(self.models / "ornith-1.5_35B_A3B_4Bit"))
 
     def test_one_install_keeps_its_directory_as_the_catalog(self) -> None:

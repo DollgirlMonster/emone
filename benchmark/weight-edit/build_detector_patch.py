@@ -55,9 +55,11 @@ def main():
         s = act @ a
         for cls, name in ((0, "normal"), (1, "looping")):
             v = s[y == cls]
-            report[f"score_{name}"] = {"mean": round(float(v.mean()), 3),
-                                       "p95": round(float(np.percentile(v, 95)), 3),
-                                       "p05": round(float(np.percentile(v, 5)), 3)}
+            report[f"score_{name}"] = {
+                "mean": round(float(v.mean()), 3),
+                "p95": round(float(np.percentile(v, 95)), 3),
+                "p05": round(float(np.percentile(v, 5)), 3),
+            }
     out.mkdir(parents=True, exist_ok=True)
     blob = safetensors(tensors)
     (out / "weight_patch.safetensors").write_bytes(blob)
@@ -66,11 +68,16 @@ def main():
         "base": {"model_id": "qwen3.5-0.8b"},
         "rank": 1,
         "description": f"Loop detector at layer {L} ({k} MLP units) writes toward token "
-                       f"{token} with strength {alpha} (Emone-bbm.3).",
-        "provenance": {"method": "per-unit d' on looping vs. normal decode positions from "
-                                 "8 greedy GSM8K captures; exit direction = final-norm gain * "
-                                 "tied embedding row, unit length",
-                       "layer": L, "alpha": alpha, "token": token, **report},
+        f"{token} with strength {alpha} (Emone-bbm.3).",
+        "provenance": {
+            "method": "per-unit d' on looping vs. normal decode positions from "
+            "8 greedy GSM8K captures; exit direction = final-norm gain * "
+            "tied embedding row, unit length",
+            "layer": L,
+            "alpha": alpha,
+            "token": token,
+            **report,
+        },
         "files": {"weight_patch.safetensors": hashlib.sha256(blob).hexdigest()},
     }
     (out / "weight_patch.json").write_text(json.dumps(manifest, indent=1) + "\n")

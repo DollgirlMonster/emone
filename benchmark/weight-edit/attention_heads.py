@@ -55,8 +55,10 @@ toks = rng.choice(np.arange(1000, 60000), 1500, replace=False)
 X0 = rms(E[toks])
 gf = gain(P + "norm.weight")
 U = E[toks] * gf  # unembedding rows for the sampled tokens
-print("norm convention: input_layernorm mean",
-      round(float(w.get(P + "layers.3.input_layernorm.weight").mean()), 3))
+print(
+    "norm convention: input_layernorm mean",
+    round(float(w.get(P + "layers.3.input_layernorm.weight").mean()), 3),
+)
 rows = []
 for L in FULL:
     a = f"{P}layers.{L}."

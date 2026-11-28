@@ -240,7 +240,7 @@ struct StructuredOutputFailure: Error, CustomDebugStringConvertible, Sendable {
     let diagnostics: StructuredOutputFailureDiagnostics
     /// The name the model called, for `unknown_tool`: whether it invented a
     /// tool or the call was mis-parsed is unanswerable without it.
-    var toolName: String? = nil
+    var toolName: String?
 
     var debugDescription: String {
         "structured_output_failure kind=\(kind.rawValue) "

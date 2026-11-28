@@ -179,9 +179,7 @@ def preflight(max_gpu_percent: int) -> None:
     the tok/s number explains that on its own, so the guard is here rather
     than in a reviewer's head.
     """
-    pattern = (
-        "EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
-    )
+    pattern = "EmoneServer|EmoneCLI|EmonePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm"
     found = subprocess.run(["pgrep", "-fl", pattern], capture_output=True, text=True)
     mine = str(pathlib.Path(__file__).name)
     lines = [ln for ln in found.stdout.splitlines() if mine not in ln]

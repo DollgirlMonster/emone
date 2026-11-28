@@ -57,7 +57,7 @@ final class ViewHarness {
             return nil
         }
         self.pty = pty
-        stdoutTarget = dup(pty.slave)
+        stdoutTarget = dup(pty.secondary)
         var fds: [Int32] = [0, 0]
         guard pipe(&fds) == 0 else { return nil }
         stderrRead = fds[0]
@@ -84,19 +84,19 @@ final class ViewHarness {
 
     /// What the view has written to its terminal so far.
     func terminalOutput(wait: TimeInterval = 0.2) -> String {
-        _ = fcntl(pty.master, F_SETFL, O_NONBLOCK)
+        _ = fcntl(pty.primary, F_SETFL, O_NONBLOCK)
         var out = [UInt8]()
         var buffer = [UInt8](repeating: 0, count: 65536)
         let deadline = Date().addingTimeInterval(wait)
         while Date() < deadline {
-            let count = read(pty.master, &buffer, buffer.count)
+            let count = read(pty.primary, &buffer, buffer.count)
             if count > 0 {
                 out.append(contentsOf: buffer[0..<count])
             } else {
                 Thread.sleep(forTimeInterval: 0.01)
             }
         }
-        return String(decoding: out, as: UTF8.self)
+        return out.lossyUTF8String
     }
 
     func logFileText() -> String { (try? String(contentsOfFile: logPath, encoding: .utf8)) ?? "" }
@@ -506,7 +506,7 @@ final class ViewHarness {
         _ = fcntl(harness.stderrRead, F_SETFL, O_NONBLOCK)
         var buffer = [UInt8](repeating: 0, count: 4096)
         let count = read(harness.stderrRead, &buffer, buffer.count)
-        let received = String(decoding: buffer[0..<max(0, count)], as: UTF8.self)
+        let received = buffer[0..<max(0, count)].lossyUTF8String
         #expect(received.hasPrefix(errLine))
         // The file holds both streams, in full.
         let file = harness.logFileText()

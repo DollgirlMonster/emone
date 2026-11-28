@@ -265,13 +265,13 @@ extension EmoneBench {
 }
 
 extension EmoneBench {
+    // lint:allow-long development harness, read top to bottom
     /// `EmoneBench p1rows [iterations]`: the resident-prefill row-batched
     /// phase 1 (`moe_phase1_gate_up_act_u16load_rows`, `encodeRoutedRows`)
     /// against `moe_phase1_p1_rows_dev`, which reads each token's x from
     /// device memory instead of staging it per simdgroup. Real experts: token
     /// r uses layer r's 8 picked experts. EMONE_BENCH_P1_ROWS sets the token
     /// count (default 16, at most 64). Outputs are compared bit for bit.
-    // lint:allow-long development harness, read top to bottom
     static func runP1Rows(iterations: Int, context: MetalContext) throws {
         let env = ProcessInfo.processInfo.environment
         let device = context.device

@@ -82,22 +82,22 @@ import Testing
     }
 
     @Test func theOverrideTakesMinRowsFirstThenTheSwitch() {
-        typealias R = ShortBranchRouting
-        #expect(R.override(environment: [:]) == nil)
-        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "0"]) == 0)
-        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": " 48 "]) == 48)
-        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "1"]) == 0)
-        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "0"]) == Int.max)
-        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "yes"]) == nil)
+        typealias SBR = ShortBranchRouting
+        #expect(SBR.override(environment: [:]) == nil)
+        #expect(SBR.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "0"]) == 0)
+        #expect(SBR.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": " 48 "]) == 48)
+        #expect(SBR.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "1"]) == 0)
+        #expect(SBR.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "0"]) == Int.max)
+        #expect(SBR.override(environment: ["EMONE_SHORT_BRANCH_GROUPED": "yes"]) == nil)
         #expect(
-            R.override(environment: [
+            SBR.override(environment: [
                 "EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "20", "EMONE_SHORT_BRANCH_GROUPED": "0",
             ]) == 20)
         // Unparseable or negative counts are ignored, not read as 0.
-        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "-1"]) == nil)
-        #expect(R.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "lots"]) == nil)
-        #expect(R.groupedMinRows(heldContext: 1024, override: 5) == 5)
-        #expect(R.groupedMinRows(heldContext: 1024, override: nil) == 15)
+        #expect(SBR.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "-1"]) == nil)
+        #expect(SBR.override(environment: ["EMONE_SHORT_BRANCH_GROUPED_MIN_ROWS": "lots"]) == nil)
+        #expect(SBR.groupedMinRows(heldContext: 1024, override: 5) == 5)
+        #expect(SBR.groupedMinRows(heldContext: 1024, override: nil) == 15)
     }
 
     @Test func theGroupedGridCoversTheWorstCaseWorkList() {
@@ -107,18 +107,18 @@ import Testing
     }
 
     @Test func theEdgeOverrideTakesOnlyAnEdgeWithKernels() {
-        typealias R = ShortBranchRouting
-        #expect(R.edgeOverride(environment: [:]) == nil)
-        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "16"]) == 16)
-        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": " 32"]) == 32)
-        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "64"]) == 64)
-        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "8"]) == nil)
-        #expect(R.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "big"]) == nil)
+        typealias SBR = ShortBranchRouting
+        #expect(SBR.edgeOverride(environment: [:]) == nil)
+        #expect(SBR.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "16"]) == 16)
+        #expect(SBR.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": " 32"]) == 32)
+        #expect(SBR.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "64"]) == 64)
+        #expect(SBR.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "8"]) == nil)
+        #expect(SBR.edgeOverride(environment: ["EMONE_SHORT_BRANCH_GROUPED_EDGE": "big"]) == nil)
         for rows in [1, 8, 16, 37, 64, 128] {
             for context in [0, 1024, 16384, 65536] {
                 #expect(
                     ShortBranchGroupedMoE.edges.contains(
-                        R.groupedEdge(rows: rows, heldContext: context)))
+                        SBR.groupedEdge(rows: rows, heldContext: context)))
             }
         }
     }

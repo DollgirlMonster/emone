@@ -59,8 +59,11 @@ def main() -> None:
     texts = ["prose", "swift", "python"]
     for m in models:
         print(f"\n## {m}\n")
-        print("| arm | vs | pooled bias nats (t) | pooled median / p99 / max abs | "
-              + " | ".join(f"{t} bias (t)" for t in texts) + " | sec base -> arm (prose) |")
+        print(
+            "| arm | vs | pooled bias nats (t) | pooled median / p99 / max abs | "
+            + " | ".join(f"{t} bias (t)" for t in texts)
+            + " | sec base -> arm (prose) |"
+        )
         print("|---|---|---|---|" + "---|" * len(texts) + "---|")
         for name in ARMS:
             if ARMS[name][3] == "baseline":
@@ -74,7 +77,7 @@ def main() -> None:
                 if not a or not b or len(a) != len(b):
                     cells.append("-")
                     continue
-                d = [sign * (y - x) for x, y in zip(a, b)]
+                d = [sign * (y - x) for x, y in zip(a, b, strict=True)]
                 pooled += d
                 mean, se, tt, *_ = stats(d)
                 cells.append(f"{mean:+.4f} ({tt:+.1f})")
@@ -84,8 +87,11 @@ def main() -> None:
             s_ref = seconds(OUT / m / "prose" / f"{ref}.log")
             s_arm = seconds(OUT / m / "prose" / f"{name}.log")
             sec = f"{s_ref:.0f} -> {s_arm:.0f}" if s_ref and s_arm else "-"
-            print(f"| {name} | {ref} | {mean:+.4f} ({tt:+.1f}) | {med:.4f} / {p99:.3f} / {mx:.2f} | "
-                  + " | ".join(cells) + f" | {sec} |")
+            print(
+                f"| {name} | {ref} | {mean:+.4f} ({tt:+.1f}) | {med:.4f} / {p99:.3f} / {mx:.2f} | "
+                + " | ".join(cells)
+                + f" | {sec} |"
+            )
 
 
 if __name__ == "__main__":

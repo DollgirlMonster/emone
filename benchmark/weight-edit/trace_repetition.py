@@ -36,7 +36,9 @@ P = "language_model.model."
 D, HEADS, KV, HD = 1024, 8, 2, 256
 FULL = [3, 7, 11, 15, 19, 23]
 VH, VD, KH, KD = 16, 128, 16, 128
-vocab = {i: s for s, i in json.load(open(f"{MODEL}/tokenizer/tokenizer.json"))["model"]["vocab"].items()}
+vocab = {
+    i: s for s, i in json.load(open(f"{MODEL}/tokenizer/tokenizer.json"))["model"]["vocab"].items()
+}
 
 
 def g(name):
@@ -75,15 +77,17 @@ for L in range(20):
     if L in FULL:
         Wo = w.get(a + "self_attn.o_proj.weight")
         for h in range(HEADS):
-            rows.append((out_score(Wo[:, h * HD:(h + 1) * HD], u19), f"L{L} attn h{h}"))
+            rows.append((out_score(Wo[:, h * HD : (h + 1) * HD], u19), f"L{L} attn h{h}"))
     else:
         Wo = w.get(a + "linear_attn.out_proj.weight")
         for h in range(VH):
-            rows.append((out_score(Wo[:, h * VD:(h + 1) * VD], u19), f"L{L} dnet h{h}"))
+            rows.append((out_score(Wo[:, h * VD : (h + 1) * VD], u19), f"L{L} dnet h{h}"))
     Wd = w.get(a + "mlp.down_proj.weight")
     cos = (u19 @ Wd) / np.linalg.norm(Wd, axis=0)
     for j in np.argsort(-np.abs(cos))[:3]:
-        rows.append((float(abs(cos[j]) * np.sqrt(D)), f"L{L} mlp n{j} ({'+' if cos[j] > 0 else '-'})"))
+        rows.append(
+            (float(abs(cos[j]) * np.sqrt(D)), f"L{L} mlp n{j} ({'+' if cos[j] > 0 else '-'})")
+        )
 rows.sort(reverse=True)
 for s, name in rows[:24]:
     print(f"  {s:6.2f}  {name}")
@@ -109,9 +113,9 @@ for L in range(20, 24):
         z = w.get(a + "linear_attn.in_proj_z.weight") * gin
         b = w.get(a + "linear_attn.in_proj_b.weight") * gin
         da = w.get(a + "linear_attn.in_proj_a.weight") * gin
-        rows.append((in_score(qkv[:KH * KD], u19), f"L{L} dnet query"))
-        rows.append((in_score(qkv[KH * KD:2 * KH * KD], u19), f"L{L} dnet key"))
-        rows.append((in_score(qkv[2 * KH * KD:], u19), f"L{L} dnet value"))
+        rows.append((in_score(qkv[: KH * KD], u19), f"L{L} dnet query"))
+        rows.append((in_score(qkv[KH * KD : 2 * KH * KD], u19), f"L{L} dnet key"))
+        rows.append((in_score(qkv[2 * KH * KD :], u19), f"L{L} dnet value"))
         rows.append((in_score(b, u19), f"L{L} dnet beta (write strength)"))
         rows.append((in_score(da, u19), f"L{L} dnet decay"))
         rows.append((in_score(z, u19), f"L{L} dnet output-gate z"))
@@ -120,8 +124,12 @@ for L in range(20, 24):
     Wdn = w.get(a + "mlp.down_proj.weight")
     for j in np.argsort(-np.abs(cos))[:3]:
         lj = E @ (gf * Wdn[:, j])
-        rows.append((float(abs(cos[j]) * np.sqrt(D)),
-                     f"L{L} mlp n{j} gate ({'+' if cos[j] > 0 else '-'}) writes +{[tok(i) for i in np.argsort(-lj)[:4]]}"))
+        rows.append(
+            (
+                float(abs(cos[j]) * np.sqrt(D)),
+                f"L{L} mlp n{j} gate ({'+' if cos[j] > 0 else '-'}) writes +{[tok(i) for i in np.argsort(-lj)[:4]]}",
+            )
+        )
 rows.sort(reverse=True)
 for s, name in rows[:22]:
     print(f"  {s:6.2f}  {name}")
@@ -133,18 +141,25 @@ gpost = g(a + "post_attention_layernorm.weight")
 gate = w.get(a + "mlp.gate_proj.weight")[11] * gpost
 up = w.get(a + "mlp.up_proj.weight")[11] * gpost
 col = w.get(a + "mlp.down_proj.weight")[:, 11]
-print(f"  down column: |w| {np.linalg.norm(col):.3f}, cos with u19 {col @ u19 / np.linalg.norm(col):+.2f}, "
-      f"with u15 {col @ u15 / np.linalg.norm(col):+.2f}")
+print(
+    f"  down column: |w| {np.linalg.norm(col):.3f}, cos with u19 {col @ u19 / np.linalg.norm(col):+.2f}, "
+    f"with u15 {col @ u15 / np.linalg.norm(col):+.2f}"
+)
 lc = E @ (gf * col)
 print("  its write promotes +", [tok(i) for i in np.argsort(-lc)[:10]])
 print("                      -", [tok(i) for i in np.argsort(lc)[:10]])
-print(f"  gate row reads u19 {gate @ u19 / np.linalg.norm(gate):+.2f}, u15 {gate @ u15 / np.linalg.norm(gate):+.2f}; "
-      f"up row reads u19 {up @ u19 / np.linalg.norm(up):+.2f}")
+print(
+    f"  gate row reads u19 {gate @ u19 / np.linalg.norm(gate):+.2f}, u15 {gate @ u15 / np.linalg.norm(gate):+.2f}; "
+    f"up row reads u19 {up @ u19 / np.linalg.norm(up):+.2f}"
+)
 X = E[np.random.default_rng(0).choice(np.arange(1000, 60000), 20000, replace=False)]
 X = X / np.sqrt((X * X).mean(1, keepdims=True))
 pre = (X @ gate) / (1 + np.exp(-(X @ gate))) * (X @ up)
 ids = np.random.default_rng(0).choice(np.arange(1000, 60000), 20000, replace=False)
-print("  embeddings that drive it most (direct path):", [tok(ids[i]) for i in np.argsort(-np.abs(pre))[:12]])
+print(
+    "  embeddings that drive it most (direct path):",
+    [tok(ids[i]) for i in np.argsort(-np.abs(pre))[:12]],
+)
 print("  upstream feeders of its gate row (OV output space . gate, x chance):")
 feed = []
 gu = gate / np.linalg.norm(gate)
@@ -153,11 +168,11 @@ for L in range(19):
     if L in FULL:
         Wo = w.get(b + "self_attn.o_proj.weight")
         for h in range(HEADS):
-            feed.append((out_score(Wo[:, h * HD:(h + 1) * HD], gu), f"L{L} attn h{h}"))
+            feed.append((out_score(Wo[:, h * HD : (h + 1) * HD], gu), f"L{L} attn h{h}"))
     else:
         Wo = w.get(b + "linear_attn.out_proj.weight")
         for h in range(VH):
-            feed.append((out_score(Wo[:, h * VD:(h + 1) * VD], gu), f"L{L} dnet h{h}"))
+            feed.append((out_score(Wo[:, h * VD : (h + 1) * VD], gu), f"L{L} dnet h{h}"))
     Wd = w.get(b + "mlp.down_proj.weight")
     cos = (gu @ Wd) / np.linalg.norm(Wd, axis=0)
     j = int(np.argmax(np.abs(cos)))

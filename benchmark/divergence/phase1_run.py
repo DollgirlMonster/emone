@@ -61,16 +61,17 @@ ARMS = {
     "kv16": ({}, 8192, ["--kv-bits", "16"], "base"),
     "kv4": ({}, 8192, ["--kv-bits", "4"], "base"),
     "all_shipped_off": (SHIPPED_OFF, 8192, [], "base"),
-    "cand_8192": (
-        {"EMONE_PREFILL_MPP_WIDE": "1", "EMONE_PREFILL_Q_QMM": "1"},
-        8192, [], "base"),
+    "cand_8192": ({"EMONE_PREFILL_MPP_WIDE": "1", "EMONE_PREFILL_Q_QMM": "1"}, 8192, [], "base"),
     "cand_32": ({"EMONE_PREFILL_FLASH_SPLIT": "1"}, 32, [], "base32"),
     # Shipped on, flipped off one at a time.
     "off_topk_simd": ({"EMONE_ROUTER_TOPK_SIMD": "0"}, 8192, [], "base"),
     "off_routed_qmm": ({"EMONE_PREFILL_ROUTED_QMM": "0"}, 8192, [], "base"),
     "off_routed_mpp": (
         {"EMONE_PREFILL_ROUTED_MPP": "0", "EMONE_PREFILL_ROUTED_QMM": "0"},
-        8192, [], "base"),
+        8192,
+        [],
+        "base",
+    ),
     "off_gdn_chunk": ({"EMONE_PREFILL_GDN_CHUNK": "0"}, 8192, [], "base"),
     "off_sg_qmm": ({"EMONE_PREFILL_SG_QMM": "0"}, 8192, [], "base"),
     "off_dense_flash": ({"EMONE_PREFILL_DENSE_FLASH": "0"}, 8192, [], "base"),
@@ -92,7 +93,7 @@ def busy() -> str:
 
 def wait_idle(limit_s: int = 1800) -> None:
     start = time.time()
-    while (b := busy()):
+    while b := busy():
         if time.time() - start > limit_s:
             sys.exit(f"model processes still running after {limit_s}s, stopping:\n{b}")
         print(f"  waiting for: {b.splitlines()[0]}", flush=True)
@@ -105,9 +106,18 @@ def main() -> None:
     ap.add_argument("--texts", default="prose,swift,python")
     ap.add_argument("--arms", default=",".join(ARMS))
     args = ap.parse_args()
-    cli = Path(subprocess.run(
-        ["swift", "build", "-c", "release", "--show-bin-path"], cwd=ROOT,
-        capture_output=True, text=True, check=True).stdout.strip()) / "EmoneCLI"
+    cli = (
+        Path(
+            subprocess.run(
+                ["swift", "build", "-c", "release", "--show-bin-path"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+        / "EmoneCLI"
+    )
     if not cli.exists():
         sys.exit(f"no release CLI at {cli}")
     for m in args.models.split(","):
@@ -127,21 +137,38 @@ def main() -> None:
                 wait_idle()
                 env = dict(os.environ)
                 env.update(env_over)
-                cmd = [str(cli), "--model", str(model), "--prompt", text,
-                       "--score", str(SCORE), "--score-out", str(nll),
-                       "--prefill-chunk", str(chunk), "--max-context", "65536", *extra]
+                cmd = [
+                    str(cli),
+                    "--model",
+                    str(model),
+                    "--prompt",
+                    text,
+                    "--score",
+                    str(SCORE),
+                    "--score-out",
+                    str(nll),
+                    "--prefill-chunk",
+                    str(chunk),
+                    "--max-context",
+                    "65536",
+                    *extra,
+                ]
                 t0 = time.time()
                 with open(log, "w") as fh:
-                    code = subprocess.run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT,
-                                          timeout=3600).returncode
+                    code = subprocess.run(
+                        cmd, env=env, stdout=fh, stderr=subprocess.STDOUT, timeout=3600
+                    ).returncode
                 dt = time.time() - t0
                 with open(log, "a") as fh:
-                    fh.write(f"\n[arm {name} exit={code} wall_s={dt:.1f} "
-                             f"env={env_over} chunk={chunk} extra={extra}]\n")
+                    fh.write(
+                        f"\n[arm {name} exit={code} wall_s={dt:.1f} "
+                        f"env={env_over} chunk={chunk} extra={extra}]\n"
+                    )
                 if code != 0 and nll.exists():
                     nll.unlink()
-                print(f"{time.strftime('%H:%M:%S')} {m}/{t}/{name} exit={code} {dt:.0f}s",
-                      flush=True)
+                print(
+                    f"{time.strftime('%H:%M:%S')} {m}/{t}/{name} exit={code} {dt:.0f}s", flush=True
+                )
 
 
 if __name__ == "__main__":
