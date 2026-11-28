@@ -3,10 +3,10 @@ import Metal
 import Emone
 
 extension FeatureExtractor {
+    // lint:allow-long one row's whole lifecycle: filter, prefill, branch per question, write, self-check
     /// One row: prefill its state once, branch each question from it, write
     /// the rows and a record per question; optionally re-derive the first
     /// question's rows from one full prefill and compare (`--self-check`).
-    // lint:allow-long one row's whole lifecycle: filter, prefill, branch per question, write, self-check
     func extractRow(
         _ m: Loaded, _ line: String, rowNumber: Int, encode: (String) -> [Int32],
         letterIDs: [Int32?], blob: FileHandle, index: FileHandle, tally: inout Tally
